@@ -1,0 +1,14 @@
+RisingCam SDK components
+========================
+
+This package includes nncam.py, nncam.dll, and x64 USB driver files taken from
+the user-supplied RisingCam SDK archive, version 57.27250.20241216. Those files
+remain third-party vendor components and are subject to the terms supplied by
+their manufacturer.
+
+Application dependencies are installed from PyPI:
+- PySide6 (LGPLv3/GPLv3/commercial licensing options)
+- Pillow (HPND License)
+- PyVISA (MIT License)
+- PyVISA-py (MIT License)
+- PyUSB (BSD License)

@@ -1,1 +1,281 @@
-# Luminescence_System
+# EL 量測設備控制程式 V1.3.6 Exposure Status Fix
+
+## V1.3.6 曝光狀態更新錯誤修正
+
+- 修正 `_format_exposure()` 漏加 `@staticmethod`，使相機曝光訊號更新狀態列時重複拋出 `TypeError` 的問題。
+- 相機開啟、手動曝光套用及自動曝光更新後，均可正常顯示 μs、ms 或 s 格式的曝光時間。
+- 新增方法綁定回歸測試，檢查 mixin 方法必須具備 `self`／`cls` 或明確宣告為 `@staticmethod`。
+- PyVISA 顯示的 `psutil`／`zeroconf` 訊息屬於 TCP/IP 儀器探索範圍警告，並非本次相機錯誤；本版不為非必要掃描功能增加依賴套件。
+
+## V1.3.5 左側手動曝光控制修正
+
+- 修正相機連線後，左側「曝光時間」、「Gain」與「套用手動設定」被共用啟用函式再次反灰，導致無法修改參數的問題。
+- 曝光控制現在遵循單一狀態規則：相機已連線且「持續自動曝光」關閉時，手動曝光、Gain 與套用按鈕可用；自動曝光開啟或相機未連線時停用。
+- 保留原本的 SDK 單位轉換：介面以 ms 顯示，套用時轉為 μs；套用後由 SDK 讀回實際曝光與 Gain，更新欄位及狀態列。
+- 新增曝光控制狀態回歸測試，避免後續 UI 重構再次覆寫手動模式。
+
+## V1.3.4 模組化與需求追蹤
+
+- 依職責拆分原本過大的 `main_window.py`、`recipe_dialog.py` 與 `auto_hdr.py`，保留原有公開入口與操作行為。
+- 主視窗分為狀態／Recipe 協調、UI 建構、相機與 SMU 操作；Recipe 對話框分為外殼、八個設定頁、EL 點位／HDR 表格、Recipe 資料邏輯。
+- HDR 曝光規劃、過曝判定與定量合成仍集中於 `auto_hdr.py`；只有檔案與 manifest 輸出移至 `hdr_output.py`，避免為了縮短檔案而拆散同一數值流程。
+- 新增 `docs/PROGRAM_ARCHITECTURE.md`，記錄分層、模組責任、資料流、安全邊界與擴充位置。
+- 新增 `docs/REQUIREMENTS_LOG.md`，記錄已確認、已完成、待實作與暫緩需求；後續每次功能修改都必須同步更新。
+- 既有 36 項測試於重構前後均通過；新增模組邊界測試，防止大型檔案重新集中或相容入口失效。
+
+本版只調整程式架構與文件，不開放 SMU 輸出或量測執行層。
+
+## V1.3.3 Recipe 相機設定簡化
+
+- 刪除 Recipe 中未實作且容易誤解的「相機策略」選單；Quantitative、Piecewise、Inspection 不再寫入新版 Recipe JSON。
+- HDR 關閉時，量測只使用 EL 點位表每列明確填寫的 Exposure、Gain、Frames 與 Frame interval。
+- 原相機全域數值改名為「非 HDR 預設」，只供新增點位、產生點位與批次填入，不作為量測時的隱含 fallback。
+- HDR 開啟時，非 HDR 預設值與 EL 表格相機欄位停用；曝光、Gain、Frames 與間隔完全由 `設定 → HDR` 及 T0 Profile 控制。
+- 舊 Recipe 內的 `camera.strategy` 與 `use_camera_override` 可繼續載入；新版儲存時會移除這兩個廢棄欄位。Recipe JSON schema 升級至 v6。
+
+## V1.3.2 Recipe HDR 入口整合
+
+- 移除 Recipe 內原本獨立的「5 定量 HDR」頁面。
+- 「啟用 HDR」整合到「5 EL 點位」頁面上方。
+- 啟用 HDR 後，EL 點位表的 Exposure、Gain、Frames 與 Frame interval 欄位會反灰、停止編輯並顯示「啟用 HDR」，清楚表示拍攝條件改由 `設定 → HDR` 與 T0 Profile 控制。
+- 關閉 HDR 後，表格會恢復原本的相機數值及編輯功能；切換模式不會清除使用者先前輸入的逐點設定。
+- Recipe JSON 仍只保存 `hdr.enabled`，既有 V1.3.1 Recipe 可直接載入。
+
+## V1.3.1 HDR 設定分層、過曝提前終止與完整快照
+
+- 所有 HDR 詳細參數集中到主選單 `設定 → HDR`；Recipe 的 HDR JSON 僅保存 `enabled`。
+- HDR 系統設定包含：自動曝光策略、優先單曝光、最大曝光段數、每段 frames、Gain 鎖定、曝光範圍／級距、SNR、飽和門檻、有效 ROI、熱像素排除、Dark 規則、輸出與 Aging 補充曝光政策。
+- 「最大 4 段」代表上限，不是強制拍滿；預掃描判定單曝光足夠時只建立 1 段。
+- HDR 固定由短曝光拍到長曝光。每段先拍第一張判斷幀；若有效元件 ROI 的飽和比例達門檻（預設 5%，245 DN），立即：
+  - 保存該判斷幀並標記為嚴重過曝／不參與合成；
+  - 跳過該段剩餘平均張數；
+  - 跳過所有更長曝光；
+  - 在 Profile、JSON 與 CSV manifest 記錄 Planned／Captured／Valid／Excluded／Skipped 與原因。
+- HDR 關閉時，EL 點位表的 Exposure、Gain、Frames、Frame interval 改為逐列必填；不存在隱含的相機全域 fallback。
+- 舊版 Recipe 若使用相機全域值，載入時會把原始條件實體化到每一個 EL 點位；既有 HDR 詳細參數則首次遷移到獨立 `hdr_settings.json`。
+- 每次量測快照保存完整 Recipe、當時的 HDR 系統設定雜湊與內容、T0 Profile、實際曝光計畫、每段飽和比例、提前終止結果、相機／SMU 條件與輸出檔案清單。
+- Recipe JSON schema 升級至 v5。
+
+## V1.3.0 自動定量 HDR 與 Stability Profile
+
+- 新增獨立 `auto_hdr.py`：自動曝光範圍估算、幾何曝光階梯、Dark 扣除、曝光正規化與線性 float32 HDR 合成。
+- 新增獨立 `hdr_profile.py`：建立、保存、讀取及驗證樣品專屬 `*_T0_HDR_Profile.json`。
+- 新增獨立 `hdr_workflow.py`：主畫面的 T0／Aging 分流與 Profile 相容性檢查。
+- Recipe 的「啟用 HDR」位於 EL 點位頁面（V1.3.2 起不再使用獨立 HDR 頁）；詳細參數仍位於 `設定 → HDR`。
+- 主畫面新增「設定 HDR 量測…」：
+  - `首次量測（T0）`：正式執行層完成後將進行全域自動預掃描、鎖定 Gain，並在存檔時建立 HDR Profile。
+  - `Aging／重複量測`：必須匯入 T0 Profile；不重新自動選曝光，並核對 Sample ID、相機、Recipe、掃描條件、pixel format 與演算法版本。
+- Aging 量測沿用 T0 的 Gain、曝光列表、frame 數、飽和／SNR 門檻及合成算法，但每次重新拍攝相同曝光的 Dark frames。
+- HDR 啟用時強制保存：
+  - 每個曝光條件的全部原始 EL TIFF；
+  - 每個曝光條件的全部原始 Dark TIFF；
+  - 每個曝光條件的 Master Dark TIFF；
+  - `*_HDR_linear_float32.tiff`（DN/s，供 EL–I 與 k mapping）；
+  - JSON／CSV 檔案清單與 HDR Profile；
+  - 選配的 `*_HDR_preview_8bit.png`（只供顯示，不可定量分析）。
+- Recipe JSON schema 在本版為 v5，舊版 Recipe 可繼續讀取，HDR 預設關閉。
+
+目前量測執行層仍維持安全停用，因此本版不會實際送出 SMU source／OUTPUT 命令，也不會假裝已完成相機與 SMU 同步預掃描。HDR 數值模組、Profile、輸出契約及介面流程已完成，供下一階段執行狀態機直接呼叫。
+
+本版將 Recipe 升級為完整的四階段 EL 量測流程：
+
+1. 白光下量測 Jsc／Voc，確認元件極性（目前使用人工開關白光提示）。
+2. 關燈並等待暗態穩定後，執行每個 Recipe 必備的 Dark I–V。
+3. SMU 回零且 OUTPUT OFF，拍攝該 Recipe 內所有唯一相機條件的 Dark Frames。
+4. 以電流／電流密度或電壓模式進行 EL 點位拍攝。
+
+本版完成 Recipe 資料結構、編輯、驗證、匯入／匯出與主畫面選擇；為避免誤輸出，SMU Source、Compliance、OUTPUT 及相機同步執行仍未開放，主畫面的「開始量測」維持安全禁用。
+
+## V1.2.3 介面修正
+
+- 上方工具列的所有按鈕統一為 132 × 36 px，圖示統一為 20 × 20 px。
+- 縮短按鈕文字並補上完整 Tooltip，避免文字長度造成按鈕寬度不一致。
+- 工具列依操作流程重排為：
+  1. 設備：重新偵測、相機連線／中斷連線
+  2. Recipe：Recipe 管理
+  3. 拍攝：拍攝影像、自動曝光拍攝
+  4. 檢視：符合視窗、原始尺寸
+- 四個功能群組之間保留分隔線，降低誤按機率。
+
+## V1.2.2 修正內容
+
+- Dark I–V 與 EL scan summary CSV 維持必要輸出。
+- 新增獨立的「全解析度像素 CSV」選項，預設關閉。
+- 像素 CSV 可分別選擇 Raw DN、Dark-corrected 與 Exposure-normalized（DN/s）。
+- 啟用像素 CSV 時至少必須選擇一種輸出內容，否則 Recipe 驗證不通過。
+- 勾選全解析度像素 CSV 時會顯示容量警告；使用者可取消啟用。
+- 載入已啟用像素 CSV 的 Recipe 時不重複跳出警告。
+- 舊 V1.2.1 `save_csv` 會自動遷移為必要的 summary CSV，不會誤啟用像素 CSV。
+- Recipe JSON schema 升級至 v3。
+
+## V1.2.1 新增內容
+
+- Recipe 頁面依實際執行順序排列。
+- 極性確認與 Dark I–V 設為必做階段。
+- 極性確認可設定白光穩定時間、暗態恢復、NPLC、取樣數、Voc／Jsc 合理範圍及失敗處理。
+- Dark I–V 可設定 Start／Stop／Step、Forward／Reverse／Bidirectional、Dwell、Current Compliance、NPLC、Repeat 與輪次間隔。
+- EL 支援 Source Current 與 Source Voltage。
+- 電流模式支援 mA 或 mA/cm²；使用電流密度時由 Active Area 換算實際輸出電流。
+- EL 點位表的每一列可設定：啟用、設定值、Dwell、Exposure、Gain、Frames、Frame interval。
+- 點位可用線性、對數或自訂列表產生，也可逐列新增、刪除及編輯。
+- 程式依所有有效 EL 點位自動整理唯一 Dark Profiles；Exposure、Gain、解析度、Pixel format 或觸發模式不同，即視為不同 Profile。
+- 每個 Dark Profile 可設定 Frames、間隔、參數切換等待、Median／Average、Raw／Master Dark，以及 EL 後再次拍攝。
+- 不同曝光或 Gain 會顯示定量相容性警告，避免直接進行未校正 EL–I 或 k mapping。
+- Recipe 流程摘要顯示 Dark I–V 點數、EL 點位、Dark Profile 數量及預估總時間。
+- Recipe JSON schema 升級至 v2；可讀取並遷移前一版單一電流 Recipe。
+- Recipe 支援單檔 JSON 匯入與匯出。
+- 左側清單只顯示已啟用且驗證通過的 Recipe，並顯示 EL 模式、點位數及 Dark Profile 數。
+
+## Recipe 編輯頁面
+
+### 1 基本／樣品
+
+- 名稱、草稿／啟用／停用、說明
+- Active Area
+- 預期正向極性
+- Device／Pixel ID 要求
+
+### 2 極性確認
+
+- 人工白光提示或預留的自動控制模式
+- 白光穩定與關燈後暗態恢復時間
+- NPLC、取樣數
+- Voc、|Jsc| 合理範圍
+- 無法判定時要求人工確認或中止
+
+程式不會因符號異常直接施加反向偏壓；日後實作執行層時仍需操作者確認。
+
+### 3 Dark I–V
+
+- Voltage source 掃描 Start／Stop／Step
+- Forward／Reverse／Bidirectional
+- Dwell、Current Compliance、NPLC
+- Repeat、輪次間隔
+- 完成後回零及 OUTPUT OFF
+- Compliance 發生時確認或中止
+
+### 4 相機／非 HDR 預設
+
+- 非 HDR 預設 Exposure／Gain／Frames／Frame interval（只供建立或批次填入 EL 點位）
+- Frame handling、trigger、timeout
+
+非 HDR 實際拍攝一律使用 EL 表格的逐列數值，不存在隱含的全域 fallback。解析度、ROI、Pixel format 與讀出模式不允許逐點改變，以保留 pixel-to-pixel mapping 的一致性。
+
+### 5 EL 點位
+
+- 本頁上方選擇是否啟用 HDR；詳細 HDR 參數統一到主選單 `設定 → HDR`
+- 啟用 HDR 時，相機欄位反灰並顯示「啟用 HDR」
+- T0 全域自動預掃描、固定 Gain 與自動決定實際曝光段數
+- 嚴重過曝時保存判斷幀並提前終止更長曝光
+- Aging 匯入並鎖定首次 HDR Profile
+- 各曝光原始 EL／Dark、Master Dark 與 float32 HDR 強制保存
+
+- Source Current／Source Voltage
+- 電流密度、電流或電壓單位
+- Ascending／Descending／Bidirectional
+- Repeat 與輪次間隔
+- Voltage／Current Compliance
+- 線性、對數、自訂列表建表
+- HDR 關閉時，每點 Exposure、Gain、Frames 與 Frame interval 皆為必填
+
+不同曝光且 Gain 固定時，後續分析仍須使用匹配 Dark、確認相機線性並做曝光正規化；不同 Gain 在完成 Gain calibration 前不可直接合併成定量 EL–I 或 k mapping。
+
+### 6 Dark Frames
+
+程式先讀取所有有效 EL 點位，再移除重複相機設定。每張 EL 影像日後會以 Profile ID 對應正確的 Master Dark。
+
+### 7 安全／SMU
+
+- 支援任一 B2900 或指定 VISA 位址
+- 最大電流、電壓、功率、單次輸出時間及總流程時間
+- 相機或 SMU 失敗時停止條件
+
+### 8 輸出
+
+- 樣品 ID 與輸出根目錄
+- TIFF／PNG
+- Raw Frames、必要 summary CSV、JSON metadata、Recipe snapshot
+- 選配的全解析度像素 CSV：Raw DN、Dark-corrected、Exposure-normalized
+
+Dark I–V／EL scan summary CSV、JSON metadata 與 Recipe snapshot 為可啟用 Recipe 的必要輸出。全解析度像素 CSV 預設關閉；勾選時會先顯示檔案容量警告並要求確認。
+
+## 既有功能
+
+- RisingCam USB 3.0 相機偵測、連線與 RGB24 即時影像
+- 手動曝光、Gain、持續自動曝光及單次自動曝光後拍攝
+- TIFF、PNG、JPEG、BMP 與同名 JSON 設定紀錄
+- VISA 儀器背景掃描、選擇、連線、中斷及身分顯示
+- Keysight／Agilent B2900 系列識別，包括 B2901BL
+- SMU OUTPUT 為 ON 時阻止一般中斷連線
+- 獨立的 Recipe 清單、樣品 ID、輸出位置、開始量測及停止控制列
+
+## 第一次使用
+
+1. 將 ZIP 完整解壓縮到一般資料夾，不要直接在 ZIP 內執行。
+2. 連接並開啟相機電源。
+3. 雙擊 `setup_and_run.bat`。
+4. 程式會建立 `.venv`、修復／安裝 pip、安裝套件並開啟 GUI。
+5. 後續可直接雙擊 `run.bat`。
+
+若 RisingView 已能看到相機，通常不必重裝驅動；否則可在 Windows 裝置管理員指定 `drivers\usb_x64`。
+
+## 系統需求
+
+- Windows 10／11 64-bit
+- Python 3.11 或 3.12 64-bit
+- RisingCam USB 3.0 相機
+- Keysight B2901BL 或其他可回應 `*IDN?` 的 VISA／SCPI 儀器
+- 建議安裝 Keysight IO Libraries Suite
+
+## 操作流程
+
+1. 從 `設定 → Recipe 管理` 或工具列進入 Recipe 管理。
+2. 新增 Recipe，依 1–8 頁面設定完整流程。
+3. 先按「驗證」。草稿可保存未完成設定；啟用狀態必須通過驗證。
+4. 關閉 Recipe 管理後，在左側選擇已啟用 Recipe。
+5. 主畫面會顯示模式、EL 點數與 Dark Profile 數。
+
+## 本版安全界線
+
+本版不執行以下操作：
+
+- Source current／voltage 寫入
+- Compliance 寫入
+- SMU OUTPUT ON／OFF
+- Jsc／Voc、Dark I–V 與 EL 實際量測
+- 相機與 SMU 同步
+- Stop／錯誤時的硬體回零狀態機
+
+因此「開始量測」及「停止」仍維持禁用。下一階段需先完成 Keysight B2901BL 安全命令層、背景量測狀態機、資料寫入與任何錯誤下的回零／OUTPUT OFF，才會開放執行。
+
+程式不會送出 `*RST`。
+
+## 程式結構
+
+- `main.py`：入口
+- `risingcam_gui/main_window.py`：主視窗狀態、Recipe／HDR 協調與生命週期
+- `risingcam_gui/main_window_ui.py`：主畫面、工具列、狀態列與訊號連接
+- `risingcam_gui/main_window_devices.py`：相機／SMU 連線、Live View 與一般拍攝
+- `risingcam_gui/recipe_store.py`：四階段 Recipe schema、驗證、時間估算與 JSON 儲存
+- `risingcam_gui/recipe_dialog.py`：Recipe 管理對話框骨架與頁面導航
+- `risingcam_gui/recipe_dialog_pages.py`：八個 Recipe 設定頁的 UI 建構
+- `risingcam_gui/recipe_dialog_points.py`：EL 點位表、HDR 反灰與相機欄位邏輯
+- `risingcam_gui/recipe_dialog_logic.py`：Recipe 表單綁定、CRUD、驗證、摘要及匯入／匯出
+- `risingcam_gui/auto_hdr.py`：自動曝光規劃、過曝提前終止與線性 HDR 合成
+- `risingcam_gui/hdr_output.py`：HDR TIFF、原始分曝光資料與 JSON／CSV manifest 輸出
+- `risingcam_gui/hdr_settings.py`、`hdr_settings_dialog.py`：共用 HDR 設定、舊版遷移與 `設定 → HDR` 介面
+- `risingcam_gui/hdr_profile.py`：T0 Profile 建立、讀寫、條件簽章與相容性檢查
+- `risingcam_gui/hdr_workflow.py`：T0／Aging 選擇與 Profile 匯入介面
+- `risingcam_gui/measurement_snapshot.py`：不可變的完整量測有效設定與執行快照
+- `risingcam_gui/device_panel.py`：相機、SMU、Recipe 左側清單
+- `risingcam_gui/camera_controller.py`：RisingCam SDK 控制
+- `docs/PROGRAM_ARCHITECTURE.md`：架構、依賴方向與擴充規則
+- `docs/REQUIREMENTS_LOG.md`：使用者需求、狀態、驗收條件及變更紀錄
+- `risingcam_gui/smu_manager.py`：VISA 掃描與連線生命週期
+- `risingcam_gui/smu_base.py`、`keysight_b2900.py`：SMU 身分與安全狀態介面
+- `risingcam_gui/sdk/`：原廠 Python 封裝與 64-bit DLL
+- `drivers/usb_x64/`：原廠 64-bit USB 驅動
+
+## EL 定量注意事項
+
+目前影像仍為 RGB24 預覽／拍攝路徑。若要正式比較不同樣品、stability 前後、EL–I 或 k mapping，還需要 16-bit RAW／灰階路徑、相機線性與 Gain calibration、Dark correction、hot-pixel correction、固定 ROI／解析度及完整同步紀錄。Recipe 已保存這些分析所需的相機條件與 Dark Profile 關係，但尚不能把目前 TIFF 視為完整的定量原始資料。
