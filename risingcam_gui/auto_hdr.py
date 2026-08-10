@@ -9,6 +9,7 @@ tone mapping from leaking into EL-I or k-mapping data.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import numpy as np
@@ -19,6 +20,32 @@ QUALITY_PRESETS = {
     "standard": {"max_exposures": 5, "frames_per_exposure": 3},
     "high": {"max_exposures": 7, "frames_per_exposure": 5},
 }
+
+
+@dataclass
+class DiskFrameGroup:
+    """Raw frames spooled to disk so a complete HDR bracket is not kept in RAM."""
+
+    directory: Path
+    prefix: str
+    paths: list[Path] = field(default_factory=list)
+
+    def append(self, frame: np.ndarray) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        path = self.directory / f"{self.prefix}_f{len(self.paths) + 1:03d}.npy"
+        np.save(path, np.asarray(frame), allow_pickle=False)
+        self.paths.append(path)
+
+    def frames(self) -> list[np.ndarray]:
+        return [np.load(path, allow_pickle=False) for path in self.paths]
+
+    def cleanup(self) -> None:
+        for path in self.paths:
+            path.unlink(missing_ok=True)
+        try:
+            self.directory.rmdir()
+        except OSError:
+            pass
 
 
 class HDRPlanningError(ValueError):
@@ -101,7 +128,7 @@ class ExposureSequenceResult:
     valid_exposures_ms: tuple[float, ...]
     excluded_exposures_ms: tuple[float, ...]
     skipped_exposures_ms: tuple[float, ...]
-    frame_groups: list[list[np.ndarray]]
+    frame_groups: list[list[np.ndarray] | DiskFrameGroup]
     excluded_judgment_frames: list[tuple[float, np.ndarray]]
     decisions: list[ExposureDecision]
     early_termination: dict[str, Any] | None = None
@@ -348,6 +375,7 @@ def capture_exposure_sequence(
     early_stop_enabled: bool = True,
     roi_mask: np.ndarray | None = None,
     hot_pixel_mask: np.ndarray | None = None,
+    spool_directory: str | Path | None = None,
 ) -> ExposureSequenceResult:
     """Capture short-to-long, terminating on the first severely clipped segment.
 
@@ -357,7 +385,7 @@ def capture_exposure_sequence(
     longer segments are not requested from the camera.
     """
     planned = tuple(sorted(float(value) for value in plan.exposures_ms))
-    groups: list[list[np.ndarray]] = []
+    groups: list[list[np.ndarray] | DiskFrameGroup] = []
     excluded_judgments: list[tuple[float, np.ndarray]] = []
     decisions: list[ExposureDecision] = []
     captured: list[float] = []
@@ -368,7 +396,12 @@ def capture_exposure_sequence(
 
     for segment_index, exposure_ms in enumerate(planned):
         first = np.asarray(capture_frame(exposure_ms, plan.gain_percent, 1))
-        group = [first]
+        group: list[np.ndarray] | DiskFrameGroup
+        if spool_directory is None:
+            group = [first]
+        else:
+            group = DiskFrameGroup(Path(spool_directory), f"exp{segment_index + 1:02d}")
+            group.append(first)
         captured.append(exposure_ms)
         decision = judge_exposure_frame(
             first,
@@ -395,7 +428,11 @@ def capture_exposure_sequence(
 
         valid.append(exposure_ms)
         for frame_number in range(2, plan.frames_per_exposure + 1):
-            group.append(np.asarray(capture_frame(exposure_ms, plan.gain_percent, frame_number)))
+            frame = np.asarray(capture_frame(exposure_ms, plan.gain_percent, frame_number))
+            if isinstance(group, DiskFrameGroup):
+                group.append(frame)
+            else:
+                group.append(frame)
         groups.append(group)
 
     return ExposureSequenceResult(
@@ -502,7 +539,9 @@ def _as_luminance(array: np.ndarray) -> np.ndarray:
     raise ValueError("影像必須是 2D 灰階或 RGB 陣列")
 
 
-def _group_stack(group: np.ndarray | Sequence[np.ndarray]) -> np.ndarray:
+def _group_stack(group: np.ndarray | Sequence[np.ndarray] | DiskFrameGroup) -> np.ndarray:
+    if isinstance(group, DiskFrameGroup):
+        return np.stack([_as_luminance(item) for item in group.frames()], axis=0)
     data = np.asarray(group, dtype=np.float32)
     if data.ndim in (2, 3) and (data.ndim == 2 or data.shape[-1] in (3, 4)):
         data = _as_luminance(data)[None, ...]
@@ -513,7 +552,15 @@ def _group_stack(group: np.ndarray | Sequence[np.ndarray]) -> np.ndarray:
     return data
 
 
-def _combine_group(group: np.ndarray | Sequence[np.ndarray], method: str) -> np.ndarray:
+def _combine_group(group: np.ndarray | Sequence[np.ndarray] | DiskFrameGroup, method: str) -> np.ndarray:
+    if isinstance(group, DiskFrameGroup) and method == "average":
+        frames = group.frames()
+        if not frames:
+            raise ValueError("Frame group must not be empty")
+        total = np.zeros_like(_as_luminance(frames[0]), dtype=np.float64)
+        for frame in frames:
+            total += _as_luminance(frame)
+        return (total / len(frames)).astype(np.float32)
     stack = _group_stack(group)
     if method == "median":
         return np.median(stack, axis=0)

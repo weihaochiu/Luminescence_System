@@ -76,7 +76,7 @@ class SMUManager(QObject):
         if not force and self.output_enabled() is True:
             self.error_occurred.emit("SMU 輸出目前仍為 ON。請先在儀器面板關閉輸出，再中斷連線。")
             return False
-        self._close_session()
+        self._close_session(safe_output=force)
         self.disconnected.emit()
         self.status_changed.emit("SMU 已中斷連線")
         return True
@@ -101,8 +101,19 @@ class SMUManager(QObject):
 
     def shutdown(self) -> None:
         self._poll_timer.stop()
-        self._close_session()
+        self._close_session(safe_output=True)
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def safe_stop(self) -> bool:
+        """Immediately attempt to put the connected SMU into a safe state."""
+        if self._driver is None:
+            return True
+        failures = self._driver.safe_stop()
+        if failures:
+            self.error_occurred.emit("SMU safety stop incomplete: " + "; ".join(failures))
+            return False
+        self.status_changed.emit("SMU output disabled")
+        return True
 
     def _start_operation(self, operation: str, task: Callable[[], Any]) -> None:
         self._operation = operation
@@ -226,10 +237,12 @@ class SMUManager(QObject):
             supported=supported,
         )
 
-    def _close_session(self) -> None:
+    def _close_session(self, safe_output: bool = False) -> None:
         if self._driver is not None:
             try:
-                self._driver.close()
+                if safe_output:
+                    self.safe_stop()
+                self._driver.close(safe_stop=False)
             except Exception:
                 pass
         if self._resource_manager is not None:

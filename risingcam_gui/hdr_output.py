@@ -196,6 +196,9 @@ def _exposure_token(exposure_ms: float) -> str:
     return f"{exposure_ms:.6f}".rstrip("0").rstrip(".").replace(".", "p") + "ms"
 
 def _original_frames(group: np.ndarray | Sequence[np.ndarray]) -> list[np.ndarray]:
+    frames = getattr(group, "frames", None)
+    if callable(frames):
+        return frames()
     data = np.asarray(group)
     if data.ndim == 2 or (data.ndim == 3 and data.shape[-1] in (3, 4)):
         return [data]

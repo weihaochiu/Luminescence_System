@@ -96,6 +96,29 @@ class AutoHDRTests(unittest.TestCase):
         self.assertEqual((1.0,), result.valid_exposures_ms)
         self.assertIsNone(result.early_termination)
 
+    def test_capture_can_spool_frames_without_retaining_a_bracket_in_memory(self) -> None:
+        plan = ExposurePlan((1.0, 10.0), 10, 2, 0.0, "auto", 1.0)
+        with tempfile.TemporaryDirectory() as directory:
+            result = capture_exposure_sequence(
+                plan,
+                lambda exposure, _gain, frame: np.full((3, 4), exposure + frame, dtype=np.uint16),
+                spool_directory=directory,
+            )
+            self.assertEqual(2, len(result.frame_groups))
+            self.assertTrue(all(hasattr(group, "paths") for group in result.frame_groups))
+            merged = merge_quantitative_hdr(result.frame_groups, result.frame_groups, [1.0, 10.0], low_signal_sigma=0)
+            self.assertEqual((3, 4), merged.linear_dn_per_s.shape)
+            products = save_hdr_capture_set(
+                Path(directory) / "output" / "EL",
+                result.frame_groups,
+                result.frame_groups,
+                merged,
+                gain_percent=10,
+                hdr_settings_snapshot=HDRSystemSettings().snapshot(),
+                execution_summary=result.to_summary(),
+            )
+            self.assertTrue(Path(products["manifest_json"]).is_file())
+
     def test_manifest_saves_excluded_judgment_and_marks_skipped_segments(self) -> None:
         frames = [np.full((3, 4, 5), 100, dtype=np.uint8)]
         dark = [np.zeros((3, 4, 5), dtype=np.uint8)]

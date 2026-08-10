@@ -50,6 +50,18 @@ class SMUDriver:
             return False
         return None
 
-    def close(self) -> None:
+    def safe_stop(self) -> list[str]:
+        """Best-effort neutralization of an instrument output."""
+        failures: list[str] = []
+        for command in (":SOUR:VOLT 0", ":SOUR:CURR 0", ":OUTP OFF"):
+            try:
+                self.resource.write(command)
+            except Exception as exc:
+                failures.append(f"{command}: {exc}")
+        return failures
+
+    def close(self, safe_stop: bool = True) -> None:
+        if safe_stop:
+            self.safe_stop()
         self.resource.close()
 

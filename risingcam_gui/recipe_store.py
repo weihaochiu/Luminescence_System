@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
+
+from .numeric import decimal_from_number, normalize_json_numbers, quantize_number
 from uuid import uuid4
 
 
@@ -262,9 +264,9 @@ class Recipe:
 
     def actual_current_ma(self, point: ELPoint) -> float:
         if self.el_sweep.setpoint_basis == "current_density":
-            return point.setpoint * self.geometry.active_area_cm2
+            return quantize_number(decimal_from_number(point.setpoint) * decimal_from_number(self.geometry.active_area_cm2))
         if self.el_sweep.setpoint_basis == "current":
-            return point.setpoint
+            return quantize_number(point.setpoint)
         return 0.0
 
     def dark_iv_point_count(self) -> int:
@@ -451,7 +453,7 @@ class Recipe:
         return self.state == "active" and not self.validate()
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return normalize_json_numbers(asdict(self))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Recipe":

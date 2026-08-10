@@ -9,7 +9,7 @@ keeps application state, Recipe/HDR coordination, and lifecycle ownership.
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSettings, QStandardPaths, QTimer
+from PySide6.QtCore import QSettings, QStandardPaths, QThread, QTimer
 from PySide6.QtGui import QCloseEvent, QImage
 from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMessageBox
 
@@ -20,6 +20,7 @@ from .hdr_settings_dialog import HDRSettingsDialog
 from .hdr_workflow import HDRSessionState, choose_hdr_session
 from .main_window_devices import MainWindowDeviceMixin
 from .main_window_ui import MainWindowUIMixin
+from .measurement_worker import MeasurementProgress, MeasurementWorker
 from .recipe_dialog import RecipeManagerDialog
 from .recipe_store import Recipe, RecipeStore
 from .smu_manager import SMUManager
@@ -52,6 +53,8 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self._pending_auto_path: str | None = None
         self._capture_next_frame = False
         self._auto_capture_converged = False
+        self._measurement_thread: QThread | None = None
+        self._measurement_worker: MeasurementWorker | None = None
 
         self._build_actions()
         self._build_menu_and_toolbar()
@@ -190,6 +193,61 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             "本版已完成四階段 Recipe 建立、驗證與選擇。SMU 安全狀態機與同步拍攝將在下一階段加入。",
         )
 
+    def start_background_measurement(self, run: Any) -> None:
+        """Start a future measurement state-machine without blocking the UI."""
+        if self._measurement_thread is not None:
+            raise RuntimeError("Measurement is already running")
+        thread = QThread(self)
+        worker = MeasurementWorker(run)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.execute)
+        worker.progress_changed.connect(self._on_measurement_progress)
+        worker.finished.connect(self._on_measurement_finished)
+        worker.cancelled.connect(self._on_measurement_cancelled)
+        worker.failed.connect(self._on_measurement_failed)
+        for signal in (worker.finished, worker.cancelled, worker.failed):
+            signal.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_measurement_worker)
+        self._measurement_thread = thread
+        self._measurement_worker = worker
+        self.stop_measurement_button.setEnabled(True)
+        thread.start()
+
+    def stop_background_measurement(self) -> None:
+        if self._measurement_worker is not None:
+            self._measurement_worker.request_cancel()
+        self.smu_manager.safe_stop()
+
+    def emergency_stop_measurement(self) -> None:
+        """Abort work and issue the SMU's best-effort safety sequence."""
+        if self._measurement_worker is not None:
+            self._measurement_worker.request_cancel()
+        if self.smu_manager.safe_stop():
+            self.status_message.setText("Emergency stop sent; SMU output disabled")
+        else:
+            self.status_message.setText("Emergency stop sent; verify SMU front panel")
+
+    def _on_measurement_progress(self, progress: MeasurementProgress) -> None:
+        suffix = f" — {progress.message}" if progress.message else ""
+        self.status_message.setText(f"{progress.phase}: {progress.current}/{progress.total}{suffix}")
+
+    def _on_measurement_finished(self, _result: object) -> None:
+        self.status_message.setText("Measurement completed")
+
+    def _on_measurement_cancelled(self) -> None:
+        self.status_message.setText("Measurement stopped safely")
+
+    def _on_measurement_failed(self, message: str) -> None:
+        self.smu_manager.safe_stop()
+        self.show_error(f"Measurement failed: {message}")
+
+    def _clear_measurement_worker(self) -> None:
+        self._measurement_worker = None
+        self._measurement_thread = None
+        self.stop_measurement_button.setEnabled(False)
+
     def _revalidate_locked_hdr_profile(self) -> None:
         state = self.hdr_session_state
         if (
@@ -229,6 +287,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API name
+        self.stop_background_measurement()
         self.controller.close_camera()
         self.smu_manager.shutdown()
         event.accept()

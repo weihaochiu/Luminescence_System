@@ -263,6 +263,7 @@ class MainWindowUIMixin:
             #measurementBar { background: #f1f3f4; border-top: 1px solid #aeb3b7; }
             #startMeasurement { background: #1976a8; color: white; font-weight: 600; min-height: 34px; }
             #stopMeasurement { background: #b3261e; color: white; font-weight: 600; min-height: 34px; }
+            #emergencyStop { background: #7f0000; color: white; font-weight: 700; min-height: 34px; border: 2px solid #4a0000; }
             QScrollArea { background: #eef0f1; }
             """
         )
@@ -295,7 +296,13 @@ class MainWindowUIMixin:
         self.stop_measurement_button.setObjectName("stopMeasurement")
         self.stop_measurement_button.setMinimumWidth(90)
         self.stop_measurement_button.setEnabled(False)
+        self.emergency_stop_button = QPushButton("Emergency Stop")
+        self.emergency_stop_button.setObjectName("emergencyStop")
+        self.emergency_stop_button.setMinimumWidth(130)
+        self.emergency_stop_button.setToolTip("Immediately zero the SMU source and disable output.")
         self.start_measurement_button.clicked.connect(self._measurement_not_implemented)
+        self.stop_measurement_button.clicked.connect(self.stop_background_measurement)
+        self.emergency_stop_button.clicked.connect(self.emergency_stop_measurement)
         layout.addWidget(QLabel("樣品 ID"))
         layout.addWidget(self.sample_id_edit)
         layout.addWidget(QLabel("儲存位置"))
@@ -305,6 +312,7 @@ class MainWindowUIMixin:
         layout.addWidget(self.hdr_session_button)
         layout.addWidget(self.start_measurement_button)
         layout.addWidget(self.stop_measurement_button)
+        layout.addWidget(self.emergency_stop_button)
         return bar
 
     def _build_status_bar(self) -> None:
