@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from risingcam_gui.keysight_b2900 import KeysightB2900Driver
-from risingcam_gui.numeric import format_scpi_number
-from risingcam_gui.recipe_store import ELPoint, Recipe
-from risingcam_gui.smu_base import SMUDevice
+from gui.keysight_b2900 import KeysightB2900Driver
+from gui.numeric import format_scpi_number
+from gui.recipe_store import ELPoint, Recipe
+from gui.smu_base import SMUDevice
 
 
 class FakeResource:

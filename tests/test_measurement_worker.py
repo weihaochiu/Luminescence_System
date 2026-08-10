@@ -4,7 +4,7 @@ import unittest
 
 from PySide6.QtCore import QCoreApplication
 
-from risingcam_gui.measurement_worker import MeasurementCancelled, MeasurementWorker
+from gui.measurement_worker import MeasurementCancelled, MeasurementWorker
 
 
 class MeasurementWorkerTests(unittest.TestCase):

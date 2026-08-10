@@ -253,27 +253,27 @@ Dark I–V／EL scan summary CSV、JSON metadata 與 Recipe snapshot 為可啟�
 ## 程式結構
 
 - `main.py`：入口
-- `risingcam_gui/main_window.py`：主視窗狀態、Recipe／HDR 協調與生命週期
-- `risingcam_gui/main_window_ui.py`：主畫面、工具列、狀態列與訊號連接
-- `risingcam_gui/main_window_devices.py`：相機／SMU 連線、Live View 與一般拍攝
-- `risingcam_gui/recipe_store.py`：四階段 Recipe schema、驗證、時間估算與 JSON 儲存
-- `risingcam_gui/recipe_dialog.py`：Recipe 管理對話框骨架與頁面導航
-- `risingcam_gui/recipe_dialog_pages.py`：八個 Recipe 設定頁的 UI 建構
-- `risingcam_gui/recipe_dialog_points.py`：EL 點位表、HDR 反灰與相機欄位邏輯
-- `risingcam_gui/recipe_dialog_logic.py`：Recipe 表單綁定、CRUD、驗證、摘要及匯入／匯出
-- `risingcam_gui/auto_hdr.py`：自動曝光規劃、過曝提前終止與線性 HDR 合成
-- `risingcam_gui/hdr_output.py`：HDR TIFF、原始分曝光資料與 JSON／CSV manifest 輸出
-- `risingcam_gui/hdr_settings.py`、`hdr_settings_dialog.py`：共用 HDR 設定、舊版遷移與 `設定 → HDR` 介面
-- `risingcam_gui/hdr_profile.py`：T0 Profile 建立、讀寫、條件簽章與相容性檢查
-- `risingcam_gui/hdr_workflow.py`：T0／Aging 選擇與 Profile 匯入介面
-- `risingcam_gui/measurement_snapshot.py`：不可變的完整量測有效設定與執行快照
-- `risingcam_gui/device_panel.py`：相機、SMU、Recipe 左側清單
-- `risingcam_gui/camera_controller.py`：RisingCam SDK 控制
+- `gui/main_window.py`：主視窗狀態、Recipe／HDR 協調與生命週期
+- `gui/main_window_ui.py`：主畫面、工具列、狀態列與訊號連接
+- `gui/main_window_devices.py`：相機／SMU 連線、Live View 與一般拍攝
+- `gui/recipe_store.py`：四階段 Recipe schema、驗證、時間估算與 JSON 儲存
+- `gui/recipe_dialog.py`：Recipe 管理對話框骨架與頁面導航
+- `gui/recipe_dialog_pages.py`：八個 Recipe 設定頁的 UI 建構
+- `gui/recipe_dialog_points.py`：EL 點位表、HDR 反灰與相機欄位邏輯
+- `gui/recipe_dialog_logic.py`：Recipe 表單綁定、CRUD、驗證、摘要及匯入／匯出
+- `gui/auto_hdr.py`：自動曝光規劃、過曝提前終止與線性 HDR 合成
+- `gui/hdr_output.py`：HDR TIFF、原始分曝光資料與 JSON／CSV manifest 輸出
+- `gui/hdr_settings.py`、`hdr_settings_dialog.py`：共用 HDR 設定、舊版遷移與 `設定 → HDR` 介面
+- `gui/hdr_profile.py`：T0 Profile 建立、讀寫、條件簽章與相容性檢查
+- `gui/hdr_workflow.py`：T0／Aging 選擇與 Profile 匯入介面
+- `gui/measurement_snapshot.py`：不可變的完整量測有效設定與執行快照
+- `gui/device_panel.py`：相機、SMU、Recipe 左側清單
+- `gui/camera_controller.py`：RisingCam SDK 控制
 - `docs/PROGRAM_ARCHITECTURE.md`：架構、依賴方向與擴充規則
 - `docs/REQUIREMENTS_LOG.md`：使用者需求、狀態、驗收條件及變更紀錄
-- `risingcam_gui/smu_manager.py`：VISA 掃描與連線生命週期
-- `risingcam_gui/smu_base.py`、`keysight_b2900.py`：SMU 身分與安全狀態介面
-- `risingcam_gui/sdk/`：原廠 Python 封裝與 64-bit DLL
+- `gui/smu_manager.py`：VISA 掃描與連線生命週期
+- `gui/smu_base.py`、`keysight_b2900.py`：SMU 身分與安全狀態介面
+- `gui/sdk/`：原廠 Python 封裝與 64-bit DLL
 - `drivers/usb_x64/`：原廠 64-bit USB 驅動
 
 ## EL 定量注意事項

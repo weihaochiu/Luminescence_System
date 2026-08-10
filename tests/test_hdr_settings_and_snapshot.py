@@ -5,10 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from risingcam_gui.auto_hdr import ExposurePlan
-from risingcam_gui.hdr_settings import HDRSettingsStore, HDRSystemSettings
-from risingcam_gui.measurement_snapshot import build_measurement_snapshot, save_measurement_snapshot
-from risingcam_gui.recipe_store import Recipe
+from gui.auto_hdr import ExposurePlan
+from gui.hdr_settings import HDRSettingsStore, HDRSystemSettings
+from gui.measurement_snapshot import build_measurement_snapshot, save_measurement_snapshot
+from gui.recipe_store import Recipe
 
 
 class HDRSettingsAndSnapshotTests(unittest.TestCase):

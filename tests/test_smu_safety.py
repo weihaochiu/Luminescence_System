@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from risingcam_gui.smu_base import SMUDevice, SMUDriver
+from gui.smu_base import SMUDevice, SMUDriver
 
 
 class FakeResource:

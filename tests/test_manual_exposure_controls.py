@@ -8,7 +8,7 @@ from pathlib import Path
 class ManualExposureControlStructureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.source_path = Path(__file__).parents[1] / "risingcam_gui" / "main_window_devices.py"
+        cls.source_path = Path(__file__).parents[1] / "gui" / "main_window_devices.py"
         cls.tree = ast.parse(cls.source_path.read_text(encoding="utf-8"))
         mixin = next(
             node

@@ -12,7 +12,7 @@
 
 ## 2. 啟動與主要資料流
 
-1. `main.py` 呼叫 `risingcam_gui.app.main()`。
+1. `main.py` 呼叫 `gui.app.main()`。
 2. `app.py` 建立 Qt Application 與 `MainWindow`。
 3. `MainWindow` 建立相機控制器、SMU 管理器、Recipe Store 與 HDR Settings Store。
 4. 主畫面從 Store 載入通過驗證的 Recipe，使用者選擇 Recipe、樣品 ID、輸出位置與 HDR T0／Aging 模式。
@@ -121,7 +121,7 @@ V1.3.6 仍禁止下列操作：
 
 ## 9. 驗證策略
 
-- `python -m compileall -q risingcam_gui tests`：所有 Python 檔案語法檢查。
+- `python -m compileall -q gui tests`：所有 Python 檔案語法檢查。
 - `python -m unittest discover -s tests -v`：HDR 數值、Profile、設定快照、Recipe schema、UI 結構與模組邊界。
 - Windows 實機驗證：RisingCam 連線、Live View、曝光／Gain、一般拍攝、VISA 掃描與 B2900 安全連線。
 - 涉及 SMU 輸出的版本必須另建硬體模擬、錯誤注入與緊急停止測試，不能只依賴 GUI 手動測試。

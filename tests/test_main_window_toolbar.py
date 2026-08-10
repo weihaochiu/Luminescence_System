@@ -8,7 +8,7 @@ from pathlib import Path
 class MainToolbarStructureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.source_path = Path(__file__).parents[1] / "risingcam_gui" / "main_window_ui.py"
+        cls.source_path = Path(__file__).parents[1] / "gui" / "main_window_ui.py"
         cls.tree = ast.parse(cls.source_path.read_text(encoding="utf-8"))
         main_window = next(
             node for node in cls.tree.body if isinstance(node, ast.ClassDef) and node.name == "MainWindowUIMixin"

@@ -586,5 +586,5 @@ def _pixel_or_global_sigma(stack: np.ndarray) -> np.ndarray | float:
 
 
 # Stable compatibility facade: existing callers may continue importing output
-# functions from risingcam_gui.auto_hdr.
+# functions from gui.auto_hdr.
 from .hdr_output import save_hdr_capture_set, save_hdr_products

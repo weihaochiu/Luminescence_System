@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from risingcam_gui.hdr_profile import HDRProfile, create_t0_profile
-from risingcam_gui.hdr_settings import HDRSystemSettings
-from risingcam_gui.recipe_store import Recipe
+from gui.hdr_profile import HDRProfile, create_t0_profile
+from gui.hdr_settings import HDRSystemSettings
+from gui.recipe_store import Recipe
 
 
 class HDRProfileTests(unittest.TestCase):

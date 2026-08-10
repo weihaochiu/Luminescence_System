@@ -7,13 +7,13 @@ from pathlib import Path
 
 import numpy as np
 
-from risingcam_gui.auto_hdr import (
+from gui.auto_hdr import (
     ExposurePlan,
     capture_exposure_sequence,
     merge_quantitative_hdr,
     save_hdr_capture_set,
 )
-from risingcam_gui.hdr_settings import HDRSystemSettings
+from gui.hdr_settings import HDRSystemSettings
 
 
 class AutoHDRTests(unittest.TestCase):

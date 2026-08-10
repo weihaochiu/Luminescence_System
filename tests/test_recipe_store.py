@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from risingcam_gui.recipe_store import ELPoint, Recipe, RecipeStore
-from risingcam_gui.hdr_settings import HDRSystemSettings
+from gui.recipe_store import ELPoint, Recipe, RecipeStore
+from gui.hdr_settings import HDRSystemSettings
 
 
 class RecipeStoreTests(unittest.TestCase):

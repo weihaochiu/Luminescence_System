@@ -148,7 +148,7 @@
   - 相機未連線時，曝光控制全部停用。
   - 介面曝光單位為 ms；送入 RisingCam SDK 時轉為 μs，套用後讀回實際值並更新畫面。
 - 驗收條件：共用相機控制狀態函式不得在連線後無條件停用手動欄位；自動／手動模式切換使用單一狀態計算來源。
-- 影響模組：`risingcam_gui/main_window_devices.py`。
+- 影響模組：`gui/main_window_devices.py`。
 - 相容性／資料遷移：不變更 Recipe schema、相機 metadata 或既有設定檔。
 - 安全風險：只影響相機曝光與 Gain；不啟用任何 SMU source、compliance 或 OUTPUT 命令。
 - 測試與驗證：新增 `tests/test_manual_exposure_controls.py`；完整測試套件通過。
@@ -161,7 +161,7 @@
 - 使用者原意：相機連線與曝光值更新時，不應持續出現 `_format_exposure()` 參數數量錯誤。
 - 詳細行為：相機開啟、SDK 曝光訊號、手動曝光套用與自動曝光更新後，狀態列必須依數值顯示 μs、ms 或 s，且不得中斷其他 UI 更新。
 - 驗收條件：`_format_exposure()` 必須以 `@staticmethod` 宣告，或改為具 `self` 的 instance method；所有 mixin 方法都必須具備有效的 descriptor 綁定方式。
-- 影響模組：`risingcam_gui/main_window_devices.py`。
+- 影響模組：`gui/main_window_devices.py`。
 - 相容性／資料遷移：不變更 Recipe schema、相機 SDK 參數、影像 metadata 或既有設定檔。
 - 安全風險：僅修正曝光文字格式化；不新增 SMU 或相機控制命令。
 - 測試與驗證：擴充 `tests/test_manual_exposure_controls.py`，加入 formatter decorator 與 mixin 方法綁定檢查；完整測試套件通過。

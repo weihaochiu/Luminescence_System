@@ -9,7 +9,7 @@ class ModularArchitectureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.root = Path(__file__).parents[1]
-        cls.package = cls.root / "risingcam_gui"
+        cls.package = cls.root / "gui"
 
     def test_public_entry_modules_remain_small_coordinators(self) -> None:
         limits = {

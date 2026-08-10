@@ -7,7 +7,7 @@ from pathlib import Path
 class HDRUIStructureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        root = Path(__file__).parents[1] / "risingcam_gui"
+        root = Path(__file__).parents[1] / "gui"
         cls.main_source = "\n".join(
             (root / name).read_text(encoding="utf-8")
             for name in ("main_window.py", "main_window_ui.py", "main_window_devices.py")
@@ -33,7 +33,7 @@ class HDRUIStructureTests(unittest.TestCase):
         self.assertIn("HDR Profile 不相容", self.workflow_source)
 
     def test_hdr_source_el_and_dark_outputs_are_forced(self) -> None:
-        settings_source = (Path(__file__).parents[1] / "risingcam_gui" / "hdr_settings_dialog.py").read_text(encoding="utf-8")
+        settings_source = (Path(__file__).parents[1] / "gui" / "hdr_settings_dialog.py").read_text(encoding="utf-8")
         self.assertIn("固定保存：所有實際拍攝的原始 EL、原始 Dark", settings_source)
         self.assertIn("self.save_raw_check.setEnabled(not enabled)", self.recipe_source)
 
@@ -56,7 +56,7 @@ class HDRUIStructureTests(unittest.TestCase):
     def test_hdr_settings_are_reached_from_settings_menu(self) -> None:
         self.assertIn('QAction("HDR…", self)', self.main_source)
         self.assertIn("settings_menu.addAction(self.hdr_settings_action)", self.main_source)
-        self.assertIn("嚴重過曝時立即停止", (Path(__file__).parents[1] / "risingcam_gui" / "hdr_settings_dialog.py").read_text(encoding="utf-8"))
+        self.assertIn("嚴重過曝時立即停止", (Path(__file__).parents[1] / "gui" / "hdr_settings_dialog.py").read_text(encoding="utf-8"))
 
     def test_recipe_camera_strategy_is_removed(self) -> None:
         self.assertNotIn("camera_strategy_combo", self.recipe_source)
