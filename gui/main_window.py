@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-"""Main-window coordinator.
-
-Widget construction and device operations live in cohesive mixins.  This file
-keeps application state, Recipe/HDR coordination, and lifecycle ownership.
-"""
+"""Main-window coordinator for application state and lifecycle ownership."""
 
 from pathlib import Path
 from typing import Any
@@ -23,9 +19,10 @@ from .main_window_ui import MainWindowUIMixin
 from .measurement_worker import MeasurementProgress, MeasurementWorker
 from .recipe_dialog import RecipeManagerDialog
 from .recipe_store import Recipe, RecipeStore
+from .relay_controller import RelayController, RelayService
+from .main_window_relay import attach_relay_handlers
+from .relay_settings import RelaySettingsStore
 from .smu_manager import SMUManager
-
-
 class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
     """Top-level state owner and Recipe/HDR measurement coordinator."""
 
@@ -45,6 +42,10 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.hdr_settings_store = HDRSettingsStore(
             hdr_settings_path, self.recipe_store.legacy_hdr_settings_candidate
         )
+        relay_settings_path = (Path(app_data) if app_data else Path.cwd()) / "relay_settings.json"
+        self.relay_settings_store = RelaySettingsStore(relay_settings_path)
+        self.relay_controller = RelayController()
+        self.relay_service = RelayService(self.relay_controller, self.relay_settings_store)
         self.selected_recipe: Recipe | None = None
         self.hdr_session_state: HDRSessionState | None = None
         self.devices: list[Any] = []
@@ -71,6 +72,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
 
         QTimer.singleShot(50, self.refresh_devices)
         QTimer.singleShot(300, self.refresh_smu_devices)
+        QTimer.singleShot(500, self.refresh_relay_connection)
 
     def refresh_recipes(self) -> None:
         try:
@@ -290,4 +292,8 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.stop_background_measurement()
         self.controller.close_camera()
         self.smu_manager.shutdown()
+        self.relay_controller.disconnect()
         event.accept()
+
+
+attach_relay_handlers(MainWindow)

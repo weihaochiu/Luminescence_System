@@ -84,6 +84,16 @@
 
 原廠 `sdk/nncam.py` 與 DLL 視為 vendor code，不進行一般格式化或重構。
 
+## 4.5 Relay 控制邊界
+
+| 模組 | 責任 |
+| --- | --- |
+| `relay_controller.py` | USB HID discovery／runtime connection、8-channel command、Group operation rollback 與 audit log |
+| `relay_settings.py` | Device identity、Channel／Group schema、JSON persistence、Group channel conflict validation |
+| `relay_settings_dialog.py` | `設定 → Relay 設定…`，提供 Channel／Group 編輯與維修用手動控制 |
+
+HID path 僅供當次連線使用，設定檔不保存 USB port、Windows location 或 path。主畫面白光控制只能呼叫 `RelayService.group_on/off("white_light")`；CH1／CH2 的單獨控制僅位於設定視窗。Group ON 部分失敗會對全部 member 嘗試 OFF rollback，Group OFF 則累積失敗但繼續操作後續 member。
+
 ## 5. Recipe 與 HDR 設定邊界
 
 - Recipe 只保存 `hdr.enabled`；所有 HDR 詳細參數位於系統級 `hdr_settings.json`。

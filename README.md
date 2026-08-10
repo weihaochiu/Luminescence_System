@@ -1,5 +1,13 @@
 # EL 量測設備控制程式 V1.3.6 Exposure Status Fix
 
+## Relay 設定與白光群組控制
+
+- `設定 → Relay 設定…` 可重新偵測 USBRelay8（VID `16C0`、PID `05DF`）、設定 CH1～CH8 的名稱／用途並進行維修用單獨 ON/OFF。
+- Relay 設定保存為獨立的 `relay_settings.json`；只保存設備識別、Channel 與 Group，不保存 USB port 或 HID path。
+- 預設白光群組為 `white_light = CH1 + CH2`（白光－L／白光－N）。主畫面僅透過群組 API 控制白光，並不提供 CH1／CH2 個別按鈕。
+- Group ON 若部分失敗，會記錄錯誤並對所有 member 嘗試 rollback OFF；Group OFF 則即使個別 channel 失敗仍會繼續關閉其餘 member。
+- 安裝環境需包含 `hidapi`；未偵測到設備或偵測到多個無法安全辨識的 USBRelay8 時，控制會保持停用。
+
 ## V1.3.6 曝光狀態更新錯誤修正
 
 - 修正 `_format_exposure()` 漏加 `@staticmethod`，使相機曝光訊號更新狀態列時重複拋出 `TypeError` 的問題。

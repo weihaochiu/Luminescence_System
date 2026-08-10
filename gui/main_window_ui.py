@@ -69,6 +69,8 @@ class MainWindowUIMixin:
         self.recipe_manager_action.setToolTip("建立、編輯、驗證或匯入／匯出 Recipe（Ctrl+R）")
         self.hdr_settings_action = QAction("HDR…", self)
         self.hdr_settings_action.setToolTip("設定共用的定量 HDR 參數與過曝提前終止規則")
+        self.relay_settings_action = QAction("Relay 設定…", self)
+        self.relay_settings_action.setToolTip("設定 USBRelay8 Channel、群組與手動測試")
 
         self.refresh_action.triggered.connect(self.refresh_devices)
         self.connect_action.triggered.connect(self.toggle_connection)
@@ -80,6 +82,7 @@ class MainWindowUIMixin:
         self.about_action.triggered.connect(self.show_about)
         self.recipe_manager_action.triggered.connect(self.open_recipe_manager)
         self.hdr_settings_action.triggered.connect(self.open_hdr_settings)
+        self.relay_settings_action.triggered.connect(self.open_relay_settings)
 
     def _build_menu_and_toolbar(self) -> None:
         file_menu = self.menuBar().addMenu("檔案(&F)")
@@ -99,6 +102,7 @@ class MainWindowUIMixin:
         settings_menu = self.menuBar().addMenu("設定(&S)")
         settings_menu.addAction(self.recipe_manager_action)
         settings_menu.addAction(self.hdr_settings_action)
+        settings_menu.addAction(self.relay_settings_action)
 
         help_menu = self.menuBar().addMenu("說明(&H)")
         help_menu.addAction(self.about_action)
@@ -288,6 +292,12 @@ class MainWindowUIMixin:
         self.hdr_session_button = QPushButton("HDR：未設定")
         self.hdr_session_button.setMinimumWidth(155)
         self.hdr_session_button.clicked.connect(self.configure_hdr_session)
+        self.white_light_status = QLabel("白光 ● 未連線")
+        self.white_light_status.setMinimumWidth(105)
+        self.white_light_button = QPushButton("開啟白光")
+        self.white_light_button.setMinimumWidth(105)
+        self.white_light_button.setEnabled(False)
+        self.white_light_button.clicked.connect(self.toggle_white_light)
         self.sample_id_edit.textChanged.connect(self._on_sample_id_changed)
         self.start_measurement_button = QPushButton("開始量測")
         self.start_measurement_button.setObjectName("startMeasurement")
@@ -310,6 +320,8 @@ class MainWindowUIMixin:
         layout.addWidget(self.measurement_path_button)
         layout.addWidget(self.selected_recipe_label)
         layout.addWidget(self.hdr_session_button)
+        layout.addWidget(self.white_light_status)
+        layout.addWidget(self.white_light_button)
         layout.addWidget(self.start_measurement_button)
         layout.addWidget(self.stop_measurement_button)
         layout.addWidget(self.emergency_stop_button)

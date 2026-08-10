@@ -23,6 +23,13 @@
 
 ## 2. 架構與維護性
 
+### RELAY-001－通用 USBRelay8 設定與白光群組
+
+- 狀態：已完成（2026-08-10）
+- 使用者要求：以通用 8-channel USB HID Relay Controller 支援 USBRelay8（VID `0x16C0`、PID `0x05DF`），將白光建模為 `white_light` Group（CH1 + CH2），而非在主畫面硬編碼 channel。
+- 驗收：設定頁可編輯／保存 CH1～CH8 與 Group；啟用群組之間不得重複使用 channel；主畫面只使用 `group_on/off("white_light")`；ON 失敗 rollback，OFF 繼續嘗試全部 member；多個無序號相同設備不自動連線。
+- 測試：`tests/test_relay.py` 涵蓋 Channel、Group、rollback、OFF 容錯、設定 round-trip 與裝置歧義。
+
 ### ARCH-001－功能模組化
 
 - 狀態：已完成（V1.3.4）
