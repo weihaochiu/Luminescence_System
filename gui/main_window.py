@@ -221,11 +221,11 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         if self._measurement_worker is not None:
             self._measurement_worker.request_cancel()
         self.smu_manager.safe_stop()
-
+        self.relay_service.safe_white_light_off("stop_measurement")
     def emergency_stop_measurement(self) -> None:
-        """Abort work and issue the SMU's best-effort safety sequence."""
         if self._measurement_worker is not None:
             self._measurement_worker.request_cancel()
+        self.relay_service.safe_white_light_off("measurement_abort")
         if self.smu_manager.safe_stop():
             self.status_message.setText("Emergency stop sent; SMU output disabled")
         else:
@@ -239,10 +239,12 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.status_message.setText("Measurement completed")
 
     def _on_measurement_cancelled(self) -> None:
+        self.relay_service.safe_white_light_off("measurement_cancelled")
         self.status_message.setText("Measurement stopped safely")
 
     def _on_measurement_failed(self, message: str) -> None:
         self.smu_manager.safe_stop()
+        self.relay_service.safe_white_light_off("critical_exception_cleanup")
         self.show_error(f"Measurement failed: {message}")
 
     def _clear_measurement_worker(self) -> None:
@@ -292,8 +294,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.stop_background_measurement()
         self.controller.close_camera()
         self.smu_manager.shutdown()
-        self.relay_controller.disconnect()
+        self.relay_service.shutdown()
         event.accept()
-
 
 attach_relay_handlers(MainWindow)

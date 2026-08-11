@@ -7,6 +7,8 @@
 - 預設白光群組為 `white_light = CH1 + CH2`（白光－L／白光－N）。主畫面僅透過群組 API 控制白光，並不提供 CH1／CH2 個別按鈕。
 - Group ON 若部分失敗，會記錄錯誤並對所有 member 嘗試 rollback OFF；Group OFF 則即使個別 channel 失敗仍會繼續關閉其餘 member。
 - 安裝環境需包含 `hidapi`；未偵測到設備或偵測到多個無法安全辨識的 USBRelay8 時，控制會保持停用。
+- USBRelay8 使用 HID Feature Report 控制並以 Report `0x00` 最後一個 byte 驗證 controller logical state；CH1／CH2 已完成實機驗證，CH3～CH8 不宣稱已完成硬體驗證。
+- 繼電器線圈需要外部 5 V Relay 電源；軟體 readback 無法確認線圈吸合或 COM-NO 實體接點狀態。
 
 ## V1.3.6 曝光狀態更新錯誤修正
 

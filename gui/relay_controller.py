@@ -101,7 +101,11 @@ def _hex_report(report: list[int]) -> str:
 
 
 class RelayController:
-    """Owns the connection and the single authoritative runtime state."""
+    """Owns the connection and authoritative USBRelay8 controller state.
+
+    CH1 and CH2 command/readback mapping is hardware verified. CH3-CH8 keep
+    the protocol's general bit mapping but are not claimed as hardware verified.
+    """
 
     REPORT_LENGTH = 9
     STATUS_REPORT_ID = 0x00
@@ -114,11 +118,15 @@ class RelayController:
         vid: int = 0x16C0,
         pid: int = 0x05DF,
         product: str = "USBRelay8",
+        settle_seconds: float = 0.15,
+        sleep: Any = time.sleep,
     ) -> None:
         self.transport = transport
         self.vid, self.pid, self.product = vid, pid, product
         self.handle: Any | None = None
         self.connected_device: RelayDevice | None = None
+        self.settle_seconds = settle_seconds
+        self._sleep = sleep
         self.channel_states = self._unknown_states()
         self.last_raw_status: list[int] | None = None
         self.last_bitmask: int | None = None
@@ -153,10 +161,8 @@ class RelayController:
         devices = self.discover()
         if not devices:
             return "未偵測到 USBRelay8"
-        if len(devices) > 1 and not all(item.serial_number for item in devices):
-            return "偵測到多個無法安全辨識的 Relay 裝置"
-        if len(devices) != 1:
-            return "偵測到多個 Relay 裝置，請只連接一台"
+        if len(devices) > 1:
+            return "偵測到多個相同 USBRelay8，請只保留一台後重新偵測"
         assert self.transport is not None
         try:
             self.handle = self.transport.open(devices[0].path)
@@ -192,7 +198,7 @@ class RelayController:
         return f"path={path!r} VID={self.vid:04X} PID={self.pid:04X} Product={self.product}"
 
     def refresh_hardware_state(self) -> int:
-        """Read and publish the DCTTech feature-report relay bitmask."""
+        """Read R00 and publish its final byte as controller state."""
         if self.handle is None or self.transport is None:
             self.channel_states = self._unknown_states()
             raise RelayError("Relay 未連線")
@@ -201,11 +207,11 @@ class RelayController:
                 self.handle, self.STATUS_REPORT_ID, self.REPORT_LENGTH
             )
             LOG.debug(
-                "Raw feature report (len=%s): %s | %s",
+                "R00 raw feature report (len=%s): %s | %s",
                 len(raw), _hex_report(raw), self._runtime_identity(),
             )
             bitmask = self._parse_state_bitmask(raw)
-            LOG.debug("Relay bitmask = 0b%s", f"{bitmask:08b}")
+            LOG.debug("R00 state_mask=0x%02X (0b%s)", bitmask, f"{bitmask:08b}")
         except Exception as exc:
             self.last_raw_status = None
             self.last_bitmask = None
@@ -223,25 +229,12 @@ class RelayController:
         }
         return bitmask
 
-    @staticmethod
-    def _looks_like_serial(values: list[int]) -> bool:
-        return len(values) == 5 and all(0x20 <= value <= 0x7E for value in values)
-
     @classmethod
     def _parse_state_bitmask(cls, raw: list[int]) -> int:
-        """Parse DCTTech payloads with or without a backend-supplied report ID."""
-        if len(raw) == 8:
-            # Windows hidapi omits Report ID 0 and returns the 8-byte payload.
-            return raw[7]
-        if len(raw) == 9:
-            unprefixed = cls._looks_like_serial(raw[0:5])
-            report_id_prefixed = raw[0] == cls.STATUS_REPORT_ID and cls._looks_like_serial(raw[1:6])
-            if report_id_prefixed and not unprefixed:
-                return raw[8]
-            if unprefixed and not report_id_prefixed:
-                return raw[7]
-            raise RelayError("無法辨識 9-byte HID feature report layout")
-        raise RelayError(f"無效的 HID feature report 長度：{len(raw)}（支援 8 或 9 bytes）")
+        """Parse hardware-verified R00: the final returned byte is the mask."""
+        if len(raw) not in (8, 9):
+            raise RelayError(f"無效的 R00 feature report 長度：{len(raw)}（支援 8 或 9 bytes）")
+        return raw[-1]
 
     def set_channel(self, channel: int, state: bool) -> None:
         if channel not in range(1, 9):
@@ -274,6 +267,7 @@ class RelayController:
             raise RelayError(f"CH{channel} command send failed：{exc}") from exc
 
         try:
+            self._sleep(self.settle_seconds)
             self.refresh_hardware_state()
         except RelayError as exc:
             self.channel_states[channel] = RelayState.ERROR
@@ -293,7 +287,7 @@ class RelayController:
                 f"CH{channel} command sent but state verification failed：expected {requested.value}, actual {actual.value}"
             )
         self.last_verification = "SUCCESS"
-        LOG.debug("verification: SUCCESS | CH%s=%s", channel, requested.value)
+        LOG.debug("Relay command verified | CH%s state=%s", channel, requested.value)
 
     def relay_on(self, channel: int) -> None:
         self.set_channel(channel, True)
@@ -372,6 +366,12 @@ class RelayService:
         try:
             for channel in selected.members:
                 self.controller.set_channel(channel, True)
+            state_mask = self.controller.refresh_hardware_state()
+            group_mask = self._group_mask(selected)
+            if state_mask & group_mask != group_mask:
+                raise RelayError(
+                    f"Relay controller state mismatch：mask=0x{state_mask:02X}, expected ON mask=0x{group_mask:02X}"
+                )
         except Exception as exc:
             for channel in selected.members:
                 try:
@@ -380,6 +380,7 @@ class RelayService:
                     LOG.exception("Relay rollback failed for CH%s", channel)
             self._record("GROUP", selected.display_name, previous, "ON", "ROLLBACK", source)
             raise RelayError(f"{selected.display_name} ON failed; rollback attempted：{exc}") from exc
+        LOG.info("%s relay controller state verified=ON | mask=0x%02X", selected.display_name, state_mask)
         self._record("GROUP", selected.display_name, previous, "ON", "SUCCESS", source)
 
     def group_off(self, group_id: str, source: str = "main_window", group: RelayGroup | None = None) -> None:
@@ -391,10 +392,47 @@ class RelayService:
                 self.controller.set_channel(channel, False)
             except Exception as exc:
                 failures.append(f"CH{channel}: {exc}")
+        try:
+            state_mask = self.controller.refresh_hardware_state()
+            group_mask = self._group_mask(selected)
+            if state_mask & group_mask:
+                failures.append(
+                    f"Relay controller state mismatch：mask=0x{state_mask:02X}, expected OFF mask=0x{group_mask:02X}"
+                )
+        except Exception as exc:
+            failures.append(f"Readback failed: {exc}")
         if failures:
             self._record("GROUP", selected.display_name, previous, "OFF", "FAILURE", source)
             raise RelayError(f"{selected.display_name} OFF failed：" + "；".join(failures))
+        LOG.info("%s relay controller state verified=OFF | mask=0x%02X", selected.display_name, state_mask)
         self._record("GROUP", selected.display_name, previous, "OFF", "SUCCESS", source)
+
+    @staticmethod
+    def _group_mask(group: RelayGroup) -> int:
+        return sum(1 << (channel - 1) for channel in group.members)
+
+    def safe_white_light_off(self, source: str = "safety_cleanup") -> bool:
+        """Best-effort logical OFF; this cannot verify coil power or contacts."""
+        if not self.controller.connected:
+            LOG.warning("White Light OFF skipped: USBRelay8 not connected | source=%s", source)
+            return False
+        try:
+            # CH1/CH2 are the hardware-verified White Light relay channels.
+            self.controller.set_channel(1, False)
+            self.controller.set_channel(2, False)
+            state_mask = self.controller.refresh_hardware_state()
+            if state_mask & 0x03:
+                raise RelayError(f"Relay controller state mismatch：mask=0x{state_mask:02X}, expected 0x00")
+        except Exception:
+            LOG.exception("White Light relay controller OFF verification failed | source=%s", source)
+            return False
+        LOG.info("White Light relay controller OFF verified | mask=0x%02X source=%s", state_mask, source)
+        return True
+
+    def shutdown(self) -> bool:
+        verified = self.safe_white_light_off("relay_controller_shutdown")
+        self.controller.disconnect()
+        return verified
 
     def _enabled_group(self, group_id: str) -> RelayGroup:
         group = self.settings_store.settings.group(group_id)

@@ -32,7 +32,10 @@ class RelaySettingsDialog(QDialog):
         self._refresh_connection_status()
 
     def _build_ui(self) -> None:
-        note = QLabel("Relay 設定會依 VID、PID 與產品名稱重新偵測設備；不會保存 USB 插槽或 HID path。Channel 個別控制僅供接線確認與維修使用。")
+        note = QLabel(
+            "Relay 設定會依 VID、PID 與產品名稱重新偵測設備；不會保存 USB 插槽或 HID path。"
+            "Channel 個別控制僅供接線確認與維修使用。USBRelay8 繼電器板需確認外部 5 V Relay 電源已接妥。"
+        )
         note.setWordWrap(True)
         note.setStyleSheet("background:#edf5fa; border:1px solid #b6cedd; padding:8px;")
         self.connection_label = QLabel()
@@ -178,7 +181,7 @@ class RelaySettingsDialog(QDialog):
             RelayState.OFF: "關閉",
             RelayState.UNKNOWN: "未知",
             RelayState.ERROR: "錯誤／狀態未知",
-            RelayState.PARTIAL: "部分開啟／錯誤",
+            RelayState.PARTIAL: "部分啟用／狀態異常",
         }
         for channel in range(1, 9):
             value = self.service.controller.channel_states[channel]

@@ -72,6 +72,9 @@ class RelaySettings:
                     )
                 if group.enabled:
                     assigned_channels[channel] = group.group_id
+        white_light = self.group("white_light")
+        if white_light is None or set(white_light.members) != {1, 2}:
+            errors.append("white_light Group 必須由 CH1 與 CH2 組成")
         return errors
 
     def to_dict(self) -> dict[str, Any]:

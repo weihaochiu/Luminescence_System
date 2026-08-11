@@ -41,7 +41,7 @@ class MainWindowRelayMixin:
         state_text = {
             RelayState.ON: "開啟",
             RelayState.OFF: "關閉",
-            RelayState.PARTIAL: "部分開啟／錯誤",
+            RelayState.PARTIAL: "部分啟用／狀態異常",
             RelayState.ERROR: "錯誤／狀態未知",
             RelayState.UNKNOWN: "未知" if connected else "未連線",
         }[state]

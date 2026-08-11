@@ -24,7 +24,8 @@ def main() -> int:
         return 1
     finally:
         controller.disconnect()
-    print("Diagnostic commands completed. Hardware verification still requires audible relay clicks.")
+    print("Diagnostic completed: USBRelay8 controller logical state verified.")
+    print("Confirm external 5 V Relay power separately; software cannot verify coil or COM-NO contacts.")
     return 0
 
 
