@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QDialog, QMessageBox
 
-from .relay_controller import RelayError
+from .relay_controller import RelayError, RelayState
 from .relay_settings_dialog import RelaySettingsDialog
 
 
@@ -12,7 +12,7 @@ class MainWindowRelayMixin:
     def open_relay_settings(self) -> None:
         dialog = RelaySettingsDialog(self.relay_settings_store, self.relay_service, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.refresh_relay_connection()
+            self._update_white_light_control()
 
     def refresh_relay_connection(self) -> None:
         self._update_white_light_control(self.relay_service.refresh_connection())
@@ -20,8 +20,8 @@ class MainWindowRelayMixin:
     def toggle_white_light(self) -> None:
         try:
             group = self.relay_settings_store.settings.group("white_light")
-            states = [self.relay_controller.channel_states[channel] for channel in group.members] if group else []
-            if states and all(state is True for state in states):
+            state = self.relay_service.group_state("white_light")
+            if state is RelayState.ON:
                 self.relay_service.group_off("white_light", "main_window")
             else:
                 self.relay_service.group_on("white_light", "main_window")
@@ -33,12 +33,19 @@ class MainWindowRelayMixin:
         if not hasattr(self, "white_light_button"):
             return
         group = self.relay_settings_store.settings.group("white_light")
-        states = [self.relay_controller.channel_states[channel] for channel in group.members] if group else []
-        is_on = bool(states) and all(state is True for state in states)
+        state = self.relay_service.group_state("white_light")
+        is_on = state is RelayState.ON
         connected = self.relay_controller.connected
         self.white_light_button.setEnabled(connected and group is not None and group.enabled)
         self.white_light_button.setText("關閉白光" if is_on else "開啟白光")
-        self.white_light_status.setText(f"白光 ● {'開啟' if is_on else '已連線' if connected else '未連線'}")
+        state_text = {
+            RelayState.ON: "開啟",
+            RelayState.OFF: "關閉",
+            RelayState.PARTIAL: "部分開啟／錯誤",
+            RelayState.ERROR: "錯誤／狀態未知",
+            RelayState.UNKNOWN: "未知" if connected else "未連線",
+        }[state]
+        self.white_light_status.setText(f"白光 ● {state_text}")
         self.white_light_status.setStyleSheet(
             "color:#16823b; font-weight:600;" if connected else "color:#b3261e; font-weight:600;"
         )

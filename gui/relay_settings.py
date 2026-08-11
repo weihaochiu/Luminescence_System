@@ -23,7 +23,6 @@ class RelayGroup:
     display_name: str
     members: list[int] = field(default_factory=list)
     enabled: bool = True
-    synchronized: bool = True
 
 
 @dataclass
@@ -98,8 +97,7 @@ class RelaySettings:
         channels = [channel_by_number.get(item.number, item) for item in defaults.channels]
         groups = [
             RelayGroup(str(item.get("group_id", "")), str(item.get("display_name", "")),
-                       [int(channel) for channel in item.get("members", [])], bool(item.get("enabled", True)),
-                       bool(item.get("synchronized", True)))
+                       [int(channel) for channel in item.get("members", [])], bool(item.get("enabled", True)))
             for item in source.get("groups", []) if isinstance(item, dict)
         ]
         return cls(int(device.get("vid", defaults.vid)), int(device.get("pid", defaults.pid)),

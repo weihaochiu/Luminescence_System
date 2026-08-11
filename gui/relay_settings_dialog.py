@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .relay_controller import RelayError, RelayService
+from .relay_controller import RelayError, RelayService, RelayState
 from .relay_settings import RelayGroup, RelaySettings, RelaySettingsStore
 
 
@@ -23,6 +23,12 @@ class RelaySettingsDialog(QDialog):
         self.resize(980, 640)
         self._build_ui()
         self._write_settings()
+        if self.service.controller.connected:
+            try:
+                self.service.refresh_hardware_state()
+            except RelayError:
+                pass
+            self._refresh_statuses()
         self._refresh_connection_status()
 
     def _build_ui(self) -> None:
@@ -68,7 +74,7 @@ class RelaySettingsDialog(QDialog):
             self.channel_table.setCellWidget(row, 6, controls)
 
         self.group_table = QTableWidget(0, 5)
-        self.group_table.setHorizontalHeaderLabels(["Group ID", "顯示名稱", "Member channels（例如 1,2）", "啟用", "同步控制"])
+        self.group_table.setHorizontalHeaderLabels(["Group ID", "顯示名稱", "Member channels（例如 1,2）", "啟用", "目前狀態"])
         self.group_table.setColumnWidth(0, 170)
         self.group_table.setColumnWidth(1, 170)
         self.group_table.setColumnWidth(2, 260)
@@ -116,11 +122,13 @@ class RelaySettingsDialog(QDialog):
         self.group_table.setCellWidget(row, 0, self._line(group.group_id))
         self.group_table.setCellWidget(row, 1, self._line(group.display_name))
         self.group_table.setCellWidget(row, 2, self._line(",".join(str(item) for item in group.members)))
-        enabled, sync = QCheckBox(), QCheckBox()
-        enabled.setChecked(group.enabled); sync.setChecked(group.synchronized)
-        enabled.setStyleSheet("margin-left:20px;"); sync.setStyleSheet("margin-left:28px;")
+        enabled = QCheckBox()
+        enabled.setChecked(group.enabled)
+        enabled.setStyleSheet("margin-left:20px;")
         self.group_table.setCellWidget(row, 3, enabled)
-        self.group_table.setCellWidget(row, 4, sync)
+        status = QTableWidgetItem("未知")
+        status.setFlags(status.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.group_table.setItem(row, 4, status)
 
     @staticmethod
     def _line(value: str) -> QLineEdit:
@@ -142,7 +150,7 @@ class RelaySettingsDialog(QDialog):
                 raise ValueError(f"第 {row + 1} 個 Group 的 member 格式無效")
             groups.append(RelayGroup(
                 self.group_table.cellWidget(row, 0).text().strip(), self.group_table.cellWidget(row, 1).text().strip(), members,
-                self.group_table.cellWidget(row, 3).isChecked(), self.group_table.cellWidget(row, 4).isChecked(),
+                self.group_table.cellWidget(row, 3).isChecked(),
             ))
         settings.groups = groups
         return settings
@@ -156,8 +164,7 @@ class RelaySettingsDialog(QDialog):
         except Exception as exc:
             QMessageBox.warning(self, "Relay 設定無效", str(exc))
             return
-        self.service.settings_store.settings = candidate
-        self._refresh_connection_status(self.service.refresh_connection())
+        self._refresh_connection_status(self.service.refresh_connection(candidate))
         self._refresh_statuses()
 
     def _refresh_connection_status(self, message: str | None = None) -> None:
@@ -166,12 +173,25 @@ class RelaySettingsDialog(QDialog):
         self.connection_label.setStyleSheet("color:#16823b; font-weight:600;" if self.service.controller.connected else "color:#b3261e; font-weight:600;")
 
     def _refresh_statuses(self) -> None:
+        labels = {
+            RelayState.ON: "開啟",
+            RelayState.OFF: "關閉",
+            RelayState.UNKNOWN: "未知",
+            RelayState.ERROR: "錯誤／狀態未知",
+            RelayState.PARTIAL: "部分開啟／錯誤",
+        }
         for channel in range(1, 9):
             value = self.service.controller.channel_states[channel]
-            self.channel_table.item(channel - 1, 5).setText("開啟" if value is True else "關閉" if value is False else "未知")
+            self.channel_table.item(channel - 1, 5).setText(labels[value])
         groups_by_channel = {channel: group.display_name for group in self.working.groups for channel in group.members}
         for channel in range(1, 9):
             self.channel_table.item(channel - 1, 4).setText(groups_by_channel.get(channel, ""))
+        try:
+            runtime_groups = self._read_settings().groups
+        except (TypeError, ValueError):
+            runtime_groups = self.working.groups
+        for row, group in enumerate(runtime_groups):
+            self.group_table.item(row, 4).setText(labels[self.service.group_state(group.group_id, group)])
 
     def _channel(self, channel: int, state: bool) -> None:
         try:
@@ -194,8 +214,10 @@ class RelaySettingsDialog(QDialog):
             errors = candidate.validate()
             if errors:
                 raise ValueError("\n".join(errors))
-            self.service.settings_store.settings = candidate
-            (self.service.group_on if state else self.service.group_off)(group_id, "manual_group")
+            group = candidate.group(group_id)
+            if group is None:
+                raise ValueError(f"找不到 Relay Group：{group_id}")
+            (self.service.group_on if state else self.service.group_off)(group_id, "manual_group", group)
         except (RelayError, ValueError) as exc:
             QMessageBox.warning(self, "Relay Group 操作失敗", str(exc))
         self._refresh_statuses()
