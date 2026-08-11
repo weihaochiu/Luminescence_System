@@ -38,7 +38,24 @@ if ($size -le 0) {
     throw "Backup file is empty. Push aborted."
 }
 
+$backupFiles = @(Get-ChildItem -Path $backupDir -Filter "backup_*.zip" -File |
+    Sort-Object LastWriteTime -Descending)
+
+$oldBackups = @($backupFiles | Select-Object -Skip 10)
+
+foreach ($oldBackup in $oldBackups) {
+    Write-Host "Removing old backup: $($oldBackup.FullName)"
+    Remove-Item -LiteralPath $oldBackup.FullName -Force
+}
+
+$remainingBackups = @(Get-ChildItem -Path $backupDir -Filter "backup_*.zip" -File)
+
+if ($remainingBackups.Count -gt 10) {
+    throw "Backup rotation failed: more than 10 backup files remain."
+}
+
 Write-Host ""
 Write-Host "Backup completed successfully."
 Write-Host "Backup file: $backupFile"
 Write-Host "Size: $size bytes"
+Write-Host "Backup files retained: $($remainingBackups.Count)"
