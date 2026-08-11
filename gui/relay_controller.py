@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 import logging
+import time
 from typing import Any, Protocol, TYPE_CHECKING
 
 from .relay_settings import RelayGroup, RelaySettingsStore
@@ -36,6 +37,7 @@ class RelayTransport(Protocol):
     def open(self, path: bytes | str) -> Any: ...
     def send(self, handle: Any, report: list[int]) -> int: ...
     def get_feature_report(self, handle: Any, report_id: int, length: int) -> list[int]: ...
+    def error(self, handle: Any) -> str: ...
     def close(self, handle: Any) -> None: ...
 
 
@@ -58,11 +60,19 @@ class HidApiTransport:
         return device
 
     def send(self, handle: Any, report: list[int]) -> int:
-        # DCTTech commands are HID output reports, not feature reports.
-        return int(handle.write(report))
+        return int(handle.send_feature_report(report))
 
     def get_feature_report(self, handle: Any, report_id: int, length: int) -> list[int]:
         return list(handle.get_feature_report(report_id, length))
+
+    def error(self, handle: Any) -> str:
+        error_method = getattr(handle, "error", None)
+        if callable(error_method):
+            try:
+                return str(error_method() or "unknown hidapi error")
+            except Exception as exc:
+                return f"unable to read hidapi error: {exc}"
+        return "hidapi error information unavailable"
 
     def close(self, handle: Any) -> None:
         handle.close()
@@ -94,8 +104,7 @@ class RelayController:
     """Owns the connection and the single authoritative runtime state."""
 
     REPORT_LENGTH = 9
-    STATUS_REPORT_ID = 0x01  # GET_FEATURE request selector; response byte 0 is serial data.
-    STATUS_MASK_OFFSET = 7  # DCTTech feature report protocol, not an inferred offset.
+    STATUS_REPORT_ID = 0x00
     COMMAND_ON = 0xFF
     COMMAND_OFF = 0xFD
 
@@ -113,6 +122,9 @@ class RelayController:
         self.channel_states = self._unknown_states()
         self.last_raw_status: list[int] | None = None
         self.last_bitmask: int | None = None
+        self.last_command_report: list[int] | None = None
+        self.last_send_result: int | None = None
+        self.last_verification = "NOT_RUN"
 
     @staticmethod
     def _unknown_states() -> dict[int, RelayState]:
@@ -171,6 +183,9 @@ class RelayController:
         self.channel_states = self._unknown_states()
         self.last_raw_status = None
         self.last_bitmask = None
+        self.last_command_report = None
+        self.last_send_result = None
+        self.last_verification = "NOT_RUN"
 
     def _runtime_identity(self) -> str:
         path = self.connected_device.path if self.connected_device else None
@@ -185,10 +200,11 @@ class RelayController:
             raw = self.transport.get_feature_report(
                 self.handle, self.STATUS_REPORT_ID, self.REPORT_LENGTH
             )
-            LOG.debug("Relay state read raw report: %s | %s", _hex_report(raw), self._runtime_identity())
-            if len(raw) != self.REPORT_LENGTH:
-                raise RelayError(f"無效的 HID 狀態長度：{len(raw)}（預期 {self.REPORT_LENGTH}）")
-            bitmask = raw[self.STATUS_MASK_OFFSET]
+            LOG.debug(
+                "Raw feature report (len=%s): %s | %s",
+                len(raw), _hex_report(raw), self._runtime_identity(),
+            )
+            bitmask = self._parse_state_bitmask(raw)
             LOG.debug("Relay bitmask = 0b%s", f"{bitmask:08b}")
         except Exception as exc:
             self.last_raw_status = None
@@ -207,6 +223,26 @@ class RelayController:
         }
         return bitmask
 
+    @staticmethod
+    def _looks_like_serial(values: list[int]) -> bool:
+        return len(values) == 5 and all(0x20 <= value <= 0x7E for value in values)
+
+    @classmethod
+    def _parse_state_bitmask(cls, raw: list[int]) -> int:
+        """Parse DCTTech payloads with or without a backend-supplied report ID."""
+        if len(raw) == 8:
+            # Windows hidapi omits Report ID 0 and returns the 8-byte payload.
+            return raw[7]
+        if len(raw) == 9:
+            unprefixed = cls._looks_like_serial(raw[0:5])
+            report_id_prefixed = raw[0] == cls.STATUS_REPORT_ID and cls._looks_like_serial(raw[1:6])
+            if report_id_prefixed and not unprefixed:
+                return raw[8]
+            if unprefixed and not report_id_prefixed:
+                return raw[7]
+            raise RelayError("無法辨識 9-byte HID feature report layout")
+        raise RelayError(f"無效的 HID feature report 長度：{len(raw)}（支援 8 或 9 bytes）")
+
     def set_channel(self, channel: int, state: bool) -> None:
         if channel not in range(1, 9):
             raise RelayError(f"無效的 Channel：CH{channel}")
@@ -216,15 +252,22 @@ class RelayController:
         command = self.COMMAND_ON if state else self.COMMAND_OFF
         report = [0x00, command, channel, 0, 0, 0, 0, 0, 0]
         requested = RelayState.ON if state else RelayState.OFF
+        self.last_command_report = report
+        self.last_send_result = None
+        self.last_verification = "NOT_RUN"
         timestamp = datetime.now(timezone.utc).isoformat()
         LOG.debug("%s | CH%s %s requested | %s", timestamp, channel, requested.value, self._runtime_identity())
-        LOG.debug("HID output report sent: %s", _hex_report(report))
+        LOG.debug("HID feature report: %s | transport type=FEATURE_REPORT", _hex_report(report))
         try:
             sent = self.transport.send(self.handle, report)
-            LOG.debug("HID output report result: %s", sent)
-            if sent != self.REPORT_LENGTH:
-                raise RelayError(f"HID command write incomplete：{sent}/{self.REPORT_LENGTH}")
+            self.last_send_result = sent
+            LOG.debug("send_feature_report return value: %s", sent)
+            if sent <= 0:
+                hid_error = self.transport.error(self.handle)
+                LOG.error("send_feature_report failed: return=%s hid_error=%s", sent, hid_error)
+                raise RelayError(f"send_feature_report failed：return={sent}, hid_error={hid_error}")
         except Exception as exc:
+            self.last_verification = "TRANSMISSION_FAILED"
             LOG.exception("CH%s %s command failed | %s", channel, requested.value, self._runtime_identity())
             if isinstance(exc, RelayError):
                 raise
@@ -234,12 +277,14 @@ class RelayController:
             self.refresh_hardware_state()
         except RelayError as exc:
             self.channel_states[channel] = RelayState.ERROR
+            self.last_verification = "READBACK_FAILED"
             LOG.error("command sent but state verification failed | CH%s expected=%s reason=%s", channel, requested.value, exc)
             raise RelayError(f"CH{channel} command sent but state verification failed：{exc}") from exc
 
         actual = self.channel_states[channel]
         if actual is not requested:
             self.channel_states[channel] = RelayState.ERROR
+            self.last_verification = "FAILED"
             LOG.error(
                 "command sent but state verification failed | CH%s expected=%s actual=%s raw=%s",
                 channel, requested.value, actual.value, _hex_report(self.last_raw_status or []),
@@ -247,6 +292,7 @@ class RelayController:
             raise RelayError(
                 f"CH{channel} command sent but state verification failed：expected {requested.value}, actual {actual.value}"
             )
+        self.last_verification = "SUCCESS"
         LOG.debug("verification: SUCCESS | CH%s=%s", channel, requested.value)
 
     def relay_on(self, channel: int) -> None:
@@ -254,6 +300,33 @@ class RelayController:
 
     def relay_off(self, channel: int) -> None:
         self.set_channel(channel, False)
+
+
+def run_hardware_diagnostic(
+    controller: RelayController,
+    *,
+    sleep: Any = time.sleep,
+    output: Any = print,
+) -> None:
+    """Exercise CH1/CH2 for a human-observed mechanical-click check."""
+    sequence = ((1, True, 2), (1, False, 1), (2, True, 2), (2, False, 0))
+    for channel, state, delay_after in sequence:
+        command = controller.COMMAND_ON if state else controller.COMMAND_OFF
+        report = [0x00, command, channel, 0, 0, 0, 0, 0, 0]
+        output(f"CH{channel} {'ON' if state else 'OFF'}")
+        output(f"command bytes: {_hex_report(report)}")
+        output("transport type = FEATURE_REPORT")
+        try:
+            controller.set_channel(channel, state)
+        finally:
+            output(f"send_feature_report return value: {controller.last_send_result}")
+            raw = controller.last_raw_status
+            output(f"raw readback bytes (len={len(raw) if raw is not None else 0}): {_hex_report(raw or [])}")
+            bitmask = controller.last_bitmask
+            output(f"parsed bitmask: {'UNKNOWN' if bitmask is None else f'0b{bitmask:08b}'}")
+            output(f"verification result: {controller.last_verification}")
+        if delay_after:
+            sleep(delay_after)
 
 
 class RelayService:

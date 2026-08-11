@@ -9,7 +9,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from gui.relay_controller import RelayController, RelayError, RelayService, RelayState
+from gui.relay_controller import (
+    HidApiTransport, RelayController, RelayDevice, RelayError, RelayService,
+    RelayState, run_hardware_diagnostic,
+)
 from gui.relay_settings import RelayGroup, RelaySettingsStore
 from gui.relay_settings_dialog import RelaySettingsDialog
 
@@ -25,6 +28,7 @@ class FakeTransport:
         self.fail_send = False
         self.fail_read = False
         self.ignore_commands = False
+        self.raw_layout = "payload8"
 
     def enumerate(self, _vid, _pid):
         return self.devices
@@ -38,7 +42,7 @@ class FakeTransport:
     def send(self, _handle, report):
         self.writes.append(list(report))
         if self.fail_send:
-            raise OSError("simulated HID write failure")
+            raise OSError("simulated HID feature-report failure")
         if not self.ignore_commands:
             channel = report[2]
             if report[1] == RelayController.COMMAND_ON:
@@ -47,14 +51,47 @@ class FakeTransport:
                 self.bitmask &= ~(1 << (channel - 1))
         return len(report)
 
+    def error(self, _handle):
+        return "simulated hidapi error"
+
     def get_feature_report(self, _handle, report_id, length):
         self.read_calls += 1
         if self.fail_read:
             raise OSError("simulated feature-report failure")
         # The selector is supplied to GET_FEATURE, but response bytes 0..4
         # contain the DCTTech module serial; state is byte 7.
-        report = [ord("R"), ord("L"), ord("Y"), ord("0"), ord("1"), 0, 0, self.bitmask, 0]
-        return report[:length]
+        payload = [ord("R"), ord("L"), ord("Y"), ord("0"), ord("1"), 0, 0, self.bitmask]
+        if self.raw_layout == "payload8":
+            return payload[:length]
+        if self.raw_layout == "prefixed9":
+            return ([0] + payload)[:length]
+        return (payload + [0])[:length]
+
+
+class ProductionHidHandle:
+    def __init__(self) -> None:
+        self.bitmask = 0
+        self.feature_reports: list[list[int]] = []
+        self.write_called = False
+
+    def send_feature_report(self, report):
+        self.feature_reports.append(list(report))
+        channel = report[2]
+        if report[1] == RelayController.COMMAND_ON:
+            self.bitmask |= 1 << (channel - 1)
+        else:
+            self.bitmask &= ~(1 << (channel - 1))
+        return len(report)
+
+    def get_feature_report(self, _report_id, _length):
+        return [ord("R"), ord("L"), ord("Y"), ord("0"), ord("1"), 0, 0, self.bitmask]
+
+    def write(self, _report):
+        self.write_called = True
+        raise AssertionError("Output Report write() must not be called")
+
+    def error(self):
+        return "mock hidapi error"
 
 
 class RelayTests(unittest.TestCase):
@@ -88,6 +125,52 @@ class RelayTests(unittest.TestCase):
             [0x00, 0xFD, 3, 0, 0, 0, 0, 0, 0], self.transport.writes[-1]
         )
         self.assertIs(self.controller.channel_states[3], RelayState.OFF)
+
+    def test_production_hid_transport_uses_feature_report_not_write(self) -> None:
+        handle = ProductionHidHandle()
+        transport = HidApiTransport.__new__(HidApiTransport)
+        controller = RelayController(transport)
+        controller.handle = handle
+        controller.connected_device = RelayDevice(b"production", "USBRelay8", "A1")
+
+        controller.set_channel(1, True)
+
+        self.assertEqual(
+            [[0x00, 0xFF, 1, 0, 0, 0, 0, 0, 0]], handle.feature_reports
+        )
+        self.assertFalse(handle.write_called)
+        self.assertIs(controller.channel_states[1], RelayState.ON)
+
+    def test_state_read_supports_8_byte_payload_and_both_9_byte_layouts(self) -> None:
+        self.transport.bitmask = 0b10100101
+        for layout in ("payload8", "prefixed9", "unprefixed9"):
+            with self.subTest(layout=layout):
+                self.transport.raw_layout = layout
+                self.assertEqual(0b10100101, self.controller.refresh_hardware_state())
+
+    def test_feature_report_positive_short_return_is_transmission_success(self) -> None:
+        original_send = self.transport.send
+        self.transport.send = lambda handle, report: (original_send(handle, report) and 1)
+        self.service.channel_on(1)
+        self.assertIs(self.controller.channel_states[1], RelayState.ON)
+
+    def test_feature_report_minus_one_includes_hidapi_error(self) -> None:
+        self.transport.send = lambda _handle, _report: -1
+        with self.assertRaisesRegex(RelayError, "simulated hidapi error"):
+            self.service.channel_on(1)
+        self.assertIsNot(self.controller.channel_states[1], RelayState.ON)
+
+    def test_hardware_diagnostic_sequence_and_timing(self) -> None:
+        sleeps: list[int] = []
+        output: list[str] = []
+        run_hardware_diagnostic(self.controller, sleep=sleeps.append, output=output.append)
+        self.assertEqual([2, 1, 2], sleeps)
+        self.assertEqual(
+            [(0xFF, 1), (0xFD, 1), (0xFF, 2), (0xFD, 2)],
+            [(report[1], report[2]) for report in self.transport.writes],
+        )
+        self.assertEqual(4, sum("transport type = FEATURE_REPORT" in line for line in output))
+        self.assertEqual(4, sum("verification result: SUCCESS" in line for line in output))
 
     def test_on_command_failure_never_displays_on(self) -> None:
         self.transport.fail_send = True
