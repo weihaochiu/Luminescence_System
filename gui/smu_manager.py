@@ -188,13 +188,7 @@ class SMUManager(QObject):
                     self.status_changed.emit("找不到可回應的 VISA 儀器")
             elif operation == "connect":
                 resource_manager, resource, device, driver = result
-                self._resource_manager = resource_manager
-                self._driver = driver
-                self.connected_device = device
-                self.control.bind_driver(
-                    self._driver if device.supported else None,
-                    output_confirmed_off=device.supported,
-                )
+                self._adopt_connection(resource_manager, resource, device, driver)
                 self.connected.emit(device)
                 suffix = "｜手動控制可用｜OUTPUT：OFF" if device.supported else ""
                 self.status_changed.emit(f"SMU 已連線：{device.display_name}{suffix}")
@@ -204,6 +198,44 @@ class SMUManager(QObject):
             if operation == "connect":
                 self.connection_failed.emit(message)
             self.error_occurred.emit(message)
+
+    def _adopt_connection(
+        self,
+        resource_manager: Any,
+        resource: Any,
+        device: SMUDevice,
+        driver: SMUDriver,
+    ) -> None:
+        """Publish a session atomically, or close and clear every partial field."""
+
+        self._resource_manager = resource_manager
+        self._driver = driver
+        self.connected_device = device
+        try:
+            self.control.bind_driver(
+                driver if device.supported else None,
+                output_confirmed_off=device.supported,
+            )
+        except Exception:
+            try:
+                driver.close(safe_stop=False)
+            except Exception:
+                try:
+                    resource.close()
+                except Exception:
+                    pass
+            try:
+                resource_manager.close()
+            except Exception:
+                pass
+            self._resource_manager = None
+            self._driver = None
+            self.connected_device = None
+            try:
+                self.control.bind_driver(None, force=True)
+            except Exception:
+                pass
+            raise
 
     @staticmethod
     def _open_resource_manager() -> tuple[Any, str]:

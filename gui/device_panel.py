@@ -49,6 +49,7 @@ class DevicePanel(QWidget):
 
         self.smu_state = QLabel("● 未連線")
         self.smu_state.setObjectName("smuState")
+        self.smu_state.setWordWrap(True)
         self.smu_state.setStyleSheet("color: #687078; font-weight: 600;")
 
         self.smu_scan_button = QPushButton("重新掃描")
@@ -175,7 +176,10 @@ class DevicePanel(QWidget):
             SMUInstrumentState.DISCONNECTED: "#687078",
             SMUInstrumentState.CONNECTING: "#c48a00",
             SMUInstrumentState.READY_MANUAL: "#16823b",
+            SMUInstrumentState.MANUAL_OUTPUT_ON: "#9a5c00",
+            SMUInstrumentState.TRANSITIONING: "#8a5a00",
             SMUInstrumentState.AUTO_RUNNING: "#8a5a00",
+            SMUInstrumentState.UNEXPECTED_OUTPUT_ON: "#c62828",
             SMUInstrumentState.ERROR: "#c62828",
             SMUInstrumentState.EMERGENCY_STOP: "#9b111e",
         }

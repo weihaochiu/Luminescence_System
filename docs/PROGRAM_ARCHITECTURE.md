@@ -1,7 +1,7 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.5
-對應程式版本：V1.5.0
+文件版本：1.5.1
+對應程式版本：V1.5.1
 最後更新：2026-08-12（UTC+8）
 
 ## 1. 文件目的
@@ -135,24 +135,27 @@ shared VISA resource / physical SMU
 
 Manual 與 Recipe 在 `SMUControlManager` 互鎖。所有高階 output transition 經此層；Manual panel 不保存另一份 output/ownership state，也不建立 VISA connection。Manual Output 的 busy check、MANUAL acquire 與 enqueue 在同一個 state lock 內完成，busy rejection 不得 release 既有 ownership。`operation_state_changed` 將 READY、BUSY、OUTPUT_ON、RECIPE_LOCKED、EMERGENCY／SHUTTING_DOWN 與 FAULT 同步到 UI，控制層仍是唯一 authoritative state。
 
-`InstrumentStateManager` 不取代底層 interlock，而是唯一負責 GUI policy：它把非同步連線生命週期與 control 的 ownership／operation／output 合併成 DISCONNECTED、CONNECTING、READY_MANUAL、AUTO_RUNNING、ERROR、EMERGENCY_STOP。`SMUControlManager.bind_driver()` 每次綁定或解除都發布完整 IDLE／READY／OUTPUT OFF snapshot，避免 UI 保留上一個 session 的 BUSY、RECIPE 或 FAULT。Camera state 不輸入此 manager，因此 Live View、曝光或拍攝不會鎖定 SMU Manual。
+`InstrumentStateManager` 不取代底層 interlock，而是唯一負責 GUI policy：它把非同步連線生命週期與 control 的 ownership／operation／output／`output_confirmed_off` 合併成不可變 `SMUUIState`。`READY_MANUAL` 僅允許 `IDLE + READY + output_enabled=False + output_confirmed_off=True`；Manual 正常輸出使用 `MANUAL_OUTPUT_ON`，`IDLE + READY + OUTPUT ON` 等矛盾組合進入 `UNEXPECTED_OUTPUT_ON`，只開放安全 OFF／Emergency。`SMUControlManager.bind_driver()` 每次綁定或解除都發布完整 snapshot，避免 UI 保留上一個 session 的 BUSY、RECIPE 或 FAULT。Camera state 不輸入此 manager，因此 Live View、曝光或拍攝不會鎖定 SMU Manual。
 
-啟動自動連線只選擇上次成功 serial、上次成功 VISA resource，或掃描結果中唯一受支援的 SMU；多台且無法判定時 fail closed，交由使用者手動選擇。受支援 driver 必須先完成 source voltage/current 歸零、`OUTPUT OFF` 與 output query 明確回傳 OFF，才可發布 connected／READY_MANUAL；任何失敗均關閉 session 並進入 connection ERROR。
+啟動自動連線只選擇上次成功 serial、上次成功 VISA resource，或掃描結果中唯一受支援的 SMU；多台且無法判定時 fail closed，交由使用者手動選擇。受支援 driver 必須依序送出 `OUTPUT OFF`、以 `:OUTP?` 明確確認 False，再將 source voltage/current 歸零，才可發布 connected／READY_MANUAL；任何 driver bind／初始化失敗均關閉 resource 與 resource manager、清空所有 session 欄位並進入 connection ERROR。
 
-`PolarityService` 預設為 `UNKNOWN`（factor `None`）；只有明確確認 `+1` 或 `-1` 後才能執行 Manual／Recipe Device-coordinate output。`set_confirmed_factor()` 為 idempotent assignment 而非 toggle；polarity determination 尚未實作，其未來流程必須只產生 factor，不可預先套用未確認 factor。Manual panel 的 range 由同一份 `SMUSafetyLimits` 注入，不在 UI 維護第二份上限。
+`PolarityService` 預設為 `UNKNOWN`（factor `None`）。Manual setpoint 是 SMU 實體座標，直接送至儀器且不依賴 Polarity；Recipe setpoint 才是 Device 座標，必須明確確認 `+1` 或 `-1` 後轉換成 physical SMU command。`set_confirmed_factor()` 為 idempotent assignment 而非 toggle；polarity determination 尚未實作，其未來流程必須只產生 factor，不可預先套用未確認 factor。Manual panel 的 range 由同一份 `SMUSafetyLimits` 注入，不在 UI 維護第二份上限。
 
 Emergency request 先設定 threading Event latch，再排入相同 single-worker queue 做 `safe_shutdown()`。Normal operation 會在 configure 前及真正送出 `OUTPUT ON` 前檢查 latch；最後一段 check／OUTPUT ON 與 Emergency latch transition 有明確同步邊界，因此 Emergency 之後尚未送出的 normal output 不會開啟。已在執行中的 blocking PyVISA call 不宣稱可被 preempt。Emergency shutdown 完整成功且 OUTPUT OFF 後才回到 IDLE 並清除 latch；failure 則保留 latch/錯誤並進入 FAULT。
 
-一般 disconnect 只有在 hardware query 明確回傳 OFF、ownership 為 IDLE 且 control 無 pending I/O 時才允許；True 或 `None` 均 fail-closed。`safe_shutdown()` 以 `output_confirmed_off`／`last_shutdown_ok` 區分完整成功與失敗，任何 `safe_stop()` failure 都不得把內部狀態宣告成已確認安全。
+Manual → Recipe 交接必須先完成 verified shutdown，釋放至 IDLE 後才允許 Recipe acquire。Recipe → Manual 交接先設 cancel latch 封鎖新 Recipe output、通知 worker cancel、關閉白光，再等待目前 I/O safe point 執行 verified shutdown；只有 `OUTPUT OFF` 明確確認後才回到可手動狀態。安全交接支援已完成，但完整 Recipe 硬體執行仍維持停用。
+
+一般 disconnect 只有在 hardware query 明確回傳 OFF、ownership 為 IDLE 且 control 無 pending I/O 時才允許；True 或 `None` 均 fail-closed。`safe_shutdown()` 的固定順序為 `:OUTP OFF` → `:OUTP? == False` → source 歸零，並以 `output_confirmed_off`／`last_shutdown_ok` 區分完整成功與失敗；query 為 ON、UNKNOWN、exception 或任何 `safe_stop()` failure 都不得宣告安全，必須進入 FAULT。
 
 Readback 由 `SMUMonitor` 的 Qt timer 觸發，但實際 query 在控制層的單一 worker 執行；I/O lock 同時涵蓋 Manual、Recipe、readback 與 shutdown。Recipe ownership 或 busy 時不排入 readback，避免 critical command 中插入 query。
 
-V1.5.0 保留已支援 Keysight B2900 driver 的手動 CV／CC，補上統一 GUI state 與安全自動連線；完整 Recipe 硬體執行仍停用。未完成 Jsc／Voc determination、Dark I–V、Dark Frames、EL 點位與相機同步前，不得啟用主畫面「開始量測」。
+V1.5.1 修正 Manual 實體座標、矛盾 readback 復歸、verified shutdown、雙向安全交接與單一 UI snapshot；完整 Recipe 硬體執行仍停用。未完成 Jsc／Voc determination、Dark I–V、Dark Frames、EL 點位與相機同步前，不得啟用主畫面「開始量測」。
 
 ## 6.1 Responsive GUI 邊界
 
 - `MeasurementControlBar` 只建立一批 widget；layout mode 變更時只重新配置 grid row／column，不複製 signal 或資料狀態。
 - breakpoint 集中在 `responsive_layout.py`，輸入為 Qt logical window/content width、screen available geometry、font metrics；`devicePixelRatioF()` 保留為目前 DPI context，不以 physical resolution 硬編碼條件。
+- runtime FontChange／ApplicationFontChange／StyleChange／screenChanged 會呼叫 `MeasurementControlBar.refresh_metrics()` 並重新選擇 layout mode。
 - WIDE 以單列為主，STANDARD 分離 context/path/actions，COMPACT 採逐列 context 加固定可見 actions。Browse、Start、Stop、Emergency Stop 在所有模式均存在且不進入 scroll area。
 - Device Sidebar 與 Live View 使用 `QSplitter`；sidebar 只有 minimum/default width，沒有 fixed width。Sidebar 本身沿用 `QScrollArea` 以支援低高度視窗。
 - Save Path 的實際 `QLineEdit.text()` 永遠保存完整字串；顯示空間不足時由 QLineEdit 水平捲動，tooltip 同步完整路徑。

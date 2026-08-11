@@ -1,4 +1,15 @@
-# EL 量測設備控制程式 V1.5.0
+# EL 量測設備控制程式 V1.5.1
+
+## V1.5.1 SMU Manual Control／State Consistency／Safety Handover Hotfix
+
+- 所有 SMU 畫面狀態統一由不可變的 `SMUUIState` snapshot 驅動；`READY_MANUAL` 僅在 ownership=`IDLE`、operation=`READY` 且 `OUTPUT OFF` 已由儀器明確確認時成立。
+- 新增 `MANUAL_OUTPUT_ON` 與 `UNEXPECTED_OUTPUT_ON` 復歸狀態。偵測到未預期輸出時會封鎖編輯與 Output ON，但保留 Output OFF 與 Emergency OFF。
+- Manual 模式直接使用 SMU 實體座標，不再依賴 Device Polarity；Recipe 仍使用 Device 座標乘上已確認的 Polarity。
+- 安全關閉改為 `:OUTP OFF` → `:OUTP? == False` → source 歸零；查詢未知、仍為 ON 或通訊失敗均進入 FAULT。
+- 新增 Manual ↔ Recipe 安全交接，以及 Emergency latch／VISA 佇列行為的明確狀態與訊息。
+- Responsive control bar 會在 runtime font、style、screen／DPI 變更時重新計算 metrics；修正 Recipe 重複文字。
+
+完整 Recipe 硬體量測仍維持停用，待 Jsc／Voc determination、Dark I–V、Dark Frames、EL 點位與相機同步完成後才可啟用。
 
 ## V1.5.0 SMU state／安全自動連線／Responsive GUI
 

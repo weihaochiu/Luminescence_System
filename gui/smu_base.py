@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Shared SCPI primitives and driver contract for supported SMUs."""
+
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -30,7 +32,7 @@ class SMUDevice:
 
 
 class SMUDriver:
-    """Small SCPI hardware abstraction shared by manual and Recipe control."""
+    """Small synchronous driver API. Serialization is owned by SMUControlManager."""
 
     driver_name = "Generic SCPI"
 
@@ -38,23 +40,11 @@ class SMUDriver:
         self.resource = resource
         self.device = device
 
-    def query_output_enabled(self) -> bool | None:
-        """Read output state without changing the instrument configuration."""
-        try:
-            response = str(self.resource.query(":OUTP?")).strip().upper()
-        except Exception:
-            return None
-        if response in {"1", "ON"}:
-            return True
-        if response in {"0", "OFF"}:
-            return False
-        return None
-
     def configure_voltage_source(self, volts: float, current_compliance_a: float) -> None:
-        raise NotImplementedError("This SMU driver does not support voltage-source control")
+        raise NotImplementedError
 
     def configure_current_source(self, amps: float, voltage_compliance_v: float) -> None:
-        raise NotImplementedError("This SMU driver does not support current-source control")
+        raise NotImplementedError
 
     def set_voltage(self, volts: float) -> None:
         raise NotImplementedError("This SMU driver does not support voltage-source control")
@@ -71,6 +61,17 @@ class SMUDriver:
     def measure_current(self) -> float:
         return float(str(self.resource.query(":MEAS:CURR?")).strip())
 
+    def query_output_enabled(self) -> bool | None:
+        try:
+            response = str(self.resource.query(":OUTP?")).strip().upper()
+        except Exception:
+            return None
+        if response in {"1", "ON"}:
+            return True
+        if response in {"0", "OFF"}:
+            return False
+        return None
+
     def query_compliance_tripped(self, mode: str) -> bool | None:
         command = ":SENS:CURR:PROT:TRIP?" if mode == "CV" else ":SENS:VOLT:PROT:TRIP?"
         try:
@@ -84,12 +85,23 @@ class SMUDriver:
         return None
 
     def safe_stop(self) -> list[str]:
-        """Best-effort neutralization of an instrument output."""
+        """Best effort, OFF-first neutralization with explicit OFF confirmation."""
+
         failures: list[str] = []
-        for command in (":SOUR:VOLT 0", ":SOUR:CURR 0", ":OUTP OFF"):
+        try:
+            self.resource.write(":OUTP OFF")
+        except Exception as exc:  # noqa: BLE001 - collect every cleanup failure
+            failures.append(f":OUTP OFF: {exc}")
+
+        observed = self.query_output_enabled()
+        if observed is not False:
+            state = "UNKNOWN" if observed is None else "ON"
+            failures.append(f":OUTP? did not confirm OFF (observed {state})")
+
+        for command in (":SOUR:VOLT 0", ":SOUR:CURR 0"):
             try:
                 self.resource.write(command)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - collect every cleanup failure
                 failures.append(f"{command}: {exc}")
         return failures
 
@@ -97,4 +109,3 @@ class SMUDriver:
         if safe_stop:
             self.safe_stop()
         self.resource.close()
-

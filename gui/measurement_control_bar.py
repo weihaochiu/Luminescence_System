@@ -34,7 +34,7 @@ class MeasurementControlBar(QFrame):
         self.measurement_path_button = QPushButton("瀏覽…")
 
         self.recipe_label = QLabel("Recipe")
-        self.selected_recipe_label = QLabel("Recipe：尚未選擇")
+        self.selected_recipe_label = QLabel("尚未選擇")
         self.selected_recipe_label.setWordWrap(True)
         self.hdr_session_button = QPushButton("HDR：未設定")
 
@@ -48,7 +48,7 @@ class MeasurementControlBar(QFrame):
         self.emergency_stop_button = QPushButton("Emergency Stop")
         self.emergency_stop_button.setObjectName("emergencyStop")
         self.emergency_stop_button.setToolTip(
-            "Immediately zero the SMU source and disable output."
+            "Immediately blocks new output; OUTPUT OFF runs after active VISA I/O, then source is zeroed."
         )
 
         self._widgets = (
@@ -93,10 +93,15 @@ class MeasurementControlBar(QFrame):
         ):
             button.setSizePolicy(minimum, fixed)
 
+        self.refresh_metrics()
+
+    def refresh_metrics(self) -> None:
+        """Recalculate runtime font/style-dependent minimum widths."""
+
         metrics = self.fontMetrics()
         self.sample_id_edit.setMinimumWidth(metrics.horizontalAdvance("M" * 12))
         self.measurement_path_edit.setMinimumWidth(metrics.horizontalAdvance("M" * 16))
-        self.selected_recipe_label.setMinimumWidth(metrics.horizontalAdvance("Recipe MMMMMM"))
+        self.selected_recipe_label.setMinimumWidth(metrics.horizontalAdvance("MMMMMM"))
         for button in (
             self.measurement_path_button,
             self.hdr_session_button,
@@ -147,6 +152,7 @@ class MeasurementControlBar(QFrame):
             self.path_label,
             self.measurement_path_edit,
             self.measurement_path_button,
+            self.recipe_label,
             self.selected_recipe_label,
             self.hdr_session_button,
             self.white_light_status,
@@ -157,9 +163,9 @@ class MeasurementControlBar(QFrame):
         )
         for column, widget in enumerate(widgets):
             self.grid.addWidget(widget, 0, column)
-        self.recipe_label.setVisible(False)
+        self.recipe_label.setVisible(True)
         self.grid.setColumnStretch(3, 2)
-        self.grid.setColumnStretch(5, 1)
+        self.grid.setColumnStretch(6, 1)
 
     def _layout_standard(self) -> None:
         self.recipe_label.setVisible(True)

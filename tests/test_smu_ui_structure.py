@@ -28,15 +28,16 @@ class SMUUIStructureTests(unittest.TestCase):
     def test_manual_panel_is_presentational_and_has_required_controls(self) -> None:
         source = (self.gui / "smu_manual_panel.py").read_text(encoding="utf-8")
         for required in (
-            "固定電流 CC",
-            "固定電壓 CV",
+            "定電流 CC",
+            "定電壓 CV",
             "Compliance",
             "Output ON",
             "Output OFF",
-            "緊急關閉輸出",
-            "實測 Voltage",
-            "實測 Current",
+            "Emergency OFF",
+            "Measured Voltage",
+            "Measured Current",
             "Power",
+            "手動輸入使用 SMU 實體座標",
         ):
             self.assertIn(required, source)
         lowered = source.lower()
@@ -126,12 +127,28 @@ class SMUUIStructureTests(unittest.TestCase):
         )
         self.assertFalse(panel.output_button.isEnabled())
 
+        panel.apply_ui_state(
+            replace(
+                ready,
+                state=SMUInstrumentState.UNEXPECTED_OUTPUT_ON,
+                output_enabled=True,
+                output_confirmed_off=False,
+                manual_editable=False,
+                manual_off_enabled=True,
+            )
+        )
+        self.assertFalse(panel.output_button.isEnabled())
+        self.assertTrue(panel.off_button.isEnabled())
+        self.assertTrue(panel.emergency_button.isEnabled())
+
     def test_polarity_label_updates_without_command_applied(self) -> None:
         if self.app is None:
             self.skipTest("A non-GUI Qt application already exists")
         panel = ManualSMUPanel()
         self.assertEqual("UNKNOWN", panel.factor_value.text())
         panel.update_polarity(-1)
+        self.assertEqual("-1", panel.factor_value.text())
+        panel.update_command("CC", 0.002, 0.002, 2.0, 1)
         self.assertEqual("-1", panel.factor_value.text())
 
     @staticmethod
@@ -144,9 +161,11 @@ class SMUUIStructureTests(unittest.TestCase):
             ownership=SMUOwnership.IDLE,
             operation=SMUOperationState.READY,
             output_enabled=False,
+            output_confirmed_off=True,
             manual_editable=True,
             manual_off_enabled=False,
             emergency_enabled=True,
+            handover_enabled=False,
             status_text="B2901BL｜手動控制可用｜OUTPUT：OFF",
             manual_lock_reason="",
         )

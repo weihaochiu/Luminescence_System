@@ -76,11 +76,12 @@ class FakeSMU(SMUDriver):
     def safe_stop(self) -> list[str]:
         self._enter()
         try:
-            self.voltage = 0.0
-            self.current = 0.0
             if not self.safe_stop_failures:
                 self.output = False
-            self.commands.extend([("VOLT", 0.0), ("CURR", 0.0), ("OUTPUT", False)])
+            self.commands.append(("OUTPUT", False))
+            self.voltage = 0.0
+            self.current = 0.0
+            self.commands.extend([("VOLT", 0.0), ("CURR", 0.0)])
             return list(self.safe_stop_failures)
         finally:
             self._leave()
@@ -107,7 +108,7 @@ class SMUControlTests(unittest.TestCase):
     def setUp(self) -> None:
         self.driver = FakeSMU()
         self.control = SMUControlManager()
-        self.control.bind_driver(self.driver)
+        self.control.bind_driver(self.driver, output_confirmed_off=True)
         self.control.set_confirmed_polarity_factor(1)
 
     def tearDown(self) -> None:
@@ -138,7 +139,7 @@ class SMUControlTests(unittest.TestCase):
         self.assertTrue(self.control.request_manual_off())
         self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE)
 
-    def test_polarity_translation_is_shared_and_idempotent(self) -> None:
+    def test_polarity_translation_is_recipe_only_and_idempotent(self) -> None:
         polarity = PolarityService()
         self.assertIsNone(polarity.factor)
         self.assertFalse(polarity.is_confirmed)
@@ -152,7 +153,15 @@ class SMUControlTests(unittest.TestCase):
         self.assertEqual([-1], observed_factors)
         self.control.request_manual_output("CC", 0.010, 2.0)
         self.wait_until(lambda: self.control.output_enabled)
-        self.assertIn(("CC", -0.010, 2.0), self.driver.commands)
+        self.assertIn(("CC", 0.010, 2.0), self.driver.commands)
+        self.wait_until(lambda: not self.control.is_busy)
+        self.assertTrue(self.control.request_manual_off())
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and not self.control.is_busy
+        )
+        self.control.acquire_recipe()
+        self.assertEqual(-0.010, self.control.recipe_output("CC", 0.010, 2.0))
 
     def test_manual_and_recipe_are_interlocked_below_gui(self) -> None:
         self.control.request_manual_output("CC", 0.001, 2.0)
@@ -173,7 +182,7 @@ class SMUControlTests(unittest.TestCase):
         self.assertEqual(SMUOwnership.RECIPE, self.control.ownership)
         self.assertFalse(self.driver.output)
         self.assertEqual(
-            [("VOLT", 0.0), ("CURR", 0.0), ("OUTPUT", False)],
+            [("OUTPUT", False), ("VOLT", 0.0), ("CURR", 0.0)],
             self.driver.commands[-3:],
         )
 
@@ -251,41 +260,37 @@ class SMUControlTests(unittest.TestCase):
         self.assertNotIn(("OUTPUT", True), self.driver.commands)
         self.assertFalse(self.control.emergency_latched)
 
-    def test_unknown_polarity_rejects_manual_without_driver_commands(self) -> None:
+    def test_unknown_polarity_allows_manual_in_physical_coordinates(self) -> None:
         driver = FakeSMU()
         control = SMUControlManager()
-        control.bind_driver(driver)
+        control.bind_driver(driver, output_confirmed_off=True)
         try:
-            with self.assertRaisesRegex(SMUInterlockError, "尚未確認元件極性"):
-                control.request_manual_output("CC", 0.002, 2.0)
-            self.assertEqual([], driver.commands)
-            self.assertEqual(SMUOwnership.IDLE, control.ownership)
+            self.assertTrue(control.request_manual_output("CC", 0.002, 2.0))
+            self.wait_until(lambda: control.output_enabled and not control.is_busy)
+            self.assertIn(("CC", 0.002, 2.0), driver.commands)
+            self.assertEqual(SMUOwnership.MANUAL, control.ownership)
         finally:
             control.shutdown()
 
     def test_unknown_polarity_rejects_recipe_without_driver_commands(self) -> None:
         driver = FakeSMU()
         control = SMUControlManager()
-        control.bind_driver(driver)
+        control.bind_driver(driver, output_confirmed_off=True)
         try:
             control.acquire_recipe()
-            with self.assertRaisesRegex(SMUInterlockError, "尚未確認元件極性"):
+            with self.assertRaisesRegex(SMUInterlockError, "Device-to-SMU Polarity"):
                 control.recipe_output("CV", 1.0, 0.020)
             self.assertEqual([], driver.commands)
         finally:
             control.shutdown()
 
-    def test_confirmed_polarity_restores_output_for_both_factors(self) -> None:
+    def test_confirmed_polarity_maps_recipe_for_both_factors(self) -> None:
         for factor in (1, -1):
             self.control.set_confirmed_polarity_factor(factor)
-            self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
-            self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+            self.control.acquire_recipe()
+            self.control.recipe_output("CC", 0.002, 2.0)
             self.assertIn(("CC", factor * 0.002, 2.0), self.driver.commands)
-            self.assertTrue(self.control.request_manual_off())
-            self.wait_until(
-                lambda: self.control.ownership is SMUOwnership.IDLE
-                and not self.control.is_busy
-            )
+            self.assertTrue(self.control.safe_shutdown(SMUOwnership.RECIPE))
 
     def test_safe_stop_failure_does_not_claim_confirmed_safe(self) -> None:
         self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
@@ -298,6 +303,45 @@ class SMUControlTests(unittest.TestCase):
         self.assertEqual(SMUOwnership.FAULT, self.control.ownership)
         self.assertEqual(SMUOperationState.FAULT, self.control.operation_state)
         self.driver.safe_stop_failures = []
+
+    def test_unknown_off_confirmation_enters_fault(self) -> None:
+        self.driver.query_returns_unknown = True
+        self.assertFalse(self.control.safe_shutdown(reason="test unknown confirmation"))
+        self.assertFalse(self.control.output_confirmed_off)
+        self.assertFalse(self.control.last_shutdown_ok)
+        self.assertEqual(SMUOwnership.FAULT, self.control.ownership)
+        self.driver.query_returns_unknown = False
+
+    def test_safe_recovery_confirms_off_before_manual_output(self) -> None:
+        driver = FakeSMU()
+        control = SMUControlManager()
+        control.bind_driver(driver, output_confirmed_off=False)
+        try:
+            with self.assertRaisesRegex(SMUInterlockError, "OFF has not been confirmed"):
+                control.request_manual_output("CC", 0.002, 2.0)
+            self.assertTrue(control.request_safe_output_off("unit test recovery"))
+            self.wait_until(
+                lambda: control.output_confirmed_off and not control.is_busy
+            )
+            self.assertTrue(control.request_manual_output("CC", 0.002, 2.0))
+            self.wait_until(lambda: control.output_enabled and not control.is_busy)
+        finally:
+            control.shutdown()
+
+    def test_recipe_to_manual_handover_blocks_recipe_and_confirms_off(self) -> None:
+        self.control.acquire_recipe()
+        self.control.recipe_output("CC", 0.002, 2.0)
+        self.assertTrue(self.control.request_recipe_handover_to_manual())
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and self.control.output_confirmed_off
+            and not self.control.is_busy
+        )
+        self.assertFalse(self.driver.output)
+        self.assertEqual(
+            [("OUTPUT", False), ("VOLT", 0.0), ("CURR", 0.0)],
+            self.driver.commands[-3:],
+        )
 
     def test_safety_rejects_setpoint_power_and_compliance(self) -> None:
         safety = SMUSafetyService()
@@ -334,7 +378,7 @@ class SMUManagerDisconnectTests(unittest.TestCase):
         device = SMUDevice("FAKE", supported=True)
         manager._driver = driver
         manager.connected_device = device
-        manager.control.bind_driver(driver)
+        manager.control.bind_driver(driver, output_confirmed_off=True)
         try:
             self.assertFalse(manager.disconnect(force=False))
             self.assertTrue(manager.is_connected)

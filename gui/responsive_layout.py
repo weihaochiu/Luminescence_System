@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from PySide6.QtCore import QEvent, QObject, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QTimer, Signal
 
 
 class LayoutMode(str, Enum):
@@ -76,10 +76,21 @@ class ResponsiveLayoutManager(QObject):
         self.control_bar = control_bar
         self._mode: LayoutMode | None = None
         self._update_pending = False
+        self._screen_signal_connected = False
         self.last_device_pixel_ratio = 1.0
         window.installEventFilter(self)
         control_bar.installEventFilter(self)
+        application = QCoreApplication.instance()
+        if application is not None:
+            application.installEventFilter(self)
+        self._metric_event_types = {
+            QEvent.Type.FontChange,
+            QEvent.Type.ApplicationFontChange,
+            QEvent.Type.StyleChange,
+            QEvent.Type.ScreenChangeInternal,
+        }
         QTimer.singleShot(0, self.update_now)
+        QTimer.singleShot(0, self._connect_screen_signal)
 
     @property
     def mode(self) -> LayoutMode | None:
@@ -88,7 +99,33 @@ class ResponsiveLayoutManager(QObject):
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
         if watched in (self.window, self.control_bar) and event.type() == QEvent.Type.Resize:
             self.schedule_update()
+        elif watched is self.window and event.type() in (
+            QEvent.Type.Show,
+            QEvent.Type.WinIdChange,
+        ):
+            self._connect_screen_signal()
+            self.schedule_update()
+        elif event.type() in self._metric_event_types:
+            self.control_bar.refresh_metrics()
+            self.schedule_update()
         return super().eventFilter(watched, event)
+
+    def _connect_screen_signal(self) -> None:
+        if self._screen_signal_connected or not hasattr(self.window, "windowHandle"):
+            return
+        handle = self.window.windowHandle()
+        if handle is None:
+            return
+        handle.screenChanged.connect(self._on_screen_changed)
+        self._screen_signal_connected = True
+
+    def _on_screen_changed(self, _screen: object) -> None:
+        self.control_bar.refresh_metrics()
+        self.schedule_update()
+
+    def _available_screen_width(self) -> int | None:
+        screen = self.window.screen()
+        return screen.availableGeometry().width() if screen is not None else None
 
     def schedule_update(self) -> None:
         if self._update_pending:
@@ -98,8 +135,8 @@ class ResponsiveLayoutManager(QObject):
 
     def update_now(self) -> None:
         self._update_pending = False
-        screen = self.window.screen()
-        available_width = screen.availableGeometry().width() if screen is not None else None
+        self.control_bar.refresh_metrics()
+        available_width = self._available_screen_width()
         content_width = self.control_bar.width() if self.control_bar.width() > 0 else None
         self.last_device_pixel_ratio = float(self.window.devicePixelRatioF())
         standard_width, wide_width = self.control_bar.recommended_breakpoints()

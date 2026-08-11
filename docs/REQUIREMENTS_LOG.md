@@ -264,6 +264,42 @@
 - 完成版本：V1.5.0。
 - 取代或關聯需求：不改 SAFE-001。
 
+### SMU-003－Manual state consistency／safe recovery／handover hotfix
+
+- 狀態：已完成（V1.5.1；fake VISA／SMU 驗證，Keysight B2901BL 實機待驗證）。
+- 提出日期：2026-08-12（UTC+8）。
+- 使用者原意：修正已連線但 Manual 反灰、畫面同時顯示 OUT ON／OFF、Polarity UNKNOWN 阻擋手動輸出，以及關閉／交接／Emergency 缺少一致安全確認的問題。
+- 詳細行為：所有 GUI 使用同一不可變 `SMUUIState`；`READY_MANUAL` 必須是 IDLE／READY／OUTPUT OFF confirmed；矛盾 readback 進入 `UNEXPECTED_OUTPUT_ON`；Manual 使用 physical SMU coordinate，Recipe 才套用 confirmed Polarity；OFF-first shutdown 明確查詢；Manual ↔ Recipe 交接 fail closed；Emergency 先 latch 並誠實顯示 VISA 序列化限制。
+- 驗收條件：未預期 ON 時只開放 OFF／Emergency；OFF query 為 ON／UNKNOWN／exception 時保留 fault/latch；Recipe ownership 不得被一般 recovery OFF 偷走；bind 失敗不得留下 zombie connection；device label 可換行。
+- 影響模組：`smu_control.py`、`smu_base.py`、`smu_manager.py`、`instrument_state_manager.py`、Manual／Device／Main Window GUI、SMU tests 與文件。
+- 相容性／資料遷移：不改 Recipe schema、Camera、HDR、Relay 或輸出資料；完整 Recipe hardware execution 仍停用。
+- 安全風險：fake driver 無法驗證實機韌體對 `:OUTP?` 的 timing；B2901BL 實機需驗證 OFF query、VISA timeout 與前面板狀態。
+- 測試與驗證：Manual UNKNOWN polarity、Recipe polarity、unexpected ON、shutdown query failure、雙向 handover、Emergency race、bind cleanup、single-snapshot UI policy。
+- 完成版本：V1.5.1。
+- 取代或關聯需求：補強 SMU-001、SMU-002；SAFE-001 的 Recipe execution 暫緩狀態不變。
+
+### UI-002－Runtime responsive metrics 與 Recipe 顯示修正
+
+- 狀態：已完成（V1.5.1；Qt offscreen 驗證，Windows 多螢幕 DPI 實機待驗證）。
+- 提出日期：2026-08-12（UTC+8）。
+- 使用者原意：測試必須真的 resize 並呼叫 responsive manager，不可直接指定 mode；runtime DPI／screen／font／style 變更須重新計算；Recipe 標題不可重複。
+- 詳細行為：`refresh_metrics()` 更新 runtime minimum widths，event filter 與 `screenChanged` 重新判定；Recipe label 與 value 分離。
+- 驗收條件：1024／1366／1920 resize 後由 `update_now()` 自動得到 COMPACT／STANDARD／WIDE；Emergency 永遠可見；Recipe 只顯示一次。
+- 影響模組：`measurement_control_bar.py`、`responsive_layout.py`、`main_window.py` 與 responsive tests。
+- 相容性／資料遷移：不改 signal handlers 或使用者設定。
+- 安全風險：offscreen screen geometry 與實機 Windows scaling 仍可能不同。
+- 測試與驗證：自動 mode integration test、runtime FontChange metrics test、既有 geometry／widget identity tests。
+- 完成版本：V1.5.1。
+- 取代或關聯需求：補強 UI-001。
+
+### REPO-001－Python cache 與本機備份排除
+
+- 狀態：已完成（V1.5.1）。
+- 提出日期：2026-08-12（UTC+8）。
+- 詳細行為：從 Git index 移除既有 `__pycache__`／`.pyc`，並忽略 Python cache、pytest cache、virtual environments 與 `backup/*.zip`。
+- 驗收條件：遠端不得追蹤 cache 或 backup ZIP；source 不刪除；push 前 backup 仍依專案規則建立於本機。
+- 完成版本：V1.5.1。
+
 ### SAFE-001－SMU 輸出保持停用
 
 - 狀態：部分取代；手動輸出由 SMU-001 開放，Recipe 實際量測仍暫緩。
@@ -300,6 +336,14 @@
 ```
 
 ## 9. 版本變更摘要
+
+### V1.5.1－2026-08-12
+
+- 將 SMU GUI 收斂至含 `output_confirmed_off` 的 immutable snapshot，新增 Manual ON、未預期 ON 與安全復歸狀態。
+- Manual 改用 physical SMU coordinate；Recipe 保留 Device coordinate × confirmed Polarity。
+- 安全關閉改為 OUTPUT OFF／明確 query／source zero，新增雙向交接、Emergency latch 說明與 bind failure 全面清理。
+- Responsive 測試改為真實 resize + manager update，新增 runtime metrics 重新計算並修正 Recipe 重複文字。
+- 清理 Git index 中 Python cache 並擴充 `.gitignore`；完整 Recipe 硬體執行仍停用。
 
 ### V1.5.0－2026-08-12
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from gui.smu_base import SMUDevice
+from gui.smu_base import SMUDevice, SMUDriver
 from gui.smu_manager import SMUManager, select_auto_connect_device
 
 
@@ -84,7 +84,7 @@ class SMUAutoConnectTests(unittest.TestCase):
         self.assertIs(resource, returned_resource)
         self.assertTrue(verified.supported)
         self.assertEqual(
-            [":SOUR:VOLT 0", ":SOUR:CURR 0", ":OUTP OFF"],
+            [":OUTP OFF", ":SOUR:VOLT 0", ":SOUR:CURR 0"],
             resource.commands,
         )
         self.assertNotIn(":OUTP ON", resource.commands)
@@ -96,11 +96,39 @@ class SMUAutoConnectTests(unittest.TestCase):
         manager = FakeResourceManager(resource)
         device = supported("USB0::1::INSTR", "SERIAL-1")
         with patch.object(SMUManager, "_open_resource_manager", return_value=(manager, "test")):
-            with self.assertRaisesRegex(RuntimeError, "OUTPUT"):
+            with self.assertRaisesRegex(RuntimeError, "OUTP"):
                 SMUManager._connect_worker(device)
         self.assertTrue(resource.closed)
         self.assertTrue(manager.closed)
         self.assertNotIn(":OUTP ON", resource.commands)
+
+    def test_bind_failure_closes_and_clears_partial_connection(self) -> None:
+        resource = FakeResource()
+        resource_manager = FakeResourceManager(resource)
+        device = supported("USB0::1::INSTR", "SERIAL-1")
+        driver = SMUDriver(resource, device)
+        manager = SMUManager()
+        try:
+            with patch.object(
+                manager.control,
+                "bind_driver",
+                side_effect=RuntimeError("bind failed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "bind failed"):
+                    manager._adopt_connection(
+                        resource_manager,
+                        resource,
+                        device,
+                        driver,
+                    )
+            self.assertTrue(resource.closed)
+            self.assertTrue(resource_manager.closed)
+            self.assertIsNone(manager._driver)
+            self.assertIsNone(manager._resource_manager)
+            self.assertIsNone(manager.connected_device)
+            self.assertFalse(manager.is_connected)
+        finally:
+            manager.shutdown()
 
 
 if __name__ == "__main__":

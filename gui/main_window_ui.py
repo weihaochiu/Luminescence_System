@@ -391,7 +391,6 @@ class MainWindowUIMixin:
         self.smu_manager.connected.connect(self.on_smu_connected)
         self.smu_manager.connection_failed.connect(self.on_smu_connection_failed)
         self.smu_manager.disconnected.connect(self.on_smu_disconnected)
-        self.smu_manager.status_changed.connect(self.status_message.setText)
         self.smu_manager.error_occurred.connect(self.show_smu_error)
         self.smu_manager.control.error_occurred.connect(self.show_smu_error)
         self.instrument_state_manager.state_changed.connect(self.update_smu_ui_state)
@@ -403,6 +402,9 @@ class MainWindowUIMixin:
         self.manual_smu_panel.output_requested.connect(self.request_manual_smu_output)
         self.manual_smu_panel.output_off_requested.connect(self.request_manual_smu_off)
         self.manual_smu_panel.emergency_off_requested.connect(self.request_smu_emergency_off)
+        self.manual_smu_panel.handover_requested.connect(
+            self.request_recipe_to_manual_handover
+        )
         self.instrument_state_manager.refresh()
 
         self.controller.frame_ready.connect(self.on_frame_ready)

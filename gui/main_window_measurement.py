@@ -63,7 +63,9 @@ def emergency_stop_measurement(self: Any) -> None:
         self._measurement_worker.request_cancel()
     self.relay_service.safe_white_light_off("measurement_abort")
     self.smu_manager.control.request_emergency_off()
-    self.status_message.setText("Emergency stop queued; SMU output shutdown has priority")
+    self.status_message.setText(
+        "Emergency 已鎖定；新輸出已封鎖，OUTPUT OFF 將在目前 VISA I/O 完成後執行。"
+    )
 
 
 def _on_measurement_progress(self: Any, progress: MeasurementProgress) -> None:

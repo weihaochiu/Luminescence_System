@@ -162,14 +162,14 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         if not hasattr(self, "start_measurement_button"):
             return
         if self.selected_recipe is None:
-            self.selected_recipe_label.setText("Recipe：尚未選擇")
+            self.selected_recipe_label.setText("尚未選擇")
             self.hdr_session_button.setText("HDR：未設定")
             self.hdr_session_button.setEnabled(False)
             reason = "請先從左側選擇已啟用且通過驗證的 Recipe。"
         else:
             mode = "電流" if self.selected_recipe.el_sweep.drive_mode == "current" else "電壓"
             self.selected_recipe_label.setText(
-                f"Recipe：{self.selected_recipe.name} v{self.selected_recipe.version}\n"
+                f"{self.selected_recipe.name} v{self.selected_recipe.version}\n"
                 f"{mode}模式｜{len(self.selected_recipe.enabled_points())} EL 點｜"
                 f"{len(self.selected_recipe.dark_profiles())} Dark Profiles"
             )

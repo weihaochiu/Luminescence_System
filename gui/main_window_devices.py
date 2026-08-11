@@ -78,32 +78,6 @@ class MainWindowDeviceMixin:
     def disconnect_smu(self) -> None:
         self.smu_manager.disconnect(force=False)
 
-    def on_smu_connected(self, device: SMUDevice) -> None:
-        self.device_panel.set_smu_connected(device)
-        self.smu_status.setText(f"SMU {device.model or device.display_name}")
-        if device.supported:
-            self.settings.setValue("devices/last_smu_address", device.visa_address)
-            self.settings.setValue("devices/last_smu_serial", device.serial_number)
-        self._remember_smu_selection(device.visa_address)
-        self.instrument_state_manager.set_connected(device.display_name, device.supported)
-        if device.supported:
-            self.smu_monitor.start()
-
-    def on_smu_disconnected(self) -> None:
-        self.smu_monitor.stop()
-        self.instrument_state_manager.set_disconnected()
-        self.device_panel.set_smu_disconnected()
-        self.smu_status.setText("SMU —")
-
-    def update_smu_ui_state(self, state: SMUUIState) -> None:
-        self.manual_smu_panel.apply_ui_state(state)
-        self.device_panel.apply_smu_ui_state(state)
-        if state.connected:
-            self.smu_status.setText(
-                f"SMU {state.device_label}｜{state.state.value}｜"
-                f"OUT {'ON' if state.output_enabled else 'OFF'}"
-            )
-
     def request_manual_smu_output(
         self, mode: str, requested: float, compliance: float
     ) -> None:
@@ -117,15 +91,65 @@ class MainWindowDeviceMixin:
         except (ValueError, SMUInterlockError) as exc:
             self.show_smu_error(str(exc))
 
+    def on_smu_connected(self, device: SMUDevice) -> None:
+        self.device_panel.set_smu_connected(device)
+        if device.supported:
+            self.settings.setValue("devices/last_smu_address", device.visa_address)
+            self.settings.setValue("devices/last_smu_serial", device.serial_number)
+        self._remember_smu_selection(device.visa_address)
+        self.instrument_state_manager.set_connected(device.display_name, device.supported)
+        if device.supported:
+            self.smu_monitor.start()
+
+    def on_smu_disconnected(self) -> None:
+        self.smu_monitor.stop()
+        self.device_panel.set_smu_disconnected()
+        self.instrument_state_manager.set_disconnected()
+
+    def update_smu_ui_state(self, state: SMUUIState) -> None:
+        self.manual_smu_panel.apply_ui_state(state)
+        self.device_panel.apply_smu_ui_state(state)
+        unified_status = state.status_text.replace("\n", "｜")
+        self.smu_status.setText(unified_status)
+        self.status_message.setText(unified_status)
+
     def request_manual_smu_off(self) -> None:
-        if not self.smu_manager.control.request_manual_off():
-            self.show_smu_error("SMU 正忙碌或目前不是手動控制狀態。")
+        control = self.smu_manager.control
+        if control.ownership is SMUOwnership.MANUAL:
+            accepted = control.request_manual_off()
+        else:
+            accepted = control.request_safe_output_off("manual panel recovery")
+        if not accepted:
+            self.show_smu_error("目前無法執行 SMU OUTPUT OFF 安全復歸。")
             return
-        self.status_message.setText("正在安全回零並關閉手動 SMU 輸出…")
+        self.status_message.setText("正在執行 SMU OUTPUT OFF 並確認實際輸出狀態。")
 
     def request_smu_emergency_off(self) -> None:
-        self.smu_manager.control.request_emergency_off()
-        self.status_message.setText("緊急關閉已送出；請確認 SMU 前面板輸出狀態。")
+        if self.smu_manager.control.request_emergency_off():
+            self.status_message.setText(
+                "Emergency 已鎖定；新輸出已封鎖，OUTPUT OFF 將在目前 VISA I/O 完成後執行。"
+            )
+
+    def request_recipe_to_manual_handover(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "安全交接至手動控制",
+            "將取消目前 Recipe、關閉白光，並在 SMU I/O 安全點確認 OUTPUT OFF。\n\n"
+            "確認完成前手動輸出會維持鎖定。是否繼續？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer is not QMessageBox.StandardButton.Yes:
+            return
+        if self._measurement_worker is not None:
+            self._measurement_worker.request_cancel()
+        self.relay_service.safe_white_light_off("recipe_to_manual_handover")
+        if not self.smu_manager.control.request_recipe_handover_to_manual():
+            self.show_smu_error("無法啟動 Recipe 至手動控制的安全交接。")
+            return
+        self.status_message.setText(
+            "Recipe 已停止接受新輸出；正在等待安全點並確認 SMU OUTPUT OFF。"
+        )
 
     def _remember_smu_selection(self, address: str) -> None:
         if address:
