@@ -1,7 +1,7 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.3
-對應程式版本：V1.4.0
+文件版本：1.4
+對應程式版本：V1.4.1
 最後更新：2026-08-11（UTC+8）
 
 ## 1. 文件目的
@@ -113,8 +113,8 @@ MainWindow / signal wiring
 └─ Recipe worker lifecycle
               │
               ▼
-SMUControlManager  ← ownership/output Single Source of Truth
-├─ PolarityService ← confirmed factor Single Source of Truth
+SMUControlManager  ← ownership/output/operation state Single Source of Truth
+├─ PolarityService ← UNKNOWN / confirmed factor Single Source of Truth
 ├─ SMUSafetyService
 ├─ SMUMonitor (500 ms request; skips RECIPE/busy)
 └─ serialized I/O lock + one-worker queue
@@ -129,11 +129,17 @@ KeysightB2900Driver ← instrument-specific SCPI
 shared VISA resource / physical SMU
 ```
 
-Manual 與 Recipe 在 `SMUControlManager` 互鎖。所有高階 output transition 經此層；Manual panel 不保存另一份 output/ownership state，也不建立 VISA connection。`PolarityService` 使用明確確認後的 factor，`set_confirmed_factor()` 為 assignment 而非 toggle；polarity determination 尚未實作，其未來流程必須只產生 factor，不可預先套用未確認 factor。
+Manual 與 Recipe 在 `SMUControlManager` 互鎖。所有高階 output transition 經此層；Manual panel 不保存另一份 output/ownership state，也不建立 VISA connection。Manual Output 的 busy check、MANUAL acquire 與 enqueue 在同一個 state lock 內完成，busy rejection 不得 release 既有 ownership。`operation_state_changed` 將 READY、BUSY、OUTPUT_ON、RECIPE_LOCKED、EMERGENCY／SHUTTING_DOWN 與 FAULT 同步到 UI，控制層仍是唯一 authoritative state。
+
+`PolarityService` 預設為 `UNKNOWN`（factor `None`）；只有明確確認 `+1` 或 `-1` 後才能執行 Manual／Recipe Device-coordinate output。`set_confirmed_factor()` 為 idempotent assignment 而非 toggle；polarity determination 尚未實作，其未來流程必須只產生 factor，不可預先套用未確認 factor。Manual panel 的 range 由同一份 `SMUSafetyLimits` 注入，不在 UI 維護第二份上限。
+
+Emergency request 先設定 threading Event latch，再排入相同 single-worker queue 做 `safe_shutdown()`。Normal operation 會在 configure 前及真正送出 `OUTPUT ON` 前檢查 latch；最後一段 check／OUTPUT ON 與 Emergency latch transition 有明確同步邊界，因此 Emergency 之後尚未送出的 normal output 不會開啟。已在執行中的 blocking PyVISA call 不宣稱可被 preempt。Emergency shutdown 完整成功且 OUTPUT OFF 後才回到 IDLE 並清除 latch；failure 則保留 latch/錯誤並進入 FAULT。
+
+一般 disconnect 只有在 hardware query 明確回傳 OFF、ownership 為 IDLE 且 control 無 pending I/O 時才允許；True 或 `None` 均 fail-closed。`safe_shutdown()` 以 `output_confirmed_off`／`last_shutdown_ok` 區分完整成功與失敗，任何 `safe_stop()` failure 都不得把內部狀態宣告成已確認安全。
 
 Readback 由 `SMUMonitor` 的 Qt timer 觸發，但實際 query 在控制層的單一 worker 執行；I/O lock 同時涵蓋 Manual、Recipe、readback 與 shutdown。Recipe ownership 或 busy 時不排入 readback，避免 critical command 中插入 query。
 
-V1.4.0 開放已支援 Keysight B2900 driver 的手動 CV／CC，但完整 Recipe 硬體執行仍停用。未完成 Jsc／Voc determination、Dark I–V、Dark Frames、EL 點位與相機同步前，不得啟用主畫面「開始量測」。
+V1.4.1 保留已支援 Keysight B2900 driver 的手動 CV／CC，並補強上述 safety consistency；完整 Recipe 硬體執行仍停用。未完成 Jsc／Voc determination、Dark I–V、Dark Frames、EL 點位與相機同步前，不得啟用主畫面「開始量測」。
 
 ## 7. 新功能放置準則
 
@@ -156,4 +162,4 @@ V1.4.0 開放已支援 Keysight B2900 driver 的手動 CV／CC，但完整 Recip
 - `python -m compileall -q gui tests`：所有 Python 檔案語法檢查。
 - `python -m unittest discover -s tests -v`：HDR 數值、Profile、設定快照、Recipe schema、UI 結構與模組邊界。
 - Windows 實機驗證：RisingCam 連線、Live View、曝光／Gain、一般拍攝、VISA 掃描與 B2900 安全連線。
-- 涉及 SMU 輸出的版本必須另建硬體模擬、錯誤注入與緊急停止測試，不能只依賴 GUI 手動測試。
+- 涉及 SMU 輸出的版本必須另建硬體模擬、錯誤注入與緊急停止測試；race test 使用 Event／Barrier 控制 timing，不以 sleep 猜測 configure 與 OUTPUT ON 的時序，也不能只依賴 GUI 手動測試。

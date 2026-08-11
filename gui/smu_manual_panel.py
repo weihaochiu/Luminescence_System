@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .smu_control import SMUReadback
+from .smu_control import SMUOperationState, SMUReadback, SMUSafetyLimits
 
 
 class ManualSMUPanel(QWidget):
@@ -22,11 +22,17 @@ class ManualSMUPanel(QWidget):
     output_off_requested = Signal()
     emergency_off_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        limits: SMUSafetyLimits | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._limits = limits or SMUSafetyLimits()
         self._connected = False
         self._recipe_active = False
         self._output_on = False
+        self._operation_state = SMUOperationState.READY
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("固定電流 CC", "CC")
@@ -53,7 +59,7 @@ class ManualSMUPanel(QWidget):
         buttons.addWidget(self.emergency_button, 1, 0, 1, 2)
 
         self.requested_value = QLabel("Requested：—")
-        self.factor_value = QLabel("Polarity factor：+1")
+        self.factor_value = QLabel("UNKNOWN")
         self.actual_value = QLabel("Actual SMU command：—")
         self.voltage_value = QLabel("— V")
         self.current_value = QLabel("— mA")
@@ -61,6 +67,7 @@ class ManualSMUPanel(QWidget):
         self.output_value = QLabel("OFF")
         self.compliance_value = QLabel("—")
         self.ownership_value = QLabel("IDLE")
+        self.operation_value = QLabel(SMUOperationState.READY.value)
         readback = QFormLayout()
         readback.addRow("Requested", self.requested_value)
         readback.addRow("Polarity", self.factor_value)
@@ -71,6 +78,7 @@ class ManualSMUPanel(QWidget):
         readback.addRow("Output", self.output_value)
         readback.addRow("Compliance", self.compliance_value)
         readback.addRow("Ownership", self.ownership_value)
+        readback.addRow("Operation state", self.operation_value)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 10)
@@ -93,11 +101,15 @@ class ManualSMUPanel(QWidget):
         self._connected = connected
         if not connected:
             self._output_on = False
+            self._operation_state = SMUOperationState.READY
             self.update_ownership("IDLE")
             self.output_value.setText("OFF")
+            self.operation_value.setText(SMUOperationState.READY.value)
         self._update_enabled()
 
     def set_recipe_active(self, active: bool) -> None:
+        # Compatibility input for the existing measurement coordinator. The visible
+        # operation state itself remains authoritative from SMUControlManager.
         self._recipe_active = active
         self._update_enabled()
 
@@ -111,13 +123,27 @@ class ManualSMUPanel(QWidget):
         self.output_value.setText("ON" if enabled else "OFF")
         self._update_enabled()
 
+    def update_operation_state(self, state: str) -> None:
+        try:
+            self._operation_state = SMUOperationState(state)
+        except ValueError:
+            self._operation_state = SMUOperationState.FAULT
+        self.operation_value.setText(self._operation_state.value)
+        self._recipe_active = self._operation_state is SMUOperationState.RECIPE_LOCKED
+        self._update_enabled()
+
+    def update_polarity(self, factor: object) -> None:
+        self.factor_value.setText(
+            "UNKNOWN" if factor is None else f"{int(factor):+d}"
+        )
+
     def update_command(
         self, mode: str, requested: float, physical: float, compliance: float, factor: int
     ) -> None:
         unit = "V" if mode == "CV" else "mA"
         scale = 1.0 if mode == "CV" else 1000.0
         self.requested_value.setText(f"{requested * scale:+.4f} {unit}")
-        self.factor_value.setText(f"{factor:+d}")
+        self.update_polarity(factor)
         self.actual_value.setText(f"{physical * scale:+.4f} {unit}")
 
     def update_readback(self, reading: SMUReadback) -> None:
@@ -132,19 +158,27 @@ class ManualSMUPanel(QWidget):
         )
 
     def _update_mode(self) -> None:
+        limits = self._limits
         if self.mode == "CV":
-            self.setpoint_spin.setRange(-5.0, 5.0)
+            self.setpoint_spin.setRange(limits.minimum_voltage_v, limits.maximum_voltage_v)
+            self.setpoint_spin.setValue(0.0)
             self.setpoint_spin.setSuffix(" V")
             self.setpoint_spin.setSingleStep(0.05)
-            self.compliance_spin.setRange(0.001, 50.0)
-            self.compliance_spin.setValue(min(max(self.compliance_spin.value(), 1.0), 50.0))
+            maximum_current_ma = limits.maximum_current_compliance_a * 1000.0
+            self.compliance_spin.setRange(min(0.001, maximum_current_ma), maximum_current_ma)
+            self.compliance_spin.setValue(min(1.0, maximum_current_ma))
             self.compliance_spin.setSuffix(" mA")
         else:
-            self.setpoint_spin.setRange(-50.0, 50.0)
+            self.setpoint_spin.setRange(
+                limits.minimum_current_a * 1000.0,
+                limits.maximum_current_a * 1000.0,
+            )
+            self.setpoint_spin.setValue(0.0)
             self.setpoint_spin.setSuffix(" mA")
             self.setpoint_spin.setSingleStep(0.1)
-            self.compliance_spin.setRange(0.001, 5.0)
-            self.compliance_spin.setValue(min(max(self.compliance_spin.value(), 1.0), 5.0))
+            maximum_voltage_v = limits.maximum_voltage_compliance_v
+            self.compliance_spin.setRange(min(0.001, maximum_voltage_v), maximum_voltage_v)
+            self.compliance_spin.setValue(min(1.0, maximum_voltage_v))
             self.compliance_spin.setSuffix(" V")
 
     def _emit_output(self) -> None:
@@ -157,10 +191,24 @@ class ManualSMUPanel(QWidget):
         self.output_requested.emit(self.mode, requested, compliance)
 
     def _update_enabled(self) -> None:
-        editable = self._connected and not self._recipe_active and not self._output_on
+        editable = (
+            self._connected
+            and not self._recipe_active
+            and not self._output_on
+            and self._operation_state is SMUOperationState.READY
+        )
         self.mode_combo.setEnabled(editable)
         self.setpoint_spin.setEnabled(editable)
         self.compliance_spin.setEnabled(editable)
         self.output_button.setEnabled(editable)
-        self.off_button.setEnabled(self._connected and not self._recipe_active and self._output_on)
-        self.emergency_button.setEnabled(self._connected and not self._recipe_active)
+        self.off_button.setEnabled(
+            self._connected
+            and not self._recipe_active
+            and self._output_on
+            and self._operation_state is SMUOperationState.OUTPUT_ON
+        )
+        self.emergency_button.setEnabled(
+            self._connected
+            and self._operation_state
+            not in (SMUOperationState.EMERGENCY, SMUOperationState.SHUTTING_DOWN)
+        )

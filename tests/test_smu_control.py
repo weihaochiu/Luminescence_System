@@ -9,9 +9,11 @@ from gui.smu_control import (
     PolarityService,
     SMUControlManager,
     SMUInterlockError,
+    SMUOperationState,
     SMUOwnership,
     SMUSafetyService,
 )
+from gui.smu_manager import SMUManager
 
 
 class FakeSMU(SMUDriver):
@@ -22,6 +24,11 @@ class FakeSMU(SMUDriver):
         self.voltage = 0.0
         self.current = 0.0
         self.fail_configure = False
+        self.safe_stop_failures: list[str] = []
+        self.block_configure = False
+        self.configure_started = threading.Event()
+        self.continue_configure = threading.Event()
+        self.query_returns_unknown = False
         self.concurrent_io = False
         self._active_io = 0
         self._guard = threading.Lock()
@@ -39,6 +46,9 @@ class FakeSMU(SMUDriver):
     def configure_voltage_source(self, volts: float, current_compliance_a: float) -> None:
         self._enter()
         try:
+            self.configure_started.set()
+            if self.block_configure:
+                self.continue_configure.wait(timeout=1.0)
             if self.fail_configure:
                 raise RuntimeError("configure failed")
             self.voltage = volts
@@ -49,6 +59,9 @@ class FakeSMU(SMUDriver):
     def configure_current_source(self, amps: float, voltage_compliance_v: float) -> None:
         self._enter()
         try:
+            self.configure_started.set()
+            if self.block_configure:
+                self.continue_configure.wait(timeout=1.0)
             if self.fail_configure:
                 raise RuntimeError("configure failed")
             self.current = amps
@@ -65,9 +78,10 @@ class FakeSMU(SMUDriver):
         try:
             self.voltage = 0.0
             self.current = 0.0
-            self.output = False
+            if not self.safe_stop_failures:
+                self.output = False
             self.commands.extend([("VOLT", 0.0), ("CURR", 0.0), ("OUTPUT", False)])
-            return []
+            return list(self.safe_stop_failures)
         finally:
             self._leave()
 
@@ -82,8 +96,8 @@ class FakeSMU(SMUDriver):
     def measure_current(self) -> float:
         return self.current
 
-    def query_output_enabled(self) -> bool:
-        return self.output
+    def query_output_enabled(self) -> bool | None:
+        return None if self.query_returns_unknown else self.output
 
     def query_compliance_tripped(self, mode: str) -> bool:
         return False
@@ -94,6 +108,7 @@ class SMUControlTests(unittest.TestCase):
         self.driver = FakeSMU()
         self.control = SMUControlManager()
         self.control.bind_driver(self.driver)
+        self.control.set_confirmed_polarity_factor(1)
 
     def tearDown(self) -> None:
         self.control.shutdown()
@@ -110,6 +125,7 @@ class SMUControlTests(unittest.TestCase):
         self.assertTrue(self.control.request_manual_output("CC", 0.010, 2.0))
         self.wait_until(lambda: self.control.output_enabled)
         self.assertIn(("CC", 0.010, 2.0), self.driver.commands)
+        self.wait_until(lambda: not self.control.is_busy)
         self.assertTrue(self.control.request_manual_off())
         self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE)
         self.assertFalse(self.driver.output)
@@ -118,16 +134,22 @@ class SMUControlTests(unittest.TestCase):
         self.assertTrue(self.control.request_manual_output("CV", 1.2, 0.020))
         self.wait_until(lambda: self.control.output_enabled)
         self.assertIn(("CV", 1.2, 0.020), self.driver.commands)
+        self.wait_until(lambda: not self.control.is_busy)
         self.assertTrue(self.control.request_manual_off())
         self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE)
 
     def test_polarity_translation_is_shared_and_idempotent(self) -> None:
         polarity = PolarityService()
+        self.assertIsNone(polarity.factor)
+        self.assertFalse(polarity.is_confirmed)
         polarity.set_confirmed_factor(-1)
         polarity.set_confirmed_factor(-1)
         self.assertEqual(-1, polarity.factor)
         self.assertEqual(-0.010, polarity.to_physical(0.010))
+        observed_factors: list[object] = []
+        self.control.polarity_changed.connect(observed_factors.append)
         self.control.set_confirmed_polarity_factor(-1)
+        self.assertEqual([-1], observed_factors)
         self.control.request_manual_output("CC", 0.010, 2.0)
         self.wait_until(lambda: self.control.output_enabled)
         self.assertIn(("CC", -0.010, 2.0), self.driver.commands)
@@ -174,6 +196,92 @@ class SMUControlTests(unittest.TestCase):
         self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE)
         self.assertFalse(self.driver.output)
 
+    def test_double_manual_request_preserves_first_operation_ownership(self) -> None:
+        self.driver.block_configure = True
+        self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
+        self.assertTrue(self.driver.configure_started.wait(timeout=1.0))
+
+        self.assertFalse(self.control.request_manual_output("CC", 0.003, 2.0))
+        self.assertEqual(SMUOwnership.MANUAL, self.control.ownership)
+        self.assertEqual(SMUOperationState.BUSY, self.control.operation_state)
+        self.assertFalse(self.driver.output)
+
+        self.driver.continue_configure.set()
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        self.assertEqual(SMUOwnership.MANUAL, self.control.ownership)
+        self.assertTrue(self.control.request_manual_off())
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and not self.control.is_busy
+        )
+        self.assertFalse(self.driver.output)
+
+    def test_emergency_between_configure_and_output_prevents_output_on(self) -> None:
+        self.driver.block_configure = True
+        self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
+        self.assertTrue(self.driver.configure_started.wait(timeout=1.0))
+
+        self.assertTrue(self.control.request_emergency_off())
+        self.assertTrue(self.control.emergency_latched)
+        self.assertEqual(SMUOwnership.EMERGENCY, self.control.ownership)
+        self.driver.continue_configure.set()
+
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and not self.control.is_busy
+        )
+        self.assertFalse(self.driver.output)
+        self.assertNotIn(("OUTPUT", True), self.driver.commands)
+        self.assertFalse(self.control.emergency_latched)
+
+    def test_unknown_polarity_rejects_manual_without_driver_commands(self) -> None:
+        driver = FakeSMU()
+        control = SMUControlManager()
+        control.bind_driver(driver)
+        try:
+            with self.assertRaisesRegex(SMUInterlockError, "尚未確認元件極性"):
+                control.request_manual_output("CC", 0.002, 2.0)
+            self.assertEqual([], driver.commands)
+            self.assertEqual(SMUOwnership.IDLE, control.ownership)
+        finally:
+            control.shutdown()
+
+    def test_unknown_polarity_rejects_recipe_without_driver_commands(self) -> None:
+        driver = FakeSMU()
+        control = SMUControlManager()
+        control.bind_driver(driver)
+        try:
+            control.acquire_recipe()
+            with self.assertRaisesRegex(SMUInterlockError, "尚未確認元件極性"):
+                control.recipe_output("CV", 1.0, 0.020)
+            self.assertEqual([], driver.commands)
+        finally:
+            control.shutdown()
+
+    def test_confirmed_polarity_restores_output_for_both_factors(self) -> None:
+        for factor in (1, -1):
+            self.control.set_confirmed_polarity_factor(factor)
+            self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
+            self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+            self.assertIn(("CC", factor * 0.002, 2.0), self.driver.commands)
+            self.assertTrue(self.control.request_manual_off())
+            self.wait_until(
+                lambda: self.control.ownership is SMUOwnership.IDLE
+                and not self.control.is_busy
+            )
+
+    def test_safe_stop_failure_does_not_claim_confirmed_safe(self) -> None:
+        self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        self.driver.safe_stop_failures = [":OUTP OFF: VISA failure"]
+
+        self.assertFalse(self.control.safe_shutdown(SMUOwnership.MANUAL))
+        self.assertFalse(self.control.output_confirmed_off)
+        self.assertFalse(self.control.last_shutdown_ok)
+        self.assertEqual(SMUOwnership.FAULT, self.control.ownership)
+        self.assertEqual(SMUOperationState.FAULT, self.control.operation_state)
+        self.driver.safe_stop_failures = []
+
     def test_safety_rejects_setpoint_power_and_compliance(self) -> None:
         safety = SMUSafetyService()
         with self.assertRaises(ValueError):
@@ -199,6 +307,24 @@ class SMUControlTests(unittest.TestCase):
         self.control.request_manual_output("CC", 0.001, 2.0)
         self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE)
         self.assertFalse(self.driver.output)
+
+
+class SMUManagerDisconnectTests(unittest.TestCase):
+    def test_unknown_output_readback_rejects_normal_disconnect(self) -> None:
+        manager = SMUManager()
+        driver = FakeSMU()
+        driver.query_returns_unknown = True
+        device = SMUDevice("FAKE", supported=True)
+        manager._driver = driver
+        manager.connected_device = device
+        manager.control.bind_driver(driver)
+        try:
+            self.assertFalse(manager.disconnect(force=False))
+            self.assertTrue(manager.is_connected)
+            self.assertIs(driver, manager._driver)
+        finally:
+            driver.query_returns_unknown = False
+            manager.shutdown()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,14 @@
-# EL 量測設備控制程式 V1.4.0 Manual SMU Control
+# EL 量測設備控制程式 V1.4.1 Manual SMU Safety Hotfix
+
+## V1.4.1 Manual SMU safety hotfix
+
+- Manual Output 的 busy check、MANUAL ownership acquire 與 command enqueue 改為同一個 lock 內的 transition；重複 request 只會被拒絕，不會清掉第一個 pending operation 的 ownership。
+- `SMUControlManager` 新增 authoritative operation state 與 Emergency latch。命令排入佇列後 Manual UI 立即鎖定；Emergency 發生後，normal operation 在真正送出 `OUTPUT ON` 前會再次檢查 latch。
+- Polarity 預設改為 `UNKNOWN`，只有明確 `set_confirmed_factor(+1/-1)` 後，Manual／Recipe 的 Device-coordinate output 才能通過 interlock。
+- 一般中斷連線改為 fail-closed：只有 output query 明確為 OFF、ownership 為 IDLE 且 control 無 pending I/O 時才關閉 VISA session；unknown readback 一律拒絕。
+- `safe_shutdown()` 會區分 safety command 是否完整成功；failure 會進入 `FAULT`、保留錯誤與未確認 OFF 狀態，不再把實體輸出誤報為已安全關閉。
+- Manual panel 的 CV／CC range 直接使用 `SMUSafetyLimits`，切換模式時 setpoint 歸零並套用安全 compliance 預設，不跨單位沿用舊值。
+- 新增 deterministic fake SMU regression tests，使用 threading Event 驗證 double-request 與 configure／OUTPUT ON 間的 Emergency race；完整 Recipe execution 仍維持停用。
 
 ## V1.4.0 SMU 手動輸出與集中式安全控制
 
@@ -226,7 +236,7 @@ Dark I–V／EL scan summary CSV、JSON metadata 與 Recipe snapshot 為可啟�
 - TIFF、PNG、JPEG、BMP 與同名 JSON 設定紀錄
 - VISA 儀器背景掃描、選擇、連線、中斷及身分顯示
 - Keysight／Agilent B2900 系列識別，包括 B2901BL
-- SMU OUTPUT 為 ON 時阻止一般中斷連線
+- SMU Output 未明確確認為 OFF、ownership 非 IDLE 或 control busy 時阻止一般中斷連線
 - 獨立的 Recipe 清單、樣品 ID、輸出位置、開始量測及停止控制列
 
 ## 第一次使用
@@ -257,16 +267,9 @@ Dark I–V／EL scan summary CSV、JSON metadata 與 Recipe snapshot 為可啟�
 
 ## 本版安全界線
 
-本版不執行以下操作：
+V1.4.1 只開放經 `SMUControlManager`、已確認 polarity 與 safety limits 保護的 Manual CV／CC 輸出。完整 Recipe 仍不執行 Jsc／Voc、Dark I–V、Dark Frames、EL 點位、HDR acquisition 或相機與 SMU 同步，因此「開始量測」及「停止」維持禁用。
 
-- Source current／voltage 寫入
-- Compliance 寫入
-- SMU OUTPUT ON／OFF
-- Jsc／Voc、Dark I–V 與 EL 實際量測
-- 相機與 SMU 同步
-- Stop／錯誤時的硬體回零狀態機
-
-因此「開始量測」及「停止」仍維持禁用。下一階段需先完成 Keysight B2901BL 安全命令層、背景量測狀態機、資料寫入與任何錯誤下的回零／OUTPUT OFF，才會開放執行。
+Emergency latch 能阻止 Emergency request 之後尚未送出的 `OUTPUT ON`；正在執行中的 blocking PyVISA call 無法宣稱可被安全強制 preempt。Keysight B2900 實體輸出、readback 與 failure recovery 仍需以低限制、無敏感 DUT 條件進行實機驗證。
 
 程式不會送出 `*RST`。
 

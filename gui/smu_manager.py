@@ -78,14 +78,27 @@ class SMUManager(QObject):
     def disconnect(self, force: bool = False) -> bool:
         if not self.is_connected:
             return True
-        if not force and (
-            self.output_enabled() is True
-            or self.control.ownership is not SMUOwnership.IDLE
-            or self.control.is_busy
-        ):
-            self.error_occurred.emit("SMU 仍有輸出、ownership 或 I/O 工作。請先安全關閉輸出再中斷連線。")
+        if not force:
+            if (
+                self.is_busy
+                or self.control.ownership is not SMUOwnership.IDLE
+                or self.control.is_busy
+            ):
+                self.error_occurred.emit(
+                    "SMU 仍有 ownership 或 I/O 工作。請先安全關閉輸出再中斷連線。"
+                )
+                return False
+            try:
+                enabled = self.output_enabled()
+            except Exception:
+                enabled = None
+            if enabled is not False:
+                self.error_occurred.emit(
+                    "無法確認 SMU Output 已關閉，請先安全關閉輸出。"
+                )
+                return False
+        if not self._close_session(safe_output=force, force_unbind=force):
             return False
-        self._close_session(safe_output=force)
         self.disconnected.emit()
         self.status_changed.emit("SMU 已中斷連線")
         return True
@@ -111,7 +124,7 @@ class SMUManager(QObject):
     def shutdown(self) -> None:
         self._poll_timer.stop()
         self.control.shutdown()
-        self._close_session(safe_output=True)
+        self._close_session(safe_output=True, force_unbind=True)
         self._executor.shutdown(wait=False, cancel_futures=True)
 
     def safe_stop(self) -> bool:
@@ -244,18 +257,26 @@ class SMUManager(QObject):
             supported=supported,
         )
 
-    def _close_session(self, safe_output: bool = False) -> None:
+    def _close_session(self, safe_output: bool = False, force_unbind: bool = False) -> bool:
         if self._driver is not None:
-            try:
-                if safe_output:
+            if safe_output:
+                try:
                     if self.connected_device is not None and self.connected_device.supported:
                         self.safe_stop()
                     else:
                         self._driver.safe_stop()
-                self.control.bind_driver(None)
+                except Exception as exc:
+                    self.error_occurred.emit(f"SMU best-effort safety stop failed：{exc}")
+            try:
+                self.control.bind_driver(None, force=force_unbind)
+            except Exception as exc:
+                if not force_unbind:
+                    self.error_occurred.emit(str(exc))
+                    return False
+            try:
                 self._driver.close(safe_stop=False)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.error_occurred.emit(f"SMU VISA session close failed：{exc}")
         if self._resource_manager is not None:
             try:
                 self._resource_manager.close()
@@ -264,6 +285,7 @@ class SMUManager(QObject):
         self._driver = None
         self._resource_manager = None
         self.connected_device = None
+        return True
 
     @staticmethod
     def _format_visa_error(exc: Exception) -> str:

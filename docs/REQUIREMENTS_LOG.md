@@ -222,6 +222,20 @@
 - 測試與驗證：fake SMU 涵蓋 CV/CC、± factor、idempotence、interlock、shutdown、Emergency、錯誤注入、safety 與 I/O serialization；完整 regression suite 通過。
 - 完成版本：V1.4.0。
 
+### SMU-002－Manual SMU safety／state consistency hotfix
+
+- 狀態：已完成（V1.4.1；fake SMU 驗證，Keysight B2900 實機待驗證）。
+- 提出日期：2026-08-11（UTC+8）。
+- 使用者原意：只修正 V1.4.0 code review 發現的 Manual pending race、Emergency queue race、未確認 polarity、disconnect 與 shutdown safety consistency，不重寫既有架構或啟用 Recipe execution。
+- 詳細行為：busy check／MANUAL acquire／enqueue 為單一 lock transition；Emergency latch 在 OUTPUT ON 前重查；polarity 預設 UNKNOWN；UI 使用 manager operation state 與 authoritative limits；disconnect 對 unknown output fail-closed；shutdown failure 進入 FAULT 且不宣告 confirmed OFF。
+- 驗收條件：double request 不改變第一個 ownership；configure 與 OUTPUT ON 間的 Emergency 不得送出 ON；UNKNOWN polarity 的 Manual／Recipe 不得送出 configure/output；只有明確 OFF＋IDLE＋not busy 可一般 disconnect；`safe_stop()` failure 保留未確認安全狀態。
+- 影響模組：`smu_control.py`、`smu_manager.py`、`smu_manual_panel.py`、`main_window_ui.py`、SMU tests、README 與架構／需求文件。
+- 相容性／資料遷移：不改 Recipe schema、Camera/HDR/Relay 邏輯或輸出格式；Manual 與 Recipe 繼續共用既有 `SMUControlManager`、PolarityService、SafetyService 與 driver。
+- 安全風險：threading Event 可阻止 latch 後尚未送出的 OUTPUT ON，但不可 preempt 已在執行的 blocking PyVISA call；Keysight B2900 的 SCPI response、實體 output 與故障恢復仍需實機確認。
+- 測試與驗證：FakeSMU 以 Event 控制 configure timing，涵蓋 double request、Emergency race、UNKNOWN／confirmed polarity、idempotent factor、mode reset、limits injection、unknown disconnect、shutdown failure 與原有 serialization。
+- 完成版本：V1.4.1。
+- 取代或關聯需求：補強 SMU-001；SAFE-001 的 Recipe execution 暫緩狀態不變。
+
 ### SAFE-001－SMU 輸出保持停用
 
 - 狀態：部分取代；手動輸出由 SMU-001 開放，Recipe 實際量測仍暫緩。
@@ -258,6 +272,13 @@
 ```
 
 ## 9. 版本變更摘要
+
+### V1.4.1－2026-08-11
+
+- 修正 Manual pending ownership race，新增 authoritative operation state 與 UI immediate lock。
+- 新增 Emergency latch、UNKNOWN polarity interlock、fail-closed disconnect 與 shutdown confirmation／FAULT。
+- Manual UI 改用 authoritative safety limits，CV／CC 切換時 setpoint 歸零；新增 deterministic fake SMU regression tests。
+- 完整 Recipe execution、Camera/HDR 與 Relay 行為維持不變。
 
 ### V1.4.0－2026-08-11
 

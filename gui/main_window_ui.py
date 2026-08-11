@@ -194,7 +194,9 @@ class MainWindowUIMixin:
         exposure_layout.addLayout(exposure_form)
         exposure_layout.addWidget(self.apply_manual_button)
 
-        self.manual_smu_panel = ManualSMUPanel()
+        self.manual_smu_panel = ManualSMUPanel(
+            limits=self.smu_manager.control.safety.limits
+        )
 
         info_content = QWidget()
         info_layout = QFormLayout(info_content)
@@ -385,6 +387,12 @@ class MainWindowUIMixin:
             self.manual_smu_panel.update_ownership
         )
         self.smu_manager.control.output_changed.connect(self.manual_smu_panel.update_output)
+        self.smu_manager.control.operation_state_changed.connect(
+            self.manual_smu_panel.update_operation_state
+        )
+        self.smu_manager.control.polarity_changed.connect(
+            self.manual_smu_panel.update_polarity
+        )
         self.smu_manager.control.command_applied.connect(self.manual_smu_panel.update_command)
         self.smu_manager.control.readback_ready.connect(self.manual_smu_panel.update_readback)
         self.manual_smu_panel.output_requested.connect(self.request_manual_smu_output)
