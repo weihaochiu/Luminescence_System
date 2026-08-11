@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 from . import __version__
 from .image_io import save_image_and_metadata
 from .smu_base import SMUDevice
+from .smu_control import SMUInterlockError, SMUOwnership
 
 
 class MainWindowDeviceMixin:
@@ -41,10 +42,38 @@ class MainWindowDeviceMixin:
         self.device_panel.set_smu_connected(device)
         self.smu_status.setText(f"SMU {device.model or device.display_name}")
         self._remember_smu_selection(device.visa_address)
+        self.manual_smu_panel.set_connected(device.supported)
+        if device.supported:
+            self.smu_monitor.start()
 
     def on_smu_disconnected(self) -> None:
+        self.smu_monitor.stop()
+        self.manual_smu_panel.set_connected(False)
         self.device_panel.set_smu_disconnected()
         self.smu_status.setText("SMU —")
+
+    def request_manual_smu_output(
+        self, mode: str, requested: float, compliance: float
+    ) -> None:
+        try:
+            accepted = self.smu_manager.control.request_manual_output(
+                mode, requested, compliance
+            )
+            if not accepted:
+                raise SMUInterlockError("SMU 正忙碌，請稍後再試。")
+            self.status_message.setText("手動 SMU 輸出命令已排入序列化佇列")
+        except (ValueError, SMUInterlockError) as exc:
+            self.show_smu_error(str(exc))
+
+    def request_manual_smu_off(self) -> None:
+        if not self.smu_manager.control.request_manual_off():
+            self.show_smu_error("SMU 正忙碌或目前不是手動控制狀態。")
+            return
+        self.status_message.setText("正在安全回零並關閉手動 SMU 輸出…")
+
+    def request_smu_emergency_off(self) -> None:
+        self.smu_manager.control.request_emergency_off()
+        self.status_message.setText("緊急關閉已送出；請確認 SMU 前面板輸出狀態。")
 
     def _remember_smu_selection(self, address: str) -> None:
         if address:

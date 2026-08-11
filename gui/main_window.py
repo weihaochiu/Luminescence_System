@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSettings, QStandardPaths, QThread, QTimer
+from PySide6.QtCore import QSettings, QStandardPaths, QTimer
 from PySide6.QtGui import QCloseEvent, QImage
 from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMessageBox
 
@@ -16,13 +16,14 @@ from .hdr_settings_dialog import HDRSettingsDialog
 from .hdr_workflow import HDRSessionState, choose_hdr_session
 from .main_window_devices import MainWindowDeviceMixin
 from .main_window_ui import MainWindowUIMixin
-from .measurement_worker import MeasurementProgress, MeasurementWorker
+from .main_window_measurement import attach_measurement_handlers
 from .recipe_dialog import RecipeManagerDialog
 from .recipe_store import Recipe, RecipeStore
 from .relay_controller import RelayController, RelayService
 from .main_window_relay import attach_relay_handlers
 from .relay_settings import RelaySettingsStore
 from .smu_manager import SMUManager
+from .smu_monitor import SMUMonitor
 class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
     """Top-level state owner and Recipe/HDR measurement coordinator."""
 
@@ -34,6 +35,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
 
         self.controller = CameraController(self)
         self.smu_manager = SMUManager(self)
+        self.smu_monitor = SMUMonitor(self.smu_manager.control, parent=self)
         self.settings = QSettings()
         app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
         recipe_path = (Path(app_data) if app_data else Path.cwd()) / "recipes.json"
@@ -54,8 +56,8 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self._pending_auto_path: str | None = None
         self._capture_next_frame = False
         self._auto_capture_converged = False
-        self._measurement_thread: QThread | None = None
-        self._measurement_worker: MeasurementWorker | None = None
+        self._measurement_thread: Any | None = None
+        self._measurement_worker: Any | None = None
 
         self._build_actions()
         self._build_menu_and_toolbar()
@@ -180,7 +182,8 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
                 self.hdr_session_button.setToolTip("目前 Recipe 未啟用定量 HDR")
             reason = (
                 "本版已完成極性確認、Dark I–V、Dark Frames 與電流／電壓 EL 的 Recipe "
-                "介面及驗證，但尚未加入 SMU source、compliance、OUTPUT ON/OFF 及相機同步執行，"
+                "介面及驗證；手動 SMU 輸出已具集中式安全控制，但 Recipe 尚未加入完整的"
+                "四階段 SMU 與相機同步執行，"
                 "因此開始量測暫不開放。"
             )
         self.start_measurement_button.setEnabled(False)
@@ -194,63 +197,6 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             "量測執行尚未開放",
             "本版已完成四階段 Recipe 建立、驗證與選擇。SMU 安全狀態機與同步拍攝將在下一階段加入。",
         )
-
-    def start_background_measurement(self, run: Any) -> None:
-        """Start a future measurement state-machine without blocking the UI."""
-        if self._measurement_thread is not None:
-            raise RuntimeError("Measurement is already running")
-        thread = QThread(self)
-        worker = MeasurementWorker(run)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.execute)
-        worker.progress_changed.connect(self._on_measurement_progress)
-        worker.finished.connect(self._on_measurement_finished)
-        worker.cancelled.connect(self._on_measurement_cancelled)
-        worker.failed.connect(self._on_measurement_failed)
-        for signal in (worker.finished, worker.cancelled, worker.failed):
-            signal.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._clear_measurement_worker)
-        self._measurement_thread = thread
-        self._measurement_worker = worker
-        self.stop_measurement_button.setEnabled(True)
-        thread.start()
-
-    def stop_background_measurement(self) -> None:
-        if self._measurement_worker is not None:
-            self._measurement_worker.request_cancel()
-        self.smu_manager.safe_stop()
-        self.relay_service.safe_white_light_off("stop_measurement")
-    def emergency_stop_measurement(self) -> None:
-        if self._measurement_worker is not None:
-            self._measurement_worker.request_cancel()
-        self.relay_service.safe_white_light_off("measurement_abort")
-        if self.smu_manager.safe_stop():
-            self.status_message.setText("Emergency stop sent; SMU output disabled")
-        else:
-            self.status_message.setText("Emergency stop sent; verify SMU front panel")
-
-    def _on_measurement_progress(self, progress: MeasurementProgress) -> None:
-        suffix = f" — {progress.message}" if progress.message else ""
-        self.status_message.setText(f"{progress.phase}: {progress.current}/{progress.total}{suffix}")
-
-    def _on_measurement_finished(self, _result: object) -> None:
-        self.status_message.setText("Measurement completed")
-
-    def _on_measurement_cancelled(self) -> None:
-        self.relay_service.safe_white_light_off("measurement_cancelled")
-        self.status_message.setText("Measurement stopped safely")
-
-    def _on_measurement_failed(self, message: str) -> None:
-        self.smu_manager.safe_stop()
-        self.relay_service.safe_white_light_off("critical_exception_cleanup")
-        self.show_error(f"Measurement failed: {message}")
-
-    def _clear_measurement_worker(self) -> None:
-        self._measurement_worker = None
-        self._measurement_thread = None
-        self.stop_measurement_button.setEnabled(False)
 
     def _revalidate_locked_hdr_profile(self) -> None:
         state = self.hdr_session_state
@@ -283,18 +229,20 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             f"EL 量測設備控制程式 v{__version__}\n\n"
             "功能：即時預覽、手動曝光、手動 gain、持續自動曝光、"
             "單次自動曝光後拍攝、TIFF／PNG／JPEG 儲存，"
-            "VISA SMU 掃描、選擇與安全連線，以及 Recipe 建立、驗證與選擇。\n\n"
-            "SMU 支援：Keysight B2900 系列（本階段僅設備連線）\n"
+            "VISA SMU 掃描、選擇、安全連線、手動 CV／CC，以及 Recipe 建立、驗證與選擇。\n\n"
+            "SMU 支援：Keysight B2900 系列（手動輸出需先進行實機安全驗證）\n"
             "Recipe：極性確認 → Dark I–V → Dark Frames → 電流／電壓 EL\n"
-            "本階段僅管理及驗證流程，尚不執行 SMU 輸出\n"
+            "Recipe 自動執行仍安全停用\n"
             "相機介面：RisingCam SDK 57.27250.20241216",
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API name
         self.stop_background_measurement()
+        self.smu_monitor.stop()
         self.controller.close_camera()
         self.smu_manager.shutdown()
         self.relay_service.shutdown()
         event.accept()
 
 attach_relay_handlers(MainWindow)
+attach_measurement_handlers(MainWindow)

@@ -1,8 +1,8 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.2  
-對應程式版本：V1.3.6  
-最後更新：2026-08-06（UTC+8）
+文件版本：1.3
+對應程式版本：V1.4.0
+最後更新：2026-08-11（UTC+8）
 
 ## 1. 文件目的
 
@@ -14,7 +14,7 @@
 
 1. `main.py` 呼叫 `gui.app.main()`。
 2. `app.py` 建立 Qt Application 與 `MainWindow`。
-3. `MainWindow` 建立相機控制器、SMU 管理器、Recipe Store 與 HDR Settings Store。
+3. `MainWindow` 建立相機控制器、SMU 連線／控制／監測服務、Recipe Store 與 HDR Settings Store。
 4. 主畫面從 Store 載入通過驗證的 Recipe，使用者選擇 Recipe、樣品 ID、輸出位置與 HDR T0／Aging 模式。
 5. 現階段只完成設備連線、一般拍攝、Recipe／HDR 設定與資料契約；量測執行狀態機仍安全停用。
 
@@ -36,7 +36,8 @@
 | `app.py` | Qt Application 初始化 | 量測流程 |
 | `main_window.py` | 主狀態、Recipe/HDR 協調、應用生命週期 | 大量 widget 建構、相機 SDK 細節 |
 | `main_window_ui.py` | 主畫面、選單、工具列、狀態列、訊號連接 | Recipe JSON、相機 SDK 命令 |
-| `main_window_devices.py` | 相機／SMU 連線、Live View、手動／自動曝光拍攝、一般影像存檔 | Recipe schema、HDR 數值合成 |
+| `main_window_devices.py` | 相機／SMU 連線、UI request routing、Live View、曝光拍攝、一般影像存檔 | SCPI、ownership、safety、polarity |
+| `main_window_measurement.py` | Recipe worker 生命週期、Manual 啟動確認與 finally safety cleanup 接線 | SCPI、polarity calculation |
 | `device_panel.py` | 左側相機、SMU 與有效 Recipe 清單 | 設備驅動與檔案儲存 |
 
 `MainWindow` 使用少量 mixin 組合完整行為。Mixin 只用來分離大型 UI 類別的明確職責，不應再拆成每個按鈕或每個事件一個檔案。
@@ -79,6 +80,9 @@
 | `smu_base.py` | SMU 裝置與驅動抽象 |
 | `keysight_b2900.py` | Keysight B2900 系列識別與連線驅動 |
 | `smu_manager.py` | 背景 VISA 掃描、連線、狀態與安全中斷 |
+| `smu_control.py` | ownership/output single source of truth、Manual/Recipe interlock、polarity、安全驗證與序列化命令 |
+| `smu_monitor.py` | 500 ms 非阻塞 readback 排程；Recipe ownership 時略過 polling |
+| `smu_manual_panel.py` | CV/CC、setpoint、compliance、輸出按鈕與 readback 顯示；不匯入 driver／VISA |
 | `image_io.py` | 一般影像與同名 JSON metadata 儲存 |
 | `widgets.py` | 可重用的影像顯示與可收合區塊 |
 
@@ -101,17 +105,35 @@ HID path 僅供當次連線使用，設定檔不保存 USB port、Windows locati
 - HDR 開啟時，EL 表格相機欄位僅顯示狀態；實際值由 `設定 → HDR` 與 T0 Profile 決定。
 - 量測快照必須保存當次有效的完整 Recipe、HDR 設定、T0 Profile、實際曝光計畫與輸出檔案清單。
 
-## 6. 安全邊界
+## 6. SMU 架構與安全邊界
 
-V1.3.6 仍禁止下列操作：
+```text
+MainWindow / signal wiring
+├─ ManualSMUPanel (presentation only)
+└─ Recipe worker lifecycle
+              │
+              ▼
+SMUControlManager  ← ownership/output Single Source of Truth
+├─ PolarityService ← confirmed factor Single Source of Truth
+├─ SMUSafetyService
+├─ SMUMonitor (500 ms request; skips RECIPE/busy)
+└─ serialized I/O lock + one-worker queue
+              │
+              ▼
+SMUDriver interface
+              │
+              ▼
+KeysightB2900Driver ← instrument-specific SCPI
+              │
+              ▼
+shared VISA resource / physical SMU
+```
 
-- 寫入 SMU source current／voltage。
-- 寫入 compliance。
-- 執行 SMU OUTPUT ON／OFF。
-- 自動執行 Jsc／Voc、Dark I–V、Dark Frames 與 EL 點位。
-- 宣稱相機與 SMU 已完成同步。
+Manual 與 Recipe 在 `SMUControlManager` 互鎖。所有高階 output transition 經此層；Manual panel 不保存另一份 output/ownership state，也不建立 VISA connection。`PolarityService` 使用明確確認後的 factor，`set_confirmed_factor()` 為 assignment 而非 toggle；polarity determination 尚未實作，其未來流程必須只產生 factor，不可預先套用未確認 factor。
 
-在完成可中止的背景狀態機、錯誤回零、OUTPUT OFF 保證、compliance 處理與資料落盤驗證以前，不得啟用「開始量測」。
+Readback 由 `SMUMonitor` 的 Qt timer 觸發，但實際 query 在控制層的單一 worker 執行；I/O lock 同時涵蓋 Manual、Recipe、readback 與 shutdown。Recipe ownership 或 busy 時不排入 readback，避免 critical command 中插入 query。
+
+V1.4.0 開放已支援 Keysight B2900 driver 的手動 CV／CC，但完整 Recipe 硬體執行仍停用。未完成 Jsc／Voc determination、Dark I–V、Dark Frames、EL 點位與相機同步前，不得啟用主畫面「開始量測」。
 
 ## 7. 新功能放置準則
 

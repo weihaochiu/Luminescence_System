@@ -30,7 +30,7 @@ class SMUDevice:
 
 
 class SMUDriver:
-    """Read-only base interface for the current device-management stage."""
+    """Small SCPI hardware abstraction shared by manual and Recipe control."""
 
     driver_name = "Generic SCPI"
 
@@ -42,6 +42,39 @@ class SMUDriver:
         """Read output state without changing the instrument configuration."""
         try:
             response = str(self.resource.query(":OUTP?")).strip().upper()
+        except Exception:
+            return None
+        if response in {"1", "ON"}:
+            return True
+        if response in {"0", "OFF"}:
+            return False
+        return None
+
+    def configure_voltage_source(self, volts: float, current_compliance_a: float) -> None:
+        raise NotImplementedError("This SMU driver does not support voltage-source control")
+
+    def configure_current_source(self, amps: float, voltage_compliance_v: float) -> None:
+        raise NotImplementedError("This SMU driver does not support current-source control")
+
+    def set_voltage(self, volts: float) -> None:
+        raise NotImplementedError("This SMU driver does not support voltage-source control")
+
+    def set_current(self, amps: float) -> None:
+        raise NotImplementedError("This SMU driver does not support current-source control")
+
+    def set_output_enabled(self, enabled: bool) -> None:
+        raise NotImplementedError("This SMU driver does not support output control")
+
+    def measure_voltage(self) -> float:
+        return float(str(self.resource.query(":MEAS:VOLT?")).strip())
+
+    def measure_current(self) -> float:
+        return float(str(self.resource.query(":MEAS:CURR?")).strip())
+
+    def query_compliance_tripped(self, mode: str) -> bool | None:
+        command = ":SENS:CURR:PROT:TRIP?" if mode == "CV" else ":SENS:VOLT:PROT:TRIP?"
+        try:
+            response = str(self.resource.query(command)).strip().upper()
         except Exception:
             return None
         if response in {"1", "ON"}:

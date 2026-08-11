@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from .device_panel import DevicePanel
+from .smu_manual_panel import ManualSMUPanel
 from .widgets import CollapsibleSection, ImageView
 
 
@@ -193,6 +194,8 @@ class MainWindowUIMixin:
         exposure_layout.addLayout(exposure_form)
         exposure_layout.addWidget(self.apply_manual_button)
 
+        self.manual_smu_panel = ManualSMUPanel()
+
         info_content = QWidget()
         info_layout = QFormLayout(info_content)
         info_layout.setContentsMargins(8, 8, 8, 10)
@@ -210,6 +213,7 @@ class MainWindowUIMixin:
         sidebar_layout.setSpacing(3)
         sidebar_layout.addWidget(CollapsibleSection("相機列表", self.device_panel.camera_content, True))
         sidebar_layout.addWidget(CollapsibleSection("SMU 列表", self.device_panel.smu_content, True))
+        sidebar_layout.addWidget(CollapsibleSection("SMU 手動輸出", self.manual_smu_panel, True))
         sidebar_layout.addWidget(CollapsibleSection("Recipe", self.device_panel.recipe_content, True))
         sidebar_layout.addWidget(CollapsibleSection("拍攝與解析度", capture_content, True))
         sidebar_layout.addWidget(CollapsibleSection("曝光控制", exposure_content, True))
@@ -376,6 +380,16 @@ class MainWindowUIMixin:
         self.smu_manager.disconnected.connect(self.on_smu_disconnected)
         self.smu_manager.status_changed.connect(self.status_message.setText)
         self.smu_manager.error_occurred.connect(self.show_smu_error)
+        self.smu_manager.control.error_occurred.connect(self.show_smu_error)
+        self.smu_manager.control.ownership_changed.connect(
+            self.manual_smu_panel.update_ownership
+        )
+        self.smu_manager.control.output_changed.connect(self.manual_smu_panel.update_output)
+        self.smu_manager.control.command_applied.connect(self.manual_smu_panel.update_command)
+        self.smu_manager.control.readback_ready.connect(self.manual_smu_panel.update_readback)
+        self.manual_smu_panel.output_requested.connect(self.request_manual_smu_output)
+        self.manual_smu_panel.output_off_requested.connect(self.request_manual_smu_off)
+        self.manual_smu_panel.emergency_off_requested.connect(self.request_smu_emergency_off)
 
         self.controller.frame_ready.connect(self.on_frame_ready)
         self.controller.camera_opened.connect(self.on_camera_opened)

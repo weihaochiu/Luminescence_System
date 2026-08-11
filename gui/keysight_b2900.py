@@ -20,6 +20,16 @@ class KeysightB2900Driver(SMUDriver):
     def __init__(self, resource: Any, device: SMUDevice) -> None:
         super().__init__(resource, device)
 
+    def configure_voltage_source(self, volts: float, current_compliance_a: float) -> None:
+        self.resource.write(":SOUR:FUNC VOLT")
+        self.resource.write(f":SENS:CURR:PROT {format_scpi_number(current_compliance_a)}")
+        self.set_voltage(volts)
+
+    def configure_current_source(self, amps: float, voltage_compliance_v: float) -> None:
+        self.resource.write(":SOUR:FUNC CURR")
+        self.resource.write(f":SENS:VOLT:PROT {format_scpi_number(voltage_compliance_v)}")
+        self.set_current(amps)
+
     def set_voltage(self, volts: float) -> None:
         self.resource.write(f":SOUR:VOLT {format_scpi_number(volts)}")
 

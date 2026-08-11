@@ -7,6 +7,8 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from .keysight_b2900 import KeysightB2900Driver, is_keysight_b2900
 from .smu_base import SMUDevice, SMUDriver
+from .smu_control import SMUControlManager
+from .smu_control import SMUOwnership
 
 
 class SMUManager(QObject):
@@ -29,6 +31,7 @@ class SMUManager(QObject):
         self.devices: list[SMUDevice] = []
         self.connected_device: SMUDevice | None = None
         self._driver: SMUDriver | None = None
+        self.control = SMUControlManager(parent=self)
         self._resource_manager: Any | None = None
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="smu-visa")
         self._future: Future[Any] | None = None
@@ -68,13 +71,19 @@ class SMUManager(QObject):
     def output_enabled(self) -> bool | None:
         if not self._driver:
             return None
+        if self.connected_device is not None and self.connected_device.supported:
+            return self.control.confirm_output_enabled()
         return self._driver.query_output_enabled()
 
     def disconnect(self, force: bool = False) -> bool:
         if not self.is_connected:
             return True
-        if not force and self.output_enabled() is True:
-            self.error_occurred.emit("SMU 輸出目前仍為 ON。請先在儀器面板關閉輸出，再中斷連線。")
+        if not force and (
+            self.output_enabled() is True
+            or self.control.ownership is not SMUOwnership.IDLE
+            or self.control.is_busy
+        ):
+            self.error_occurred.emit("SMU 仍有輸出、ownership 或 I/O 工作。請先安全關閉輸出再中斷連線。")
             return False
         self._close_session(safe_output=force)
         self.disconnected.emit()
@@ -101,19 +110,16 @@ class SMUManager(QObject):
 
     def shutdown(self) -> None:
         self._poll_timer.stop()
+        self.control.shutdown()
         self._close_session(safe_output=True)
         self._executor.shutdown(wait=False, cancel_futures=True)
 
     def safe_stop(self) -> bool:
         """Immediately attempt to put the connected SMU into a safe state."""
-        if self._driver is None:
-            return True
-        failures = self._driver.safe_stop()
-        if failures:
-            self.error_occurred.emit("SMU safety stop incomplete: " + "; ".join(failures))
-            return False
-        self.status_changed.emit("SMU output disabled")
-        return True
+        stopped = self.control.safe_shutdown()
+        if stopped:
+            self.status_changed.emit("SMU output disabled")
+        return stopped
 
     def _start_operation(self, operation: str, task: Callable[[], Any]) -> None:
         self._operation = operation
@@ -144,6 +150,7 @@ class SMUManager(QObject):
                 driver_class = KeysightB2900Driver if device.supported else SMUDriver
                 self._driver = driver_class(resource, device)
                 self.connected_device = device
+                self.control.bind_driver(self._driver if device.supported else None)
                 self.connected.emit(device)
                 self.status_changed.emit(f"SMU 已連線：{device.display_name}")
         except Exception as exc:
@@ -241,7 +248,11 @@ class SMUManager(QObject):
         if self._driver is not None:
             try:
                 if safe_output:
-                    self.safe_stop()
+                    if self.connected_device is not None and self.connected_device.supported:
+                        self.safe_stop()
+                    else:
+                        self._driver.safe_stop()
+                self.control.bind_driver(None)
                 self._driver.close(safe_stop=False)
             except Exception:
                 pass

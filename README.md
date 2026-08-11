@@ -1,4 +1,14 @@
-# EL 量測設備控制程式 V1.3.6 Exposure Status Fix
+# EL 量測設備控制程式 V1.4.0 Manual SMU Control
+
+## V1.4.0 SMU 手動輸出與集中式安全控制
+
+- 左側新增「SMU 手動輸出」，支援固定電流 CC、固定電壓 CV、Compliance、Output ON/OFF、緊急關閉與 500 ms 非阻塞 Readback。
+- `SMUControlManager` 是 ownership（IDLE／MANUAL／RECIPE／EMERGENCY）與 output state 的唯一來源；Manual、Recipe lifecycle hook 與監測共用同一個 driver，所有 I/O 由鎖與單執行緒佇列序列化。
+- `PolarityService` 以 `physical = requested × factor` 統一座標換算；factor 採明確設定且冪等，不使用累積翻轉。
+- `SMUSafetyService` 集中限制正負電壓、正負電流、功率及 compliance；超限命令在送至硬體前拒絕。
+- Manual OFF、Recipe 完成／停止／例外、Emergency OFF 與程式關閉都會執行 source 歸零、OUTPUT OFF 與 ownership release。
+- Recipe 的完整四階段硬體執行仍未開放；本版加入共用 ownership/interlock 與 lifecycle cleanup 入口，不宣稱已完成實體 Recipe 量測。
+- 新增 fake SMU 測試驗證 CV／CC、± polarity、interlock、安全清理、Emergency、錯誤注入與 I/O serialization；未宣稱 Keysight 實機輸出已驗證。
 
 ## Relay 設定與白光群組控制
 

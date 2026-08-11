@@ -1,7 +1,7 @@
 # EL 量測設備控制程式需求紀錄
 
-文件版本：1.1  
-最後更新：2026-08-06（UTC+8）
+文件版本：1.2
+最後更新：2026-08-11（UTC+8）
 
 ## 1. 強制維護規則
 
@@ -210,10 +210,22 @@
 
 ## 7. 安全與暫緩項目
 
+### SMU-001－手動 CV／CC 與集中式 SMU control
+
+- 狀態：已完成（V1.4.0；fake SMU 驗證，實機輸出待驗證）。
+- 提出日期：2026-08-11（UTC+8）。
+- 使用者原意：左側新增固定 CV／CC 手動輸出，共用 Recipe polarity factor、driver 與 connection，並建立底層 ownership/interlock、安全限制、非阻塞 readback、Emergency OFF 及完整 cleanup。
+- 驗收條件：IDLE/MANUAL/RECIPE/EMERGENCY；Manual/Recipe 不可並行；physical=requested×factor；500 ms polling 不阻塞 UI 且不與 command race；Manual OFF、Recipe return/stop/exception、Emergency 與 app close 均歸零及 OUTPUT OFF。
+- 影響模組：`smu_control.py`、`smu_monitor.py`、`smu_manual_panel.py`、`smu_base.py`、`keysight_b2900.py`、`smu_manager.py`、`main_window*`、文件與測試。
+- 相容性／資料遷移：不改 Recipe schema、Camera/HDR、影像與量測輸出格式；完整 Recipe execution 仍停用。
+- 安全風險：Keysight SCPI 手動輸出尚未以實體 SMU 驗證；首次硬體使用必須在低限制、無敏感 DUT 條件下確認命令與前面板狀態。
+- 測試與驗證：fake SMU 涵蓋 CV/CC、± factor、idempotence、interlock、shutdown、Emergency、錯誤注入、safety 與 I/O serialization；完整 regression suite 通過。
+- 完成版本：V1.4.0。
+
 ### SAFE-001－SMU 輸出保持停用
 
-- 狀態：暫緩。
-- 要求：在完成命令層、背景狀態機、停止／錯誤回零、OUTPUT OFF、compliance 與資料保存保證以前，不可啟用實際量測。
+- 狀態：部分取代；手動輸出由 SMU-001 開放，Recipe 實際量測仍暫緩。
+- 要求：完整 Recipe 在完成 polarity determination、四階段硬體狀態機、相機同步與資料落盤驗證以前不可啟用。
 
 ### SCOPE-001－Door 功能
 
@@ -246,6 +258,11 @@
 ```
 
 ## 9. 版本變更摘要
+
+### V1.4.0－2026-08-11
+
+- 新增 Manual CV／CC panel、central ownership/interlock、共用 polarity、安全限制、序列化 readback、Emergency 與 lifecycle cleanup。
+- 新增 fake SMU control regression tests；完整 Recipe 執行維持停用。
 
 ### V1.3.6－2026-08-06
 
