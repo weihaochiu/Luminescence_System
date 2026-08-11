@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .instrument_state_manager import SMUUIState
 from .smu_control import SMUOperationState, SMUReadback, SMUSafetyLimits
 
 
@@ -29,10 +30,7 @@ class ManualSMUPanel(QWidget):
     ) -> None:
         super().__init__(parent)
         self._limits = limits or SMUSafetyLimits()
-        self._connected = False
-        self._recipe_active = False
-        self._output_on = False
-        self._operation_state = SMUOperationState.READY
+        self._ui_state = SMUUIState.disconnected()
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("固定電流 CC", "CC")
@@ -97,40 +95,22 @@ class ManualSMUPanel(QWidget):
     def mode(self) -> str:
         return str(self.mode_combo.currentData())
 
-    def set_connected(self, connected: bool) -> None:
-        self._connected = connected
-        if not connected:
-            self._output_on = False
-            self._operation_state = SMUOperationState.READY
-            self.update_ownership("IDLE")
-            self.output_value.setText("OFF")
-            self.operation_value.setText(SMUOperationState.READY.value)
-        self._update_enabled()
-
-    def set_recipe_active(self, active: bool) -> None:
-        # Compatibility input for the existing measurement coordinator. The visible
-        # operation state itself remains authoritative from SMUControlManager.
-        self._recipe_active = active
+    def apply_ui_state(self, state: SMUUIState) -> None:
+        self._ui_state = state
+        self.ownership_value.setText(state.ownership.value)
+        self.operation_value.setText(state.operation.value)
+        self.output_value.setText("ON" if state.output_enabled else "OFF")
+        self.setToolTip(state.manual_lock_reason)
         self._update_enabled()
 
     def update_ownership(self, ownership: str) -> None:
         self.ownership_value.setText(ownership)
-        self._recipe_active = ownership == "RECIPE"
-        self._update_enabled()
 
     def update_output(self, enabled: bool) -> None:
-        self._output_on = enabled
         self.output_value.setText("ON" if enabled else "OFF")
-        self._update_enabled()
 
     def update_operation_state(self, state: str) -> None:
-        try:
-            self._operation_state = SMUOperationState(state)
-        except ValueError:
-            self._operation_state = SMUOperationState.FAULT
-        self.operation_value.setText(self._operation_state.value)
-        self._recipe_active = self._operation_state is SMUOperationState.RECIPE_LOCKED
-        self._update_enabled()
+        self.operation_value.setText(state)
 
     def update_polarity(self, factor: object) -> None:
         self.factor_value.setText(
@@ -151,7 +131,7 @@ class ManualSMUPanel(QWidget):
         self.current_value.setText(f"{reading.current_a * 1000:+.6f} mA")
         self.power_value.setText(f"{reading.power_w * 1000:+.6f} mW")
         if reading.output_enabled is not None:
-            self.update_output(reading.output_enabled)
+            self.output_value.setText("ON" if reading.output_enabled else "OFF")
         self.compliance_value.setText(
             "TRIPPED" if reading.compliance_tripped else
             ("正常" if reading.compliance_tripped is False else "未知")
@@ -191,24 +171,10 @@ class ManualSMUPanel(QWidget):
         self.output_requested.emit(self.mode, requested, compliance)
 
     def _update_enabled(self) -> None:
-        editable = (
-            self._connected
-            and not self._recipe_active
-            and not self._output_on
-            and self._operation_state is SMUOperationState.READY
-        )
+        editable = self._ui_state.manual_editable
         self.mode_combo.setEnabled(editable)
         self.setpoint_spin.setEnabled(editable)
         self.compliance_spin.setEnabled(editable)
         self.output_button.setEnabled(editable)
-        self.off_button.setEnabled(
-            self._connected
-            and not self._recipe_active
-            and self._output_on
-            and self._operation_state is SMUOperationState.OUTPUT_ON
-        )
-        self.emergency_button.setEnabled(
-            self._connected
-            and self._operation_state
-            not in (SMUOperationState.EMERGENCY, SMUOperationState.SHUTTING_DOWN)
-        )
+        self.off_button.setEnabled(self._ui_state.manual_off_enabled)
+        self.emergency_button.setEnabled(self._ui_state.emergency_enabled)

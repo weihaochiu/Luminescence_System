@@ -47,7 +47,6 @@ def start_background_measurement(self: Any, run: Any) -> None:
     thread.finished.connect(self._clear_measurement_worker)
     self._measurement_thread = thread
     self._measurement_worker = worker
-    self.manual_smu_panel.set_recipe_active(True)
     self.stop_measurement_button.setEnabled(True)
     thread.start()
 
@@ -94,7 +93,6 @@ def _clear_measurement_worker(self: Any) -> None:
     self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE)
     self._measurement_worker = None
     self._measurement_thread = None
-    self.manual_smu_panel.set_recipe_active(False)
     self.stop_measurement_button.setEnabled(False)
 
 

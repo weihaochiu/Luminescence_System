@@ -1,4 +1,14 @@
-# EL 量測設備控制程式 V1.4.1 Manual SMU Safety Hotfix
+# EL 量測設備控制程式 V1.5.0
+
+## V1.5.0 SMU state／安全自動連線／Responsive GUI
+
+- 新增 `InstrumentStateManager`，將連線生命週期與底層 ownership／operation／output 合併為 `DISCONNECTED`、`CONNECTING`、`READY_MANUAL`、`AUTO_RUNNING`、`ERROR`、`EMERGENCY_STOP`；手動面板只套用單一 UI policy，不再自行拼接多份可能過期的狀態。
+- SMU driver 綁定會發布完整 READY snapshot，修正新連線仍殘留先前 BUSY／RECIPE／FAULT 狀態而使「SMU 手動輸出」持續反灰的問題。Camera Live View、曝光與拍攝不參與 SMU state，因此不會鎖定手動輸出。
+- 啟動時預設自動掃描；依上次成功 serial、上次成功 VISA resource、唯一受支援設備的順序選擇。多台且無法判定時保留手動選擇，不任意連第一台。
+- 受支援 SMU 在發布 connected 前先將 voltage/current source 歸零、送出 `OUTPUT OFF` 並查詢確認 OFF；自動連線路徑不會送出 `OUTPUT ON`。可於 `設定 → 啟動時自動連線 SMU` 關閉此行為。
+- 新增 `MeasurementControlBar` 與 `ResponsiveLayoutManager`；同一批 widget 依 Qt logical width、available screen geometry、font metrics 與 DPI context 在 WIDE／STANDARD／COMPACT 間即時重排。
+- 左側設備區改用可拖曳 `QSplitter`，保留既有垂直 `QScrollArea`；底部 Start／Stop／Emergency Stop 位於 scroll 區外，長路徑保留完整內容並以 tooltip 顯示。
+- 新增 state transition、auto-connect safety／selection、responsive mode／widget rearrangement 測試；Camera、Recipe、HDR、Relay、輸出格式與 Recipe execution 安全停用狀態不變。
 
 ## V1.4.1 Manual SMU safety hotfix
 

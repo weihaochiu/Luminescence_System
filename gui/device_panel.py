@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from .smu_base import SMUDevice
+from .instrument_state_manager import SMUInstrumentState, SMUUIState
 from .recipe_store import Recipe
 
 
@@ -110,6 +111,12 @@ class DevicePanel(QWidget):
         row = self.smu_list.currentRow()
         return self.smu_devices[row] if 0 <= row < len(self.smu_devices) else None
 
+    def select_smu(self, visa_address: str) -> None:
+        for row, device in enumerate(self.smu_devices):
+            if device.visa_address == visa_address:
+                self.smu_list.setCurrentRow(row)
+                return
+
     def set_recipes(self, recipes: list[Recipe], preferred_id: str = "") -> None:
         self.recipes = list(recipes)
         self.recipe_list.clear()
@@ -161,6 +168,21 @@ class DevicePanel(QWidget):
         self.smu_state.setStyleSheet(f"color: {color}; font-weight: 600;")
         self.smu_list.setEnabled(True)
         self._update_buttons()
+
+    def apply_smu_ui_state(self, state: SMUUIState) -> None:
+        self.smu_state.setText(state.status_text)
+        colors = {
+            SMUInstrumentState.DISCONNECTED: "#687078",
+            SMUInstrumentState.CONNECTING: "#c48a00",
+            SMUInstrumentState.READY_MANUAL: "#16823b",
+            SMUInstrumentState.AUTO_RUNNING: "#8a5a00",
+            SMUInstrumentState.ERROR: "#c62828",
+            SMUInstrumentState.EMERGENCY_STOP: "#9b111e",
+        }
+        self.smu_state.setStyleSheet(
+            f"color: {colors[state.state]}; font-weight: 600;"
+        )
+        self.smu_state.setToolTip(state.manual_lock_reason or state.status_text)
 
     def _set_busy(self, busy: bool) -> None:
         self.smu_list.setEnabled(not busy)

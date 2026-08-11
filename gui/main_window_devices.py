@@ -12,8 +12,10 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from . import __version__
 from .image_io import save_image_and_metadata
+from .instrument_state_manager import SMUUIState
 from .smu_base import SMUDevice
 from .smu_control import SMUInterlockError, SMUOwnership
+from .smu_manager import select_auto_connect_device
 
 
 class MainWindowDeviceMixin:
@@ -22,10 +24,38 @@ class MainWindowDeviceMixin:
     def refresh_smu_devices(self) -> None:
         self.smu_manager.scan()
 
+    def auto_connect_smu_on_startup(self) -> None:
+        self._auto_connect_after_scan = self.settings.value(
+            "devices/auto_connect_smu", True, type=bool
+        )
+        self.refresh_smu_devices()
+
     def on_smu_scan_finished(self, devices: list[SMUDevice]) -> None:
-        preferred = str(self.settings.value("devices/last_smu_address", ""))
+        preferred = str(
+            self.settings.value("devices/last_smu_address", "")
+            or self.settings.value("devices/selected_smu_address", "")
+        )
         self.device_panel.set_smu_devices(devices, preferred)
         self.device_panel.set_smu_disconnected()
+        self.instrument_state_manager.set_disconnected()
+        auto_connect = self._auto_connect_after_scan
+        self._auto_connect_after_scan = False
+        if not auto_connect:
+            return
+        selected = select_auto_connect_device(
+            devices,
+            preferred_serial=str(self.settings.value("devices/last_smu_serial", "")),
+            preferred_address=str(self.settings.value("devices/last_smu_address", "")),
+        )
+        if selected is not None:
+            self.device_panel.select_smu(selected.visa_address)
+            self.smu_manager.connect_device(selected)
+            return
+        supported_count = sum(device.supported for device in devices)
+        if supported_count > 1:
+            self.status_message.setText(
+                "找到多台支援的 SMU，且無法確認上次成功設備；請手動選擇後連線。"
+            )
 
     def connect_selected_smu(self) -> None:
         device = self.device_panel.selected_smu()
@@ -35,22 +65,44 @@ class MainWindowDeviceMixin:
         self._remember_smu_selection(device.visa_address)
         self.smu_manager.connect_device(device)
 
+    def on_smu_connection_started(self, address: str) -> None:
+        self.device_panel.set_smu_connecting()
+        selected = self.device_panel.selected_smu()
+        label = selected.display_name if selected is not None else address
+        self.instrument_state_manager.set_connecting(label)
+
+    def on_smu_connection_failed(self, message: str) -> None:
+        self.device_panel.set_smu_disconnected(error=True)
+        self.instrument_state_manager.set_connection_error(message)
+
     def disconnect_smu(self) -> None:
         self.smu_manager.disconnect(force=False)
 
     def on_smu_connected(self, device: SMUDevice) -> None:
         self.device_panel.set_smu_connected(device)
         self.smu_status.setText(f"SMU {device.model or device.display_name}")
+        if device.supported:
+            self.settings.setValue("devices/last_smu_address", device.visa_address)
+            self.settings.setValue("devices/last_smu_serial", device.serial_number)
         self._remember_smu_selection(device.visa_address)
-        self.manual_smu_panel.set_connected(device.supported)
+        self.instrument_state_manager.set_connected(device.display_name, device.supported)
         if device.supported:
             self.smu_monitor.start()
 
     def on_smu_disconnected(self) -> None:
         self.smu_monitor.stop()
-        self.manual_smu_panel.set_connected(False)
+        self.instrument_state_manager.set_disconnected()
         self.device_panel.set_smu_disconnected()
         self.smu_status.setText("SMU —")
+
+    def update_smu_ui_state(self, state: SMUUIState) -> None:
+        self.manual_smu_panel.apply_ui_state(state)
+        self.device_panel.apply_smu_ui_state(state)
+        if state.connected:
+            self.smu_status.setText(
+                f"SMU {state.device_label}｜{state.state.value}｜"
+                f"OUT {'ON' if state.output_enabled else 'OFF'}"
+            )
 
     def request_manual_smu_output(
         self, mode: str, requested: float, compliance: float
@@ -77,7 +129,7 @@ class MainWindowDeviceMixin:
 
     def _remember_smu_selection(self, address: str) -> None:
         if address:
-            self.settings.setValue("devices/last_smu_address", address)
+            self.settings.setValue("devices/selected_smu_address", address)
 
     def refresh_devices(self) -> None:
         if self.controller.is_open:

@@ -12,9 +12,9 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QScrollArea,
+    QSplitter,
     QSpinBox,
     QStatusBar,
     QStyle,
@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
 )
 
 from .device_panel import DevicePanel
+from .measurement_control_bar import MeasurementControlBar
+from .responsive_layout import LayoutMode, ResponsiveLayoutManager
 from .smu_manual_panel import ManualSMUPanel
 from .widgets import CollapsibleSection, ImageView
 
@@ -72,6 +74,14 @@ class MainWindowUIMixin:
         self.hdr_settings_action.setToolTip("設定共用的定量 HDR 參數與過曝提前終止規則")
         self.relay_settings_action = QAction("Relay 設定…", self)
         self.relay_settings_action.setToolTip("設定 USBRelay8 Channel、群組與手動測試")
+        self.smu_auto_connect_action = QAction("啟動時自動連線 SMU", self)
+        self.smu_auto_connect_action.setCheckable(True)
+        self.smu_auto_connect_action.setChecked(
+            self.settings.value("devices/auto_connect_smu", True, type=bool)
+        )
+        self.smu_auto_connect_action.setToolTip(
+            "只連線上次成功的 SMU，或唯一一台受支援的 SMU；OUTPUT 保持 OFF。"
+        )
 
         self.refresh_action.triggered.connect(self.refresh_devices)
         self.connect_action.triggered.connect(self.toggle_connection)
@@ -84,6 +94,9 @@ class MainWindowUIMixin:
         self.recipe_manager_action.triggered.connect(self.open_recipe_manager)
         self.hdr_settings_action.triggered.connect(self.open_hdr_settings)
         self.relay_settings_action.triggered.connect(self.open_relay_settings)
+        self.smu_auto_connect_action.toggled.connect(
+            lambda enabled: self.settings.setValue("devices/auto_connect_smu", enabled)
+        )
 
     def _build_menu_and_toolbar(self) -> None:
         file_menu = self.menuBar().addMenu("檔案(&F)")
@@ -104,6 +117,8 @@ class MainWindowUIMixin:
         settings_menu.addAction(self.recipe_manager_action)
         settings_menu.addAction(self.hdr_settings_action)
         settings_menu.addAction(self.relay_settings_action)
+        settings_menu.addSeparator()
+        settings_menu.addAction(self.smu_auto_connect_action)
 
         help_menu = self.menuBar().addMenu("說明(&H)")
         help_menu.addAction(self.about_action)
@@ -127,14 +142,17 @@ class MainWindowUIMixin:
         toolbar.addAction(self.fit_action)
         toolbar.addAction(self.actual_action)
 
-        # QAction 預設會依文字長度產生不同寬度；固定所有可按按鈕的尺寸。
+        # Use font metrics so Windows DPI scaling cannot clip toolbar labels. Qt
+        # moves excess actions into its overflow menu on compact windows.
         self.main_toolbar = toolbar
+        metrics = toolbar.fontMetrics()
         for action in toolbar.actions():
             if action.isSeparator():
                 continue
             button = toolbar.widgetForAction(action)
             if isinstance(button, QToolButton):
-                button.setFixedSize(132, 36)
+                button.setMinimumWidth(metrics.horizontalAdvance(action.text()) + 46)
+                button.setMinimumHeight(metrics.height() + 18)
         self.addToolBar(toolbar)
 
     def _build_central_ui(self) -> None:
@@ -227,7 +245,10 @@ class MainWindowUIMixin:
         sidebar_scroll.setWidget(sidebar_body)
         sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        sidebar_scroll.setFixedWidth(310)
+        sidebar_scroll.setMinimumWidth(
+            max(235, self.fontMetrics().horizontalAdvance("SMU 手動輸出 MMMMMMMMMM"))
+        )
+        self.device_sidebar_scroll = sidebar_scroll
 
         workspace_header = QFrame()
         workspace_header.setObjectName("workspaceHeader")
@@ -244,22 +265,30 @@ class MainWindowUIMixin:
         workspace_layout.setSpacing(0)
         workspace_layout.addWidget(workspace_header)
         workspace_layout.addWidget(self.image_view, 1)
+        workspace.setMinimumWidth(320)
 
-        main_area = QWidget()
-        main_area_layout = QHBoxLayout(main_area)
-        main_area_layout.setContentsMargins(0, 0, 0, 0)
-        main_area_layout.setSpacing(1)
-        main_area_layout.addWidget(sidebar_scroll)
-        main_area_layout.addWidget(workspace, 1)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.addWidget(sidebar_scroll)
+        self.main_splitter.addWidget(workspace)
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes([300, 1200])
 
         operation_bar = self._build_measurement_operation_bar()
         center = QWidget()
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(1)
-        center_layout.addWidget(main_area, 1)
+        center_layout.addWidget(self.main_splitter, 1)
         center_layout.addWidget(operation_bar)
         self.setCentralWidget(center)
+        self.responsive_layout_manager = ResponsiveLayoutManager(
+            self, operation_bar, parent=self
+        )
+        self.responsive_layout_manager.mode_changed.connect(
+            self._on_responsive_layout_changed
+        )
 
         self.setStyleSheet(
             """
@@ -279,59 +308,42 @@ class MainWindowUIMixin:
         )
 
     def _build_measurement_operation_bar(self) -> QFrame:
-        bar = QFrame()
-        bar.setObjectName("measurementBar")
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(10, 7, 10, 7)
-        self.sample_id_edit = QLineEdit()
-        self.sample_id_edit.setPlaceholderText("輸入樣品 ID")
-        self.sample_id_edit.setMaximumWidth(210)
-        self.measurement_path_edit = QLineEdit()
-        self.measurement_path_edit.setReadOnly(True)
-        self.measurement_path_edit.setPlaceholderText("選擇量測資料儲存位置")
-        self.measurement_path_edit.setMinimumWidth(230)
+        bar = MeasurementControlBar()
+        self.measurement_control_bar = bar
+        for name in (
+            "sample_id_edit",
+            "measurement_path_edit",
+            "measurement_path_button",
+            "selected_recipe_label",
+            "hdr_session_button",
+            "white_light_status",
+            "white_light_button",
+            "start_measurement_button",
+            "stop_measurement_button",
+            "emergency_stop_button",
+        ):
+            setattr(self, name, getattr(bar, name))
         self.measurement_path_edit.setText(str(self.settings.value("measurement/output_root", "")))
-        self.measurement_path_button = QPushButton("瀏覽…")
         self.measurement_path_button.clicked.connect(self.choose_measurement_output_root)
-        self.selected_recipe_label = QLabel("Recipe：尚未選擇")
-        self.selected_recipe_label.setMinimumWidth(210)
-        self.hdr_session_button = QPushButton("HDR：未設定")
-        self.hdr_session_button.setMinimumWidth(155)
         self.hdr_session_button.clicked.connect(self.configure_hdr_session)
-        self.white_light_status = QLabel("白光 ● 未連線")
-        self.white_light_status.setMinimumWidth(105)
-        self.white_light_button = QPushButton("開啟白光")
-        self.white_light_button.setMinimumWidth(105)
         self.white_light_button.setEnabled(False)
         self.white_light_button.clicked.connect(self.toggle_white_light)
         self.sample_id_edit.textChanged.connect(self._on_sample_id_changed)
-        self.start_measurement_button = QPushButton("開始量測")
-        self.start_measurement_button.setObjectName("startMeasurement")
-        self.start_measurement_button.setMinimumWidth(110)
-        self.stop_measurement_button = QPushButton("停止")
-        self.stop_measurement_button.setObjectName("stopMeasurement")
-        self.stop_measurement_button.setMinimumWidth(90)
-        self.stop_measurement_button.setEnabled(False)
-        self.emergency_stop_button = QPushButton("Emergency Stop")
-        self.emergency_stop_button.setObjectName("emergencyStop")
-        self.emergency_stop_button.setMinimumWidth(130)
-        self.emergency_stop_button.setToolTip("Immediately zero the SMU source and disable output.")
         self.start_measurement_button.clicked.connect(self._measurement_not_implemented)
         self.stop_measurement_button.clicked.connect(self.stop_background_measurement)
         self.emergency_stop_button.clicked.connect(self.emergency_stop_measurement)
-        layout.addWidget(QLabel("樣品 ID"))
-        layout.addWidget(self.sample_id_edit)
-        layout.addWidget(QLabel("儲存位置"))
-        layout.addWidget(self.measurement_path_edit, 1)
-        layout.addWidget(self.measurement_path_button)
-        layout.addWidget(self.selected_recipe_label)
-        layout.addWidget(self.hdr_session_button)
-        layout.addWidget(self.white_light_status)
-        layout.addWidget(self.white_light_button)
-        layout.addWidget(self.start_measurement_button)
-        layout.addWidget(self.stop_measurement_button)
-        layout.addWidget(self.emergency_stop_button)
         return bar
+
+    def _on_responsive_layout_changed(self, mode: LayoutMode) -> None:
+        if not hasattr(self, "fps_status"):
+            return
+        compact = mode is LayoutMode.COMPACT
+        standard = mode is LayoutMode.STANDARD
+        self.zoom_status.setVisible(not compact)
+        self.resolution_status.setVisible(not compact)
+        self.exposure_status.setVisible(not compact)
+        self.gain_status.setVisible(not compact)
+        self.fps_status.setVisible(not compact and not standard)
 
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)
@@ -375,21 +387,14 @@ class MainWindowUIMixin:
 
         self.smu_manager.scan_started.connect(self.device_panel.set_smu_scanning)
         self.smu_manager.scan_finished.connect(self.on_smu_scan_finished)
-        self.smu_manager.connection_started.connect(
-            lambda _address: self.device_panel.set_smu_connecting()
-        )
+        self.smu_manager.connection_started.connect(self.on_smu_connection_started)
         self.smu_manager.connected.connect(self.on_smu_connected)
+        self.smu_manager.connection_failed.connect(self.on_smu_connection_failed)
         self.smu_manager.disconnected.connect(self.on_smu_disconnected)
         self.smu_manager.status_changed.connect(self.status_message.setText)
         self.smu_manager.error_occurred.connect(self.show_smu_error)
         self.smu_manager.control.error_occurred.connect(self.show_smu_error)
-        self.smu_manager.control.ownership_changed.connect(
-            self.manual_smu_panel.update_ownership
-        )
-        self.smu_manager.control.output_changed.connect(self.manual_smu_panel.update_output)
-        self.smu_manager.control.operation_state_changed.connect(
-            self.manual_smu_panel.update_operation_state
-        )
+        self.instrument_state_manager.state_changed.connect(self.update_smu_ui_state)
         self.smu_manager.control.polarity_changed.connect(
             self.manual_smu_panel.update_polarity
         )
@@ -398,6 +403,7 @@ class MainWindowUIMixin:
         self.manual_smu_panel.output_requested.connect(self.request_manual_smu_output)
         self.manual_smu_panel.output_off_requested.connect(self.request_manual_smu_off)
         self.manual_smu_panel.emergency_off_requested.connect(self.request_smu_emergency_off)
+        self.instrument_state_manager.refresh()
 
         self.controller.frame_ready.connect(self.on_frame_ready)
         self.controller.camera_opened.connect(self.on_camera_opened)

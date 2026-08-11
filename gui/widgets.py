@@ -37,7 +37,7 @@ class ImageView(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
-        self.setMinimumSize(640, 480)
+        self.setMinimumSize(320, 240)
         self._has_image = False
         self._fit_mode = True
 

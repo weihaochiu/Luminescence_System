@@ -236,6 +236,34 @@
 - 完成版本：V1.4.1。
 - 取代或關聯需求：補強 SMU-001；SAFE-001 的 Recipe execution 暫緩狀態不變。
 
+### SMU-003－統一狀態與安全自動連線
+
+- 狀態：已完成（V1.5.0；fake VISA／SMU 驗證，Keysight B2901BL 實機待驗證）。
+- 提出日期：2026-08-12（UTC+8）。
+- 使用者原意：修正 SMU 已連線但 Manual panel 仍反灰，並在掃描到已知設備後安全自動連線。
+- 詳細行為：高階狀態至少包含 DISCONNECTED／CONNECTING／READY_MANUAL／AUTO_RUNNING／ERROR／EMERGENCY_STOP；Manual UI 只讀取單一 policy；Camera 操作不鎖 SMU；啟動 auto-connect 依上次成功 serial、上次成功 resource、唯一受支援設備選擇，多台不明時不得猜測。
+- 驗收條件：connected＋IDLE＋READY＋OUTPUT OFF 立即開放 Manual；Recipe ownership 鎖定並於完成後恢復；auto-connect 先將兩種 source 歸零、OUTPUT OFF 且 query 明確確認 OFF；不得送出 OUTPUT ON。
+- 影響模組：`instrument_state_manager.py`、`smu_manager.py`、`smu_control.py`、`smu_manual_panel.py`、`device_panel.py`、`main_window_devices.py`、`main_window_ui.py`、測試與文件。
+- 相容性／資料遷移：沿用 `QSettings` 並新增 auto-connect、last successful serial/resource key；不改 Recipe schema、Camera/HDR/Relay 或資料格式。
+- 安全風險：SCPI safety initialization 與 `:OUTP?` response 仍需以實體 Keysight B2901BL、低限制且無敏感 DUT 條件驗證。
+- 測試與驗證：狀態轉換、bind reset、選擇優先序、多設備 ambiguity、OUTPUT OFF 確認成功／失敗與禁止 OUTPUT ON。
+- 完成版本：V1.5.0。
+- 取代或關聯需求：補強 SMU-001、SMU-002；SAFE-001 的 Recipe execution 暫緩狀態不變。
+
+### UI-001－Responsive measurement workspace
+
+- 狀態：已完成（V1.5.0；Qt offscreen 幾何驗證，Windows 多螢幕 DPI 實機待驗證）。
+- 提出日期：2026-08-12（UTC+8）。
+- 使用者原意：底部 context/actions、Sidebar 與 Live View 必須適應 1024×768 到 4K、Windows 100–200% DPI 與即時 resize，不能以固定解析度或單純兩列處理。
+- 詳細行為：同一 widget set 依 logical available width 與 font metrics 切換 WIDE／STANDARD／COMPACT；Save Path 擴展且保留完整資料；Sidebar／Live View 使用 QSplitter；低高度 Sidebar 使用 QScrollArea；Emergency Stop 永遠位於直接可見的底部 actions。
+- 驗收條件：1024／1366／1920 logical geometry 無控制項重疊；Browse／Start／Stop／Emergency 直接可見；resize 即時重排；Sidebar 不把 Live View 壓到低於 minimum；不依 physical resolution 寫條件。
+- 影響模組：`measurement_control_bar.py`、`responsive_layout.py`、`main_window_ui.py`、`widgets.py`、responsive tests 與文件。
+- 相容性／資料遷移：重用原 signal handler 與 widget aliases；不改 Camera、Recipe、HDR、White Light、measurement backend 或輸出資料。
+- 安全風險：Qt offscreen 無法代表所有 Windows 顯示卡、字型與多螢幕切換，仍需 Windows 125／150／200% 實機視覺驗收。
+- 測試與驗證：mode breakpoint、同一 widget identity/rearrangement、path/tooltip、QSizePolicy、主視窗 1024×768／1366×768／1920×1080 offscreen 幾何檢查。
+- 完成版本：V1.5.0。
+- 取代或關聯需求：不改 SAFE-001。
+
 ### SAFE-001－SMU 輸出保持停用
 
 - 狀態：部分取代；手動輸出由 SMU-001 開放，Recipe 實際量測仍暫緩。
@@ -272,6 +300,13 @@
 ```
 
 ## 9. 版本變更摘要
+
+### V1.5.0－2026-08-12
+
+- 統一 SMU connection／ownership／operation／output 的 GUI state，修正已連線但 Manual panel 因過期狀態反灰。
+- 新增 fail-closed 啟動自動連線；依上次成功 identity 或唯一受支援設備選擇，連線發布前確認 source=0 與 OUTPUT OFF。
+- 新增 WIDE／STANDARD／COMPACT control bar、font-metric breakpoint、QSplitter sidebar 與長路徑 tooltip。
+- 新增 state、auto-connect safety 與 responsive GUI 測試；Camera、Recipe、HDR、Relay、資料格式與 Recipe execution 安全邊界不變。
 
 ### V1.4.1－2026-08-11
 

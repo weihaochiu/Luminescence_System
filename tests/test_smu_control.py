@@ -196,6 +196,23 @@ class SMUControlTests(unittest.TestCase):
         self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE)
         self.assertFalse(self.driver.output)
 
+    def test_driver_bind_publishes_clean_ready_snapshot(self) -> None:
+        ownership: list[str] = []
+        operations: list[str] = []
+        outputs: list[bool] = []
+        self.control.ownership_changed.connect(ownership.append)
+        self.control.operation_state_changed.connect(operations.append)
+        self.control.output_changed.connect(outputs.append)
+
+        self.control.bind_driver(self.driver, output_confirmed_off=True)
+
+        self.assertEqual(SMUOwnership.IDLE, self.control.ownership)
+        self.assertEqual(SMUOperationState.READY, self.control.operation_state)
+        self.assertTrue(self.control.output_confirmed_off)
+        self.assertEqual(SMUOwnership.IDLE.value, ownership[-1])
+        self.assertEqual(SMUOperationState.READY.value, operations[-1])
+        self.assertFalse(outputs[-1])
+
     def test_double_manual_request_preserves_first_operation_ownership(self) -> None:
         self.driver.block_configure = True
         self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))

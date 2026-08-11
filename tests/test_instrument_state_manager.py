@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+import unittest
+
+from gui.instrument_state_manager import InstrumentStateManager, SMUInstrumentState
+from gui.smu_control import SMUControlManager, SMUOperationState, SMUOwnership
+
+
+class InstrumentStateManagerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.control = SMUControlManager()
+        self.manager = InstrumentStateManager(self.control)
+
+    def tearDown(self) -> None:
+        self.control.shutdown()
+
+    def test_connection_reaches_ready_manual_and_enables_panel(self) -> None:
+        self.manager.set_connecting("B2901BL")
+        self.assertEqual(SMUInstrumentState.CONNECTING, self.manager.current.state)
+        self.assertFalse(self.manager.current.manual_editable)
+
+        self.manager.set_connected("Keysight B2901BL", supported=True)
+        state = self.manager.current
+        self.assertEqual(SMUInstrumentState.READY_MANUAL, state.state)
+        self.assertTrue(state.manual_editable)
+        self.assertTrue(state.emergency_enabled)
+        self.assertIn("OUTPUT：OFF", state.status_text)
+
+    def test_busy_and_recipe_states_lock_manual_without_camera_state(self) -> None:
+        self.manager.set_connected("Keysight B2901BL", supported=True)
+        self.manager.update_operation_state(SMUOperationState.BUSY.value)
+        self.assertEqual(SMUInstrumentState.READY_MANUAL, self.manager.current.state)
+        self.assertFalse(self.manager.current.manual_editable)
+
+        self.manager.update_ownership(SMUOwnership.RECIPE.value)
+        self.manager.update_operation_state(SMUOperationState.RECIPE_LOCKED.value)
+        self.assertEqual(SMUInstrumentState.AUTO_RUNNING, self.manager.current.state)
+        self.assertFalse(self.manager.current.manual_editable)
+
+        self.manager.update_ownership(SMUOwnership.IDLE.value)
+        self.manager.update_operation_state(SMUOperationState.READY.value)
+        self.assertTrue(self.manager.current.manual_editable)
+
+    def test_manual_output_and_emergency_policy(self) -> None:
+        self.manager.set_connected("Keysight B2901BL", supported=True)
+        self.manager.update_ownership(SMUOwnership.MANUAL.value)
+        self.manager.update_output(True)
+        self.manager.update_operation_state(SMUOperationState.OUTPUT_ON.value)
+        self.assertFalse(self.manager.current.manual_editable)
+        self.assertTrue(self.manager.current.manual_off_enabled)
+
+        self.manager.update_ownership(SMUOwnership.EMERGENCY.value)
+        self.manager.update_operation_state(SMUOperationState.EMERGENCY.value)
+        self.assertEqual(SMUInstrumentState.EMERGENCY_STOP, self.manager.current.state)
+        self.assertFalse(self.manager.current.emergency_enabled)
+
+    def test_fault_and_disconnect_fail_closed(self) -> None:
+        self.manager.set_connected("Keysight B2901BL", supported=True)
+        self.manager.update_operation_state(SMUOperationState.FAULT.value)
+        self.assertEqual(SMUInstrumentState.ERROR, self.manager.current.state)
+        self.assertFalse(self.manager.current.manual_editable)
+
+        self.manager.set_disconnected()
+        self.assertEqual(SMUInstrumentState.DISCONNECTED, self.manager.current.state)
+        self.assertFalse(self.manager.current.emergency_enabled)
+
+
+if __name__ == "__main__":
+    unittest.main()

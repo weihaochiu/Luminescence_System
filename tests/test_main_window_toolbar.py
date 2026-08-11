@@ -46,16 +46,15 @@ class MainToolbarStructureTests(unittest.TestCase):
             action_names,
         )
 
-    def test_toolbar_buttons_have_uniform_fixed_size(self) -> None:
-        sizes = []
+    def test_toolbar_buttons_use_font_metrics_minimum_size(self) -> None:
+        calls = []
         for node in ast.walk(self.toolbar_method):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
-            if node.func.attr != "setFixedSize" or len(node.args) != 2:
-                continue
-            if all(isinstance(argument, ast.Constant) for argument in node.args):
-                sizes.append(tuple(argument.value for argument in node.args))
-        self.assertIn((132, 36), sizes)
+            calls.append(node.func.attr)
+        self.assertIn("setMinimumWidth", calls)
+        self.assertIn("setMinimumHeight", calls)
+        self.assertNotIn("setFixedSize", calls)
 
     def test_toolbar_uses_uniform_icon_size(self) -> None:
         source = self.source_path.read_text(encoding="utf-8")

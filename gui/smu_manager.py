@@ -11,6 +11,35 @@ from .smu_control import SMUControlManager
 from .smu_control import SMUOwnership
 
 
+def select_auto_connect_device(
+    devices: list[SMUDevice],
+    preferred_serial: str = "",
+    preferred_address: str = "",
+) -> SMUDevice | None:
+    """Choose a supported SMU without guessing between ambiguous devices."""
+
+    supported = [device for device in devices if device.supported]
+    serial = preferred_serial.strip().casefold()
+    if serial:
+        serial_matches = [
+            device
+            for device in supported
+            if device.serial_number.strip().casefold() == serial
+        ]
+        if len(serial_matches) == 1:
+            return serial_matches[0]
+    address = preferred_address.strip().casefold()
+    if address:
+        address_matches = [
+            device
+            for device in supported
+            if device.visa_address.strip().casefold() == address
+        ]
+        if len(address_matches) == 1:
+            return address_matches[0]
+    return supported[0] if len(supported) == 1 else None
+
+
 class SMUManager(QObject):
     """Asynchronous VISA discovery and connection management.
 
@@ -22,6 +51,7 @@ class SMUManager(QObject):
     scan_finished = Signal(object)
     connection_started = Signal(str)
     connected = Signal(object)
+    connection_failed = Signal(str)
     disconnected = Signal()
     status_changed = Signal(str)
     error_occurred = Signal(str)
@@ -157,18 +187,23 @@ class SMUManager(QObject):
                 else:
                     self.status_changed.emit("找不到可回應的 VISA 儀器")
             elif operation == "connect":
-                resource_manager, resource, device = result
+                resource_manager, resource, device, driver = result
                 self._resource_manager = resource_manager
-                driver_class: type[SMUDriver]
-                driver_class = KeysightB2900Driver if device.supported else SMUDriver
-                self._driver = driver_class(resource, device)
+                self._driver = driver
                 self.connected_device = device
-                self.control.bind_driver(self._driver if device.supported else None)
+                self.control.bind_driver(
+                    self._driver if device.supported else None,
+                    output_confirmed_off=device.supported,
+                )
                 self.connected.emit(device)
-                self.status_changed.emit(f"SMU 已連線：{device.display_name}")
+                suffix = "｜手動控制可用｜OUTPUT：OFF" if device.supported else ""
+                self.status_changed.emit(f"SMU 已連線：{device.display_name}{suffix}")
         except Exception as exc:
             prefix = "SMU 掃描失敗" if operation == "scan" else "SMU 連線失敗"
-            self.error_occurred.emit(f"{prefix}：{self._format_visa_error(exc)}")
+            message = f"{prefix}：{self._format_visa_error(exc)}"
+            if operation == "connect":
+                self.connection_failed.emit(message)
+            self.error_occurred.emit(message)
 
     @staticmethod
     def _open_resource_manager() -> tuple[Any, str]:
@@ -218,7 +253,9 @@ class SMUManager(QObject):
         return devices
 
     @classmethod
-    def _connect_worker(cls, device: SMUDevice) -> tuple[Any, Any, SMUDevice]:
+    def _connect_worker(
+        cls, device: SMUDevice
+    ) -> tuple[Any, Any, SMUDevice, SMUDriver]:
         manager, backend_label = cls._open_resource_manager()
         resource = None
         try:
@@ -228,7 +265,18 @@ class SMUManager(QObject):
             resource.read_termination = "\n"
             idn = str(resource.query("*IDN?")).strip()
             verified = cls._device_from_idn(device.visa_address, idn, backend_label)
-            return manager, resource, verified
+            driver_class: type[SMUDriver]
+            driver_class = KeysightB2900Driver if verified.supported else SMUDriver
+            driver = driver_class(resource, verified)
+            if verified.supported:
+                failures = driver.safe_stop()
+                if failures:
+                    raise RuntimeError(
+                        "SMU 安全初始化失敗：" + "; ".join(failures)
+                    )
+                if driver.query_output_enabled() is not False:
+                    raise RuntimeError("無法確認 SMU 安全初始化後 OUTPUT 為 OFF")
+            return manager, resource, verified, driver
         except Exception:
             if resource is not None:
                 try:

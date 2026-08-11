@@ -14,6 +14,7 @@ from .camera_controller import CameraController
 from .hdr_settings import HDRSettingsStore
 from .hdr_settings_dialog import HDRSettingsDialog
 from .hdr_workflow import HDRSessionState, choose_hdr_session
+from .instrument_state_manager import InstrumentStateManager
 from .main_window_devices import MainWindowDeviceMixin
 from .main_window_ui import MainWindowUIMixin
 from .main_window_measurement import attach_measurement_handlers
@@ -31,10 +32,13 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         super().__init__()
         self.setWindowTitle(f"EL 量測設備控制程式 v{__version__}")
         self.resize(1500, 900)
-        self.setMinimumSize(1050, 680)
+        self.setMinimumSize(800, 600)
 
         self.controller = CameraController(self)
         self.smu_manager = SMUManager(self)
+        self.instrument_state_manager = InstrumentStateManager(
+            self.smu_manager.control, parent=self
+        )
         self.smu_monitor = SMUMonitor(self.smu_manager.control, parent=self)
         self.settings = QSettings()
         app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
@@ -58,6 +62,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self._auto_capture_converged = False
         self._measurement_thread: Any | None = None
         self._measurement_worker: Any | None = None
+        self._auto_connect_after_scan = False
 
         self._build_actions()
         self._build_menu_and_toolbar()
@@ -73,7 +78,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.auto_capture_timer.timeout.connect(self._on_auto_capture_timeout)
 
         QTimer.singleShot(50, self.refresh_devices)
-        QTimer.singleShot(300, self.refresh_smu_devices)
+        QTimer.singleShot(300, self.auto_connect_smu_on_startup)
         QTimer.singleShot(500, self.refresh_relay_connection)
 
     def refresh_recipes(self) -> None:

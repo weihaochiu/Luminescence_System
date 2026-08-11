@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import os
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from gui.smu_control import SMUOperationState, SMUSafetyLimits
+from gui.instrument_state_manager import SMUInstrumentState, SMUUIState
+from gui.smu_control import SMUOperationState, SMUOwnership, SMUSafetyLimits
 from gui.smu_manual_panel import ManualSMUPanel
 
 
@@ -47,12 +49,12 @@ class SMUUIStructureTests(unittest.TestCase):
         self.assertIn("self.control.request_readback", source)
         self.assertNotIn("resource.query", source)
 
-    def test_recipe_start_confirms_manual_shutdown_and_disables_panel(self) -> None:
+    def test_recipe_start_confirms_manual_shutdown_via_authoritative_state(self) -> None:
         source = (self.gui / "main_window_measurement.py").read_text(encoding="utf-8")
         self.assertIn("QMessageBox.question", source)
         self.assertIn("prepare_recipe_start(close_manual=True)", source)
-        self.assertIn("set_recipe_active(True)", source)
         self.assertIn("safe_shutdown(SMUOwnership.RECIPE)", source)
+        self.assertNotIn("set_recipe_active", source)
 
     def test_window_close_stops_monitor_before_manager_shutdown(self) -> None:
         source = (self.gui / "main_window.py").read_text(encoding="utf-8")
@@ -77,7 +79,7 @@ class SMUUIStructureTests(unittest.TestCase):
             maximum_current_compliance_a=0.008,
         )
         panel = ManualSMUPanel(limits=limits)
-        panel.set_connected(True)
+        panel.apply_ui_state(self.ready_state())
         self.assertEqual(-12.0, panel.setpoint_spin.minimum())
         self.assertEqual(15.0, panel.setpoint_spin.maximum())
         self.assertEqual(2.5, panel.compliance_spin.maximum())
@@ -93,21 +95,35 @@ class SMUUIStructureTests(unittest.TestCase):
         if self.app is None:
             self.skipTest("A non-GUI Qt application already exists")
         panel = ManualSMUPanel()
-        panel.set_connected(True)
+        ready = self.ready_state()
+        panel.apply_ui_state(ready)
         panel.update_polarity(1)
         self.assertTrue(panel.output_button.isEnabled())
 
-        panel.update_operation_state(SMUOperationState.BUSY.value)
+        panel.apply_ui_state(
+            replace(
+                ready,
+                operation=SMUOperationState.BUSY,
+                manual_editable=False,
+                manual_lock_reason="手動命令執行中",
+            )
+        )
         self.assertFalse(panel.mode_combo.isEnabled())
         self.assertFalse(panel.setpoint_spin.isEnabled())
         self.assertFalse(panel.compliance_spin.isEnabled())
         self.assertFalse(panel.output_button.isEnabled())
 
-        panel.update_operation_state(SMUOperationState.READY.value)
+        panel.apply_ui_state(ready)
         self.assertTrue(panel.output_button.isEnabled())
 
-        panel.update_operation_state(SMUOperationState.FAULT.value)
-        panel.set_recipe_active(False)
+        panel.apply_ui_state(
+            replace(
+                ready,
+                state=SMUInstrumentState.ERROR,
+                operation=SMUOperationState.FAULT,
+                manual_editable=False,
+            )
+        )
         self.assertFalse(panel.output_button.isEnabled())
 
     def test_polarity_label_updates_without_command_applied(self) -> None:
@@ -117,6 +133,23 @@ class SMUUIStructureTests(unittest.TestCase):
         self.assertEqual("UNKNOWN", panel.factor_value.text())
         panel.update_polarity(-1)
         self.assertEqual("-1", panel.factor_value.text())
+
+    @staticmethod
+    def ready_state() -> SMUUIState:
+        return SMUUIState(
+            state=SMUInstrumentState.READY_MANUAL,
+            connected=True,
+            supported=True,
+            device_label="B2901BL",
+            ownership=SMUOwnership.IDLE,
+            operation=SMUOperationState.READY,
+            output_enabled=False,
+            manual_editable=True,
+            manual_off_enabled=False,
+            emergency_enabled=True,
+            status_text="B2901BL｜手動控制可用｜OUTPUT：OFF",
+            manual_lock_reason="",
+        )
 
 
 if __name__ == "__main__":

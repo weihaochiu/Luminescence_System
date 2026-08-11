@@ -10,7 +10,12 @@ class HDRUIStructureTests(unittest.TestCase):
         root = Path(__file__).parents[1] / "gui"
         cls.main_source = "\n".join(
             (root / name).read_text(encoding="utf-8")
-            for name in ("main_window.py", "main_window_ui.py", "main_window_devices.py")
+            for name in (
+                "main_window.py",
+                "main_window_ui.py",
+                "main_window_devices.py",
+                "measurement_control_bar.py",
+            )
         )
         cls.recipe_source = "\n".join(
             (root / name).read_text(encoding="utf-8")

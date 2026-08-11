@@ -203,7 +203,12 @@ class SMUControlManager(QObject):
         with self._lock:
             return bool(self._pending)
 
-    def bind_driver(self, driver: SMUDriver | None, force: bool = False) -> None:
+    def bind_driver(
+        self,
+        driver: SMUDriver | None,
+        force: bool = False,
+        output_confirmed_off: bool = False,
+    ) -> None:
         with self._lock:
             if not force and (
                 self._ownership is not SMUOwnership.IDLE
@@ -218,12 +223,18 @@ class SMUControlManager(QObject):
                 raise SMUInterlockError("Cannot replace SMU driver while output is owned")
             self._driver = driver
             self._output_enabled = False
-            self._output_confirmed_off = False
-            self._last_shutdown_ok = None
+            self._output_confirmed_off = bool(driver is not None and output_confirmed_off)
+            self._last_shutdown_ok = True if self._output_confirmed_off else None
             self._fault_latched = False
             self._emergency_latch.clear()
             self._ownership = SMUOwnership.IDLE
             self._operation_state = SMUOperationState.READY
+        # Binding a new session is also a state transition.  Emitting a complete
+        # snapshot prevents the GUI from retaining BUSY/RECIPE/FAULT from a prior
+        # connection even though the new driver is ready.
+        self.output_changed.emit(False)
+        self.ownership_changed.emit(SMUOwnership.IDLE.value)
+        self.operation_state_changed.emit(SMUOperationState.READY.value)
 
     def set_confirmed_polarity_factor(self, factor: int) -> None:
         with self._lock:
@@ -463,6 +474,11 @@ class SMUControlManager(QObject):
                     output_enabled=driver.query_output_enabled(),
                     compliance_tripped=driver.query_compliance_tripped(self._mode),
                 )
+            if reading.output_enabled is not None:
+                with self._lock:
+                    self._output_enabled = reading.output_enabled
+                    self._output_confirmed_off = reading.output_enabled is False
+                self.output_changed.emit(reading.output_enabled)
             self.readback_ready.emit(reading)
 
         return self._submit(operation, report_errors=False)
