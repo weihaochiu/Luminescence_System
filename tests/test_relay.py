@@ -10,10 +10,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from gui.relay_controller import (
-    HidApiTransport, RelayController, RelayDevice, RelayError, RelayService,
-    RelayState, run_hardware_diagnostic,
+    HidApiTransport, RelayController, RelayDevice, RelayError, RelayRoutingFault,
+    RelayService, RelayState, run_hardware_diagnostic,
 )
-from gui.relay_settings import RelayGroup, RelaySettingsStore
+from gui.relay_settings import RelayGroup, RelaySettings, RelaySettingsStore
 from gui.relay_settings_dialog import RelaySettingsDialog
 
 
@@ -272,10 +272,88 @@ class RelayTests(unittest.TestCase):
         self.assertIs(self.service.group_state("white_light"), RelayState.OFF)
         self.assertEqual(0x00, self.controller.last_bitmask & 0x03)
 
+    def test_default_smu_output_mapping_and_schema_round_trip(self) -> None:
+        expected = {"Ch1": 5, "Ch2": 6, "Ch3": 7, "Ch4": 8}
+        self.assertEqual(expected, self.store.settings.smu_output_channels)
+        self.store.save()
+        payload = self.store.path.read_text(encoding="utf-8")
+        self.assertIn('"schema_version": 2', payload)
+        self.assertEqual(
+            expected,
+            RelaySettingsStore(self.store.path).settings.smu_output_channels,
+        )
+
+    def test_legacy_settings_migrate_to_default_smu_mapping(self) -> None:
+        legacy = RelaySettings.defaults().to_dict()
+        legacy.pop("smu_output_channels")
+        legacy["channels"][4]["enabled"] = False
+        migrated = RelaySettings.from_dict(legacy)
+        self.assertEqual(
+            {"Ch1": 5, "Ch2": 6, "Ch3": 7, "Ch4": 8},
+            migrated.smu_output_channels,
+        )
+        self.assertTrue(migrated.channels[4].enabled)
+
+    def test_select_ch3_is_verified_break_before_make(self) -> None:
+        self.service.channel_on(1)
+        start = len(self.transport.writes)
+        relay = self.service.select_smu_output_channel("Ch3", lambda: True)
+        commands = [(report[1], report[2]) for report in self.transport.writes[start:]]
+        self.assertEqual(
+            [(0xFD, 5), (0xFD, 6), (0xFD, 7), (0xFD, 8), (0xFF, 7)],
+            commands,
+        )
+        self.assertEqual(7, relay)
+        self.assertEqual("Ch3", self.service.active_smu_output_channel())
+        self.assertEqual(0x01, self.transport.bitmask & 0x03)
+
+    def test_unconfirmed_smu_off_blocks_routing_without_relay_commands(self) -> None:
+        before = list(self.transport.writes)
+        with self.assertRaisesRegex(RelayError, "not authoritatively confirmed"):
+            self.service.select_smu_output_channel("Ch2", lambda: False)
+        self.assertEqual(before, self.transport.writes)
+
+    def test_direct_or_group_on_cannot_bypass_smu_routing_api(self) -> None:
+        with self.assertRaisesRegex(RelayError, "routing"):
+            self.service.channel_on(5)
+        group = RelayGroup("unsafe", "Unsafe", [5])
+        with self.assertRaisesRegex(RelayError, "routing"):
+            self.service.group_on("unsafe", group=group)
+        self.assertEqual(0, self.transport.bitmask & 0xF0)
+
+    def test_multiple_active_routes_trigger_fault_handler_and_all_off(self) -> None:
+        faults: list[str] = []
+        self.service.set_routing_fault_handler(faults.append)
+        self.transport.bitmask = (1 << 4) | (1 << 6) | 0x03
+        with self.assertRaises(RelayRoutingFault):
+            self.service.active_smu_output_channel()
+        self.assertEqual(0, self.transport.bitmask & 0xF3)
+        self.assertEqual(1, len(faults))
+        self.assertIn("Ch1", faults[0])
+        self.assertIn("Ch3", faults[0])
+
+    def test_target_on_verification_failure_never_leaves_route_or_light_on(self) -> None:
+        self.transport.ignore_commands = True
+        with self.assertRaisesRegex(RelayError, "verification failed"):
+            self.service.select_smu_output_channel("Ch4", lambda: True)
+        self.assertEqual(0, self.transport.bitmask & 0xF3)
+
+    def test_mapping_validation_rejects_duplicate_invalid_and_white_light_relays(self) -> None:
+        settings = RelaySettings.defaults()
+        settings.smu_output_channels["Ch4"] = 5
+        self.assertTrue(any("不可重複" in error for error in settings.validate()))
+        settings = RelaySettings.defaults()
+        settings.smu_output_channels["Ch1"] = 1
+        self.assertTrue(any("white_light" in error for error in settings.validate()))
+        settings = RelaySettings.defaults()
+        settings.smu_output_channels.pop("Ch4")
+        self.assertTrue(any("Ch1～Ch4" in error for error in settings.validate()))
+
     def test_safe_shutdown_verifies_white_light_off_and_disconnects(self) -> None:
         self.service.group_on("white_light")
+        self.service.select_smu_output_channel("Ch4", lambda: True)
         self.assertTrue(self.service.shutdown())
-        self.assertEqual(0, self.transport.bitmask & 0x03)
+        self.assertEqual(0, self.transport.bitmask & 0xF3)
         self.assertFalse(self.controller.connected)
 
     def test_safe_shutdown_forces_ch1_ch2_off_even_if_group_is_disabled(self) -> None:

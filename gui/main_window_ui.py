@@ -454,6 +454,9 @@ class MainWindowUIMixin:
         self.smu_manager.control.manual_sequence_finished.connect(
             self.on_manual_smu_sequence_finished
         )
+        self.smu_manager.control.manual_channel_changed.connect(
+            self.manual_smu_panel.update_active_channel
+        )
         self.smu_manager.control.command_applied.connect(self.manual_smu_panel.update_command)
         self.smu_manager.control.readback_ready.connect(self.manual_smu_panel.update_readback)
         self.manual_smu_panel.output_requested.connect(self.request_manual_smu_output)

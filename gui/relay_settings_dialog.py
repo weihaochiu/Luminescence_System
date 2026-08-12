@@ -6,8 +6,9 @@ from copy import deepcopy
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox,
+    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .relay_controller import RelayError, RelayService, RelayState
@@ -20,7 +21,7 @@ class RelaySettingsDialog(QDialog):
         self.store, self.service = store, service
         self.working = deepcopy(store.settings)
         self.setWindowTitle("Relay 設定")
-        self.resize(980, 640)
+        self.resize(980, 780)
         self._build_ui()
         self._write_settings()
         if self.service.controller.connected:
@@ -96,6 +97,22 @@ class RelaySettingsDialog(QDialog):
             group_buttons.addWidget(button)
         group_buttons.addStretch(1)
 
+        routing_group = QGroupBox("SMU 輸出 Routing（Break-Before-Make）")
+        routing_form = QFormLayout(routing_group)
+        self.smu_routing_combos: dict[str, QComboBox] = {}
+        for channel_id in ("Ch1", "Ch2", "Ch3", "Ch4"):
+            combo = QComboBox()
+            for relay_number in range(1, 9):
+                combo.addItem(f"Relay {relay_number}", relay_number)
+            self.smu_routing_combos[channel_id] = combo
+            routing_form.addRow(channel_id, combo)
+        routing_note = QLabel(
+            "一般操作介面只顯示 Ch1～Ch4；實體 Relay mapping 僅在此維護。"
+            "四個 Relay 必須唯一，且不可與白光 Relay 共用。"
+        )
+        routing_note.setWordWrap(True)
+        routing_form.addRow(routing_note)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
@@ -107,6 +124,7 @@ class RelaySettingsDialog(QDialog):
         layout.addWidget(QLabel("Relay Group（同步代表同一次軟體操作，非機械接點的零時間差）"))
         layout.addWidget(self.group_table, 1)
         layout.addLayout(group_buttons)
+        layout.addWidget(routing_group)
         layout.addWidget(buttons)
 
     def _write_settings(self) -> None:
@@ -117,6 +135,9 @@ class RelaySettingsDialog(QDialog):
         self.group_table.setRowCount(0)
         for group in self.working.groups:
             self._append_group(group)
+        for channel_id, combo in self.smu_routing_combos.items():
+            relay_number = self.working.smu_output_channels.get(channel_id, 0)
+            combo.setCurrentIndex(max(0, combo.findData(relay_number)))
         self._refresh_statuses()
 
     def _append_group(self, group: RelayGroup) -> None:
@@ -156,6 +177,10 @@ class RelaySettingsDialog(QDialog):
                 self.group_table.cellWidget(row, 3).isChecked(),
             ))
         settings.groups = groups
+        settings.smu_output_channels = {
+            channel_id: int(combo.currentData())
+            for channel_id, combo in self.smu_routing_combos.items()
+        }
         return settings
 
     def _detect(self) -> None:
@@ -239,6 +264,21 @@ class RelaySettingsDialog(QDialog):
             errors = settings.validate()
             if errors:
                 raise ValueError("\n".join(errors))
+            if self.service.controller.connected:
+                state_mask = self.service.refresh_hardware_state()
+                reserved_relays = set(
+                    self.store.settings.smu_output_channels.values()
+                ) | set(settings.smu_output_channels.values())
+                active_reserved = [
+                    relay
+                    for relay in sorted(reserved_relays)
+                    if state_mask & (1 << (relay - 1))
+                ]
+                if active_reserved:
+                    raise RelayError(
+                        "保存 mapping 前所有既有與新 SMU routing Relay 必須為 OFF；"
+                        f"目前 ON：{active_reserved}"
+                    )
             self.store.settings = settings
             self.store.save()
         except Exception as exc:

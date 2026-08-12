@@ -129,6 +129,30 @@ class EmergencyManager(QObject):
             failures.append(f"White Light OFF: {exc}")
             LOG.exception("GLOBAL_EMERGENCY White Light shutdown failed")
 
+        # Routing relays are an independent safety action so White Light or SMU
+        # failures cannot prevent Ch1-Ch4 from being disconnected.
+        try:
+            actions["SMU routing Relays OFF"] = bool(
+                self.relay_service.safe_smu_output_channels_off("global_emergency")
+            )
+            if actions["SMU routing Relays OFF"]:
+                mark_verified = getattr(
+                    self.smu_control,
+                    "mark_external_routing_off_verified",
+                    None,
+                )
+                if callable(mark_verified):
+                    mark_verified()
+            if (
+                not actions["SMU routing Relays OFF"]
+                and self.relay_service.controller.connected
+            ):
+                failures.append("SMU routing Relays OFF: could not verify OFF")
+        except Exception as exc:  # noqa: BLE001 - callbacks still need cancellation
+            actions["SMU routing Relays OFF"] = False
+            failures.append(f"SMU routing Relays OFF: {exc}")
+            LOG.exception("GLOBAL_EMERGENCY SMU routing shutdown failed")
+
         for name, action in abort_actions:
             try:
                 action()

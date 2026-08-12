@@ -32,13 +32,25 @@ class RelaySettings:
     product: str = "USBRelay8"
     channels: list[RelayChannel] = field(default_factory=list)
     groups: list[RelayGroup] = field(default_factory=list)
+    smu_output_channels: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def defaults(cls) -> "RelaySettings":
         channels = [RelayChannel(number=index) for index in range(1, 9)]
         channels[0] = RelayChannel(1, True, "白光－L", "White Light AC Line")
         channels[1] = RelayChannel(2, True, "白光－N", "White Light AC Neutral")
-        return cls(channels=channels, groups=[RelayGroup("white_light", "白光", [1, 2])])
+        for index, relay in enumerate(range(5, 9), start=1):
+            channels[relay - 1] = RelayChannel(
+                relay,
+                True,
+                f"SMU 輸出 Ch{index}",
+                f"Break-before-make routing for SMU Ch{index}",
+            )
+        return cls(
+            channels=channels,
+            groups=[RelayGroup("white_light", "白光", [1, 2])],
+            smu_output_channels={f"Ch{index}": index + 4 for index in range(1, 5)},
+        )
 
     def group(self, group_id: str) -> RelayGroup | None:
         return next((item for item in self.groups if item.group_id == group_id), None)
@@ -75,6 +87,21 @@ class RelaySettings:
         white_light = self.group("white_light")
         if white_light is None or set(white_light.members) != {1, 2}:
             errors.append("white_light Group 必須由 CH1 與 CH2 組成")
+        expected_smu_ids = {f"Ch{index}" for index in range(1, 5)}
+        actual_smu_ids = set(self.smu_output_channels)
+        if actual_smu_ids != expected_smu_ids:
+            errors.append("SMU 輸出通道必須完整且唯一地包含 Ch1～Ch4")
+        relay_numbers = list(self.smu_output_channels.values())
+        if any(not isinstance(number, int) or number not in range(1, 9) for number in relay_numbers):
+            errors.append("SMU 輸出通道必須對應有效的 Relay 1～8")
+        if len(relay_numbers) != len(set(relay_numbers)):
+            errors.append("SMU 輸出通道對應的 Relay 不可重複")
+        if white_light is not None and set(relay_numbers) & set(white_light.members):
+            errors.append("SMU 輸出通道不可與 white_light Group 共用 Relay")
+        enabled_by_number = {channel.number: channel.enabled for channel in self.channels}
+        for channel_id, relay_number in self.smu_output_channels.items():
+            if relay_number in range(1, 9) and not enabled_by_number.get(relay_number, False):
+                errors.append(f"{channel_id} 對應的 Relay {relay_number} 必須啟用")
         return errors
 
     def to_dict(self) -> dict[str, Any]:
@@ -82,6 +109,7 @@ class RelaySettings:
             "device": {"vid": self.vid, "pid": self.pid, "product": self.product},
             "channels": [asdict(item) for item in self.channels],
             "groups": [asdict(item) for item in self.groups],
+            "smu_output_channels": dict(self.smu_output_channels),
         }
 
     @classmethod
@@ -103,12 +131,31 @@ class RelaySettings:
                        [int(channel) for channel in item.get("members", [])], bool(item.get("enabled", True)))
             for item in source.get("groups", []) if isinstance(item, dict)
         ]
+        raw_smu_channels = source.get("smu_output_channels")
+        smu_output_channels = (
+            {
+                str(channel_id): int(relay_number)
+                for channel_id, relay_number in raw_smu_channels.items()
+            }
+            if isinstance(raw_smu_channels, dict)
+            else dict(defaults.smu_output_channels)
+        )
+        if not isinstance(raw_smu_channels, dict):
+            # V1 files had no routing schema. Make the new default Relay 5-8
+            # routes usable while preserving any explicit channel labels.
+            for relay_number in smu_output_channels.values():
+                channels[relay_number - 1].enabled = True
+                if channels[relay_number - 1].display_name == "未使用":
+                    default_channel = defaults.channels[relay_number - 1]
+                    channels[relay_number - 1].display_name = default_channel.display_name
+                    channels[relay_number - 1].description = default_channel.description
         return cls(int(device.get("vid", defaults.vid)), int(device.get("pid", defaults.pid)),
-                   str(device.get("product", defaults.product)), channels, groups or defaults.groups)
+                   str(device.get("product", defaults.product)), channels, groups or defaults.groups,
+                   smu_output_channels)
 
 
 class RelaySettingsStore:
-    schema_version = 1
+    schema_version = 2
 
     def __init__(self, path: Path) -> None:
         self.path = path

@@ -71,6 +71,10 @@ class SMUUIStructureTests(unittest.TestCase):
         monitor = source.index("self.smu_monitor.stop()")
         shutdown = source.index("self.smu_manager.shutdown()")
         self.assertLess(monitor, shutdown)
+        routing_shutdown = source.index("self.relay_service.shutdown()")
+        camera_close = source.index("self.controller.close_camera()")
+        self.assertLess(shutdown, routing_shutdown)
+        self.assertLess(routing_shutdown, camera_close)
 
     def test_polarity_factor_is_assignment_not_toggle(self) -> None:
         source = (self.gui / "smu_control.py").read_text(encoding="utf-8")
@@ -111,10 +115,12 @@ class SMUUIStructureTests(unittest.TestCase):
         panel.apply_ui_state(ready)
         panel.update_polarity(ManualPolarityResult(PolarityState.NORMAL, 1))
         self.assertTrue(panel.output_button.isEnabled())
+        self.assertTrue(panel.channel_combo.isEnabled())
 
         panel.apply_ui_state(replace(ready, output_enabled=True, manual_editable=False, manual_off_enabled=True))
         self.assertEqual("停止", panel.output_button.text())
         self.assertEqual("ON", panel.output_value.text())
+        self.assertFalse(panel.channel_combo.isEnabled())
 
         panel.apply_ui_state(
             replace(
@@ -125,6 +131,7 @@ class SMUUIStructureTests(unittest.TestCase):
             )
         )
         self.assertFalse(panel.mode_combo.isEnabled())
+        self.assertFalse(panel.channel_combo.isEnabled())
         self.assertFalse(panel.area_spin.isEnabled())
         self.assertFalse(panel.setpoint_spin.isEnabled())
         self.assertFalse(panel.compliance_spin.isEnabled())
@@ -132,6 +139,7 @@ class SMUUIStructureTests(unittest.TestCase):
 
         panel.apply_ui_state(ready)
         self.assertTrue(panel.output_button.isEnabled())
+        self.assertTrue(panel.channel_combo.isEnabled())
 
         panel.apply_ui_state(
             replace(
@@ -176,20 +184,40 @@ class SMUUIStructureTests(unittest.TestCase):
             self.skipTest("A non-GUI Qt application already exists")
         panel = ManualSMUPanel()
         panel.apply_ui_state(self.ready_state())
-        emitted: list[tuple[str, float, float, float]] = []
+        emitted: list[tuple[str, str, float, float, float]] = []
         panel.output_requested.connect(lambda *values: emitted.append(values))
+        self.assertEqual(
+            ["Ch1", "Ch2", "Ch3", "Ch4"],
+            [panel.channel_combo.itemText(index) for index in range(4)],
+        )
+        panel.channel_combo.setCurrentIndex(2)
         panel.area_spin.setValue(2.0)
         panel.setpoint_spin.setValue(3.0)
         panel.output_button.click()
-        self.assertEqual("CC", emitted[-1][0])
-        self.assertAlmostEqual(0.006, emitted[-1][1])
-        self.assertAlmostEqual(2.0, emitted[-1][3])
+        self.assertEqual("Ch3", emitted[-1][0])
+        self.assertEqual("CC", emitted[-1][1])
+        self.assertAlmostEqual(0.006, emitted[-1][2])
+        self.assertAlmostEqual(2.0, emitted[-1][4])
 
         panel.mode_combo.setCurrentIndex(1)
         panel.compliance_spin.setValue(4.0)
         panel.output_button.click()
-        self.assertEqual("CV", emitted[-1][0])
-        self.assertAlmostEqual(0.008, emitted[-1][2])
+        self.assertEqual("CV", emitted[-1][1])
+        self.assertAlmostEqual(0.008, emitted[-1][3])
+
+    def test_active_channel_is_verified_state_not_selected_combo(self) -> None:
+        if self.app is None:
+            self.skipTest("A non-GUI Qt application already exists")
+        panel = ManualSMUPanel()
+        panel.channel_combo.setCurrentIndex(2)
+        self.assertEqual("Ch3", panel.channel_combo.currentText())
+        self.assertEqual("—", panel.active_channel_value.text())
+        panel.update_active_channel("SWITCHING")
+        self.assertEqual("切換中…", panel.active_channel_value.text())
+        panel.update_active_channel("Ch3")
+        self.assertEqual("Ch3", panel.active_channel_value.text())
+        panel.update_active_channel("")
+        self.assertEqual("—", panel.active_channel_value.text())
 
     def test_output_off_readback_displays_unavailable_values(self) -> None:
         if self.app is None:

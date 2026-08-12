@@ -11,7 +11,7 @@ from enum import Enum
 import logging
 from threading import RLock
 import time
-from typing import Any, Protocol, TYPE_CHECKING
+from typing import Any, Callable, Protocol, TYPE_CHECKING
 
 from .relay_settings import RelayGroup, RelaySettingsStore
 
@@ -23,6 +23,10 @@ LOG = logging.getLogger(__name__)
 
 class RelayError(RuntimeError):
     pass
+
+
+class RelayRoutingFault(RelayError):
+    """Mutual-exclusion violation that must latch the SMU interlock."""
 
 
 class RelayState(str, Enum):
@@ -332,6 +336,21 @@ class RelayService:
         self.settings_store = settings_store
         self.log_entries: list[RelayLogEntry] = []
         self._operation_lock = RLock()
+        self._routing_fault_handler: Callable[[str], None] | None = None
+
+    def set_routing_fault_handler(self, handler: Callable[[str], None] | None) -> None:
+        """Register the system-level SMU interlock without duplicating controllers."""
+
+        self._routing_fault_handler = handler
+
+    def smu_output_mapping(self) -> dict[str, int]:
+        return dict(self.settings_store.settings.smu_output_channels)
+
+    def physical_relay_for_smu_channel(self, channel_id: str) -> int:
+        try:
+            return self.settings_store.settings.smu_output_channels[channel_id]
+        except KeyError as exc:
+            raise RelayError(f"未知的 SMU 輸出通道：{channel_id}") from exc
 
     def refresh_connection(self, settings: RelaySettings | None = None) -> str:
         selected = settings or self.settings_store.settings
@@ -353,6 +372,10 @@ class RelayService:
         self._channel(channel, False, source)
 
     def _channel(self, channel: int, state: bool, source: str) -> None:
+        if state and channel in self.settings_store.settings.smu_output_channels.values():
+            raise RelayError(
+                f"Relay {channel} 是 SMU routing 專用通道；請使用 select_smu_output_channel()"
+            )
         previous = self.controller.channel_states[channel].value
         requested = "ON" if state else "OFF"
         try:
@@ -368,6 +391,11 @@ class RelayService:
 
     def _group_on_unlocked(self, group_id: str, source: str, group: RelayGroup | None) -> None:
         selected = group or self._enabled_group(group_id)
+        routing_relays = set(self.settings_store.settings.smu_output_channels.values())
+        if routing_relays & set(selected.members):
+            raise RelayError(
+                f"{selected.display_name} 包含 SMU routing 專用 Relay；禁止以一般 Group 開啟"
+            )
         previous = self._group_state(selected).value
         try:
             for channel in selected.members:
@@ -444,10 +472,222 @@ class RelayService:
         LOG.info("White Light relay controller OFF verified | mask=0x%02X source=%s", state_mask, source)
         return True
 
+    def select_smu_output_channel(
+        self,
+        channel_id: str,
+        confirm_smu_output_off: Callable[[], bool],
+        check_cancel: Callable[[], None] = lambda: None,
+        source: str = "smu_manual_output",
+    ) -> int:
+        """Select one configured route using verified break-before-make."""
+
+        with self._operation_lock:
+            if not confirm_smu_output_off():
+                raise RelayError(
+                    "SMU OUTPUT OFF was not authoritatively confirmed; routing is blocked"
+                )
+            target_relay = self.physical_relay_for_smu_channel(channel_id)
+            mapping = self.smu_output_mapping()
+            before_mask = self.controller.refresh_hardware_state()
+            before = self._routing_state_text(before_mask, mapping)
+            self._assert_routing_mutual_exclusion_unlocked(before_mask, mapping, source)
+            LOG.info(
+                "SMU_ROUTING REQUEST channel=%s mapped_relay=%d state_before=%s",
+                channel_id,
+                target_relay,
+                before,
+            )
+            try:
+                check_cancel()
+                failures = self._turn_off_smu_relays_unlocked(mapping)
+                if failures:
+                    raise RelayError("SMU routing all-OFF failed: " + "; ".join(failures))
+                all_off_mask = self.controller.refresh_hardware_state()
+                routing_mask = self._routing_mask(mapping)
+                if all_off_mask & routing_mask:
+                    raise RelayError(
+                        f"SMU routing all-OFF verification failed: mask=0x{all_off_mask:02X}"
+                    )
+                LOG.info("SMU_ROUTING BREAK verified_all_off mask=0x%02X", all_off_mask)
+                check_cancel()
+                self.controller.set_channel(target_relay, True)
+                check_cancel()
+                after_mask = self.controller.refresh_hardware_state()
+                active = self._assert_routing_mutual_exclusion_unlocked(
+                    after_mask, mapping, source
+                )
+                if active != [channel_id]:
+                    raise RelayError(
+                        "SMU routing target verification failed: "
+                        f"expected={channel_id}/Relay {target_relay}, "
+                        f"actual={active or 'none'}, mask=0x{after_mask:02X}"
+                    )
+                check_cancel()
+            except Exception:
+                self._safe_white_light_off_unlocked(source + "_rollback")
+                self._safe_smu_output_channels_off_unlocked(source + "_rollback")
+                self._record("SMU_ROUTING", channel_id, before, "ON", "FAILURE", source)
+                raise
+            after = self._routing_state_text(after_mask, mapping)
+            LOG.info(
+                "SMU_ROUTING MAKE verified channel=%s relay=%d state_after=%s",
+                channel_id,
+                target_relay,
+                after,
+            )
+            self._record("SMU_ROUTING", channel_id, before, "ON", "SUCCESS", source)
+            return target_relay
+
+    def clear_smu_output_channels(self, source: str = "smu_manual_stop") -> None:
+        """Turn every configured routing relay OFF and require readback confirmation."""
+
+        with self._operation_lock:
+            mapping = self.smu_output_mapping()
+            before = self._routing_state_text_from_cached(mapping)
+            failures = self._turn_off_smu_relays_unlocked(mapping)
+            try:
+                state_mask = self.controller.refresh_hardware_state()
+                if state_mask & self._routing_mask(mapping):
+                    failures.append(f"readback mask=0x{state_mask:02X} is not all OFF")
+            except Exception as exc:
+                failures.append(f"readback failed: {exc}")
+            if failures:
+                self._record("SMU_ROUTING", "Ch1-Ch4", before, "OFF", "FAILURE", source)
+                raise RelayError("SMU routing OFF failed: " + "; ".join(failures))
+            LOG.info("SMU_ROUTING all OFF verified mask=0x%02X source=%s", state_mask, source)
+            self._record("SMU_ROUTING", "Ch1-Ch4", before, "OFF", "SUCCESS", source)
+
+    def safe_smu_output_channels_off(self, source: str = "safety_cleanup") -> bool:
+        with self._operation_lock:
+            return self._safe_smu_output_channels_off_unlocked(source)
+
+    def _safe_smu_output_channels_off_unlocked(self, source: str) -> bool:
+        if not self.controller.connected:
+            LOG.warning("SMU routing OFF skipped: USBRelay8 not connected | source=%s", source)
+            return False
+        mapping = self.smu_output_mapping()
+        failures = self._turn_off_smu_relays_unlocked(mapping)
+        try:
+            state_mask = self.controller.refresh_hardware_state()
+            if state_mask & self._routing_mask(mapping):
+                failures.append(f"readback mask=0x{state_mask:02X} is not all OFF")
+        except Exception as exc:
+            failures.append(f"readback failed: {exc}")
+        if failures:
+            LOG.error("SMU routing OFF verification failed source=%s failures=%s", source, failures)
+            return False
+        LOG.info("SMU routing OFF verified mask=0x%02X source=%s", state_mask, source)
+        return True
+
+    def active_smu_output_channel(self, refresh: bool = True) -> str | None:
+        with self._operation_lock:
+            mapping = self.smu_output_mapping()
+            mask = (
+                self.controller.refresh_hardware_state()
+                if refresh
+                else self.controller.last_bitmask
+            )
+            if mask is None:
+                raise RelayError("SMU routing state is unavailable")
+            active = self._assert_routing_mutual_exclusion_unlocked(
+                mask, mapping, "active_smu_output_channel"
+            )
+            return active[0] if active else None
+
+    def verify_smu_output_channel_state(
+        self,
+        expected_channel: str | None,
+        source: str = "smu_manual_verify",
+    ) -> int | None:
+        with self._operation_lock:
+            mapping = self.smu_output_mapping()
+            state_mask = self.controller.refresh_hardware_state()
+            active = self._assert_routing_mutual_exclusion_unlocked(
+                state_mask, mapping, source
+            )
+            expected = [] if expected_channel is None else [expected_channel]
+            if active != expected:
+                self._safe_white_light_off_unlocked(source + "_mismatch")
+                self._safe_smu_output_channels_off_unlocked(source + "_mismatch")
+                raise RelayError(
+                    f"SMU routing mismatch: expected={expected or 'none'}, "
+                    f"actual={active or 'none'}, mask=0x{state_mask:02X}"
+                )
+            return (
+                None
+                if expected_channel is None
+                else mapping[expected_channel]
+            )
+
+    @staticmethod
+    def _routing_mask(mapping: dict[str, int]) -> int:
+        return sum(1 << (relay - 1) for relay in set(mapping.values()))
+
+    @staticmethod
+    def _routing_state_text(mask: int, mapping: dict[str, int]) -> str:
+        return ",".join(
+            f"{channel_id}/R{relay}={'ON' if mask & (1 << (relay - 1)) else 'OFF'}"
+            for channel_id, relay in sorted(mapping.items())
+        )
+
+    def _routing_state_text_from_cached(self, mapping: dict[str, int]) -> str:
+        return ",".join(
+            f"{channel_id}/R{relay}={self.controller.channel_states[relay].value}"
+            for channel_id, relay in sorted(mapping.items())
+        )
+
+    def _turn_off_smu_relays_unlocked(self, mapping: dict[str, int]) -> list[str]:
+        failures: list[str] = []
+        for relay in sorted(set(mapping.values())):
+            try:
+                self.controller.set_channel(relay, False)
+            except Exception as exc:
+                failures.append(f"Relay {relay}: {exc}")
+        return failures
+
+    def _assert_routing_mutual_exclusion_unlocked(
+        self,
+        state_mask: int,
+        mapping: dict[str, int],
+        source: str,
+    ) -> list[str]:
+        active = [
+            channel_id
+            for channel_id, relay in sorted(mapping.items())
+            if state_mask & (1 << (relay - 1))
+        ]
+        if len(active) <= 1:
+            return active
+        reason = (
+            f"SMU routing mutual-exclusion fault: active={active}, "
+            f"state={self._routing_state_text(state_mask, mapping)}"
+        )
+        LOG.critical("%s source=%s", reason, source)
+        self._safe_white_light_off_unlocked(source + "_fault")
+        self._safe_smu_output_channels_off_unlocked(source + "_fault")
+        self._record("SMU_ROUTING_FAULT", ",".join(active), reason, "ALL OFF", "FAULT", source)
+        if self._routing_fault_handler is not None:
+            try:
+                self._routing_fault_handler(reason)
+            except Exception:
+                LOG.exception("SMU routing fault handler failed")
+        raise RelayRoutingFault(reason)
+
     def shutdown(self) -> bool:
-        verified = self.safe_white_light_off("relay_controller_shutdown")
+        try:
+            white_verified = self.safe_white_light_off("relay_controller_shutdown")
+        except Exception:
+            white_verified = False
+            LOG.exception("White Light OFF failed during RelayService shutdown")
+        try:
+            routing_verified = self.safe_smu_output_channels_off(
+                "relay_controller_shutdown"
+            )
+        except Exception:
+            routing_verified = False
+            LOG.exception("SMU routing OFF failed during RelayService shutdown")
         self.controller.disconnect()
-        return verified
+        return white_verified and routing_verified
 
     def _enabled_group(self, group_id: str) -> RelayGroup:
         group = self.settings_store.settings.group(group_id)

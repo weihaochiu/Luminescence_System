@@ -170,6 +170,7 @@ class SMUControlManager(QObject):
     manual_polarity_changed = Signal(object)
     manual_sequence_status = Signal(str)
     manual_sequence_finished = Signal(bool)
+    manual_channel_changed = Signal(str)
     command_applied = Signal(str, float, float, float, int)
     readback_ready = Signal(object)
     error_occurred = Signal(str)
@@ -196,6 +197,12 @@ class SMUControlManager(QObject):
         self._manual_generation = 0
         self._manual_polarity = ManualPolarityResult(PolarityState.UNKNOWN, None)
         self._last_manual_polarity_snapshot: dict[str, Any] | None = None
+        self._selected_manual_channel = ""
+        self._active_manual_channel = ""
+        self._active_manual_relay: int | None = None
+        self._manual_routing_clear: Callable[[], None] | None = None
+        self._manual_routing_verify: Callable[[str], int | None] | None = None
+        self._external_interlock_fault = False
         self._operation_state = SMUOperationState.READY
         self._mode = "CC"
         self._lock = RLock()
@@ -248,6 +255,15 @@ class SMUControlManager(QObject):
             )
 
     @property
+    def manual_routing_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "selected_smu_channel": self._selected_manual_channel or None,
+                "physical_relay_channel": self._active_manual_relay,
+                "active_channel_verified": self._active_manual_channel or None,
+            }
+
+    @property
     def operation_state(self) -> SMUOperationState:
         with self._lock:
             return self._operation_state
@@ -256,6 +272,32 @@ class SMUControlManager(QObject):
     def is_busy(self) -> bool:
         with self._lock:
             return bool(self._pending)
+
+    def confirm_output_off_for_routing(self) -> bool:
+        """Query the physical SMU immediately before any routing transition."""
+
+        with self._io_lock:
+            with self._lock:
+                driver = self._driver
+            if driver is None:
+                return False
+            try:
+                observed = driver.query_output_enabled()
+            except Exception:
+                observed = None
+        with self._lock:
+            if observed is not None:
+                self._output_enabled = observed
+            self._output_confirmed_off = observed is False
+        if observed is not None:
+            self.output_changed.emit(observed)
+        self.output_confirmation_changed.emit(observed is False)
+        if observed is not False:
+            LOG.error(
+                "SMU_ROUTING blocked: authoritative OUTPUT state=%s",
+                "UNKNOWN" if observed is None else "ON",
+            )
+        return observed is False
 
     def bind_driver(
         self,
@@ -286,6 +328,12 @@ class SMUControlManager(QObject):
             self._manual_generation += 1
             self._manual_polarity = ManualPolarityResult(PolarityState.UNKNOWN, None)
             self._last_manual_polarity_snapshot = None
+            self._selected_manual_channel = ""
+            self._active_manual_channel = ""
+            self._active_manual_relay = None
+            self._manual_routing_clear = None
+            self._manual_routing_verify = None
+            self._external_interlock_fault = False
             self._ownership = SMUOwnership.IDLE
             self._operation_state = SMUOperationState.READY
         self.output_changed.emit(False)
@@ -293,6 +341,7 @@ class SMUControlManager(QObject):
         self.ownership_changed.emit(SMUOwnership.IDLE.value)
         self.operation_state_changed.emit(SMUOperationState.READY.value)
         self.manual_polarity_changed.emit(self._manual_polarity)
+        self.manual_channel_changed.emit("")
 
     def set_confirmed_polarity_factor(self, factor: int) -> None:
         with self._lock:
@@ -395,10 +444,14 @@ class SMUControlManager(QObject):
 
     def request_manual_output_sequence(
         self,
+        channel_id: str,
         mode: str,
         requested: float,
         compliance: float,
         area_cm2: float,
+        select_channel: Callable[[str, Callable[[], None]], int],
+        verify_channel: Callable[[str], int | None],
+        clear_channels: Callable[[], None],
         light_on: Callable[[], None],
         light_off: Callable[[], None],
         settings: PolarityMeasurementSettings,
@@ -444,12 +497,19 @@ class SMUControlManager(QObject):
             self._manual_cancel_latch.clear()
             self._manual_polarity = ManualPolarityResult(PolarityState.UNKNOWN, None)
             self._last_manual_polarity_snapshot = None
+            self._selected_manual_channel = str(channel_id)
+            self._active_manual_channel = ""
+            self._active_manual_relay = None
+            self._manual_routing_clear = clear_channels
+            self._manual_routing_verify = verify_channel
             self._ownership = SMUOwnership.MANUAL
             self._operation_state = SMUOperationState.BUSY
 
         self.manual_polarity_changed.emit(self._manual_polarity)
+        self.manual_channel_changed.emit("SWITCHING")
         LOG.info(
-            "MANUAL_SMU OUTPUT_ON_REQUEST area_cm2=%g mode=%s requested=%+.9g compliance=%g generation=%d",
+            "MANUAL_SMU OUTPUT_ON_REQUEST channel=%s area_cm2=%g mode=%s requested=%+.9g compliance=%g generation=%d",
+            channel_id,
             area_cm2,
             mode,
             requested,
@@ -462,12 +522,58 @@ class SMUControlManager(QObject):
             try:
                 with self._io_lock:
                     driver = self._required_driver()
+                    observed_off = driver.query_output_enabled()
+                    if observed_off is not False:
+                        observed = "UNKNOWN" if observed_off is None else "ON"
+                        raise SMUInterlockError(
+                            "SMU OUTPUT OFF must be authoritatively confirmed before "
+                            f"Relay switching (observed {observed})"
+                        )
+                self._check_manual_generation(generation)
+                self.manual_sequence_status.emit("確認白光 OFF…")
+                light_off()
+                self._check_manual_generation(generation)
+                self.manual_sequence_status.emit("切換輸出通道…")
+                physical_relay = select_channel(
+                    channel_id,
+                    lambda: self._check_manual_generation(generation),
+                )
+                self._check_manual_generation(generation)
+                verified_relay = verify_channel(channel_id)
+                if verified_relay != physical_relay:
+                    raise SMUInterlockError(
+                        "Verified SMU routing relay does not match the selected channel"
+                    )
+                with self._lock:
+                    self._active_manual_channel = channel_id
+                    self._active_manual_relay = physical_relay
+                self.manual_channel_changed.emit(channel_id)
+                LOG.info(
+                    "MANUAL_SMU ROUTING channel=%s mapped_relay=%d verified=true",
+                    channel_id,
+                    physical_relay,
+                )
+
+                def verified_light_on() -> None:
+                    self._check_manual_generation(generation)
+                    if verify_channel(channel_id) != physical_relay:
+                        raise SMUInterlockError("SMU routing changed before White Light ON")
+                    self._check_manual_generation(generation)
+                    light_on()
+                    self._check_manual_generation(generation)
+
+                def verified_light_off() -> None:
+                    light_off()
+                    self._check_manual_generation(generation)
+
+                with self._io_lock:
+                    driver = self._required_driver()
                     measured = self.polarity_measurement.measure(
                         driver,
                         settings,
                         area_cm2,
-                        light_on=light_on,
-                        light_off=light_off,
+                        light_on=verified_light_on,
+                        light_off=verified_light_off,
                         check_cancel=lambda: self._check_manual_generation(generation),
                         wait_ms=lambda milliseconds: self._wait_for_manual_stabilization(
                             generation,
@@ -483,7 +589,12 @@ class SMUControlManager(QObject):
                 )
                 with self._lock:
                     self._manual_polarity = result
-                    self._last_manual_polarity_snapshot = measured.to_dict()
+                    self._last_manual_polarity_snapshot = {
+                        **measured.to_dict(),
+                        "selected_smu_channel": channel_id,
+                        "physical_relay_channel": physical_relay,
+                        "active_channel_verified": channel_id,
+                    }
                 self.manual_polarity_changed.emit(result)
                 LOG.info(
                     "MANUAL_SMU POLARITY JSC_A=%+.9g JSC_MA_CM2=%+.9g VOC_V=%+.9g result=%s factor=%s snapshot=%s",
@@ -500,6 +611,8 @@ class SMUControlManager(QObject):
                     )
 
                 self._check_manual_generation(generation)
+                if verify_channel(channel_id) != physical_relay:
+                    raise SMUInterlockError("SMU routing changed after polarity measurement")
                 physical = float(requested) * result.factor
                 self.safety.validate(mode, physical, compliance)
                 self.manual_sequence_status.emit("設定 SMU…")
@@ -512,9 +625,15 @@ class SMUControlManager(QObject):
                         driver.configure_current_source(physical, compliance)
                     with self._output_enable_lock:
                         self._check_manual_generation(generation)
+                        if verify_channel(channel_id) != physical_relay:
+                            raise SMUInterlockError("SMU routing changed before OUTPUT ON")
+                        self._check_manual_generation(generation)
                         driver.set_output_enabled(True)
                         if driver.query_output_enabled() is not True:
                             raise SMUInterlockError("SMU OUTPUT ON could not be confirmed")
+                        self._check_manual_generation(generation)
+                        if verify_channel(channel_id) != physical_relay:
+                            raise SMUInterlockError("SMU routing changed after OUTPUT ON")
                         self._check_manual_generation(generation)
 
                 with self._lock:
@@ -535,7 +654,9 @@ class SMUControlManager(QObject):
                 self.operation_state_changed.emit(SMUOperationState.OUTPUT_ON.value)
                 self.manual_sequence_status.emit("SMU OUTPUT ON")
                 LOG.info(
-                    "MANUAL_SMU OUTPUT_ON mode=%s requested=%+.9g physical=%+.9g compliance=%g factor=%+d",
+                    "MANUAL_SMU OUTPUT_ON channel=%s relay=%d mode=%s requested=%+.9g physical=%+.9g compliance=%g factor=%+d",
+                    channel_id,
+                    physical_relay,
                     mode,
                     requested,
                     physical,
@@ -559,6 +680,9 @@ class SMUControlManager(QObject):
                     if self._last_manual_polarity_snapshot is None:
                         self._last_manual_polarity_snapshot = {
                             "settings_snapshot": settings.snapshot(),
+                            "selected_smu_channel": channel_id,
+                            "physical_relay_channel": self._active_manual_relay,
+                            "active_channel_verified": self._active_manual_channel or None,
                             "polarity_result": PolarityState.FAILED.value,
                             "polarity_factor": None,
                             "failure_reason": str(exc),
@@ -583,6 +707,10 @@ class SMUControlManager(QObject):
             with self._lock:
                 self._ownership = SMUOwnership.IDLE
                 self._operation_state = SMUOperationState.READY
+                self._selected_manual_channel = ""
+                self._manual_routing_clear = None
+                self._manual_routing_verify = None
+            self.manual_channel_changed.emit("")
             return False
         self.operation_state_changed.emit(SMUOperationState.BUSY.value)
         self.ownership_changed.emit(SMUOwnership.MANUAL.value)
@@ -733,6 +861,7 @@ class SMUControlManager(QObject):
                 return False
             driver = self._driver
             previous = self._ownership
+            routing_clear = self._manual_routing_clear
 
         failures: list[str] = []
         with self._io_lock:
@@ -751,10 +880,24 @@ class SMUControlManager(QObject):
                 if observed_output is not False:
                     observed = "UNKNOWN" if observed_output is None else "ON"
                     failures.append(f"OUTPUT OFF not confirmed (observed {observed})")
+        smu_off_confirmed = not failures
+
+        # Normal routing changes are permitted only after SMU OFF has been
+        # authoritatively confirmed. EmergencyManager also owns an independent,
+        # immediate best-effort routing OFF action.
+        routing_cleared = False
+        if not failures and routing_clear is not None:
+            try:
+                routing_clear()
+                routing_cleared = True
+                LOG.info("MANUAL_SMU STOP routing all OFF confirmed")
+            except Exception as exc:  # noqa: BLE001 - fail closed
+                failures.append(f"SMU routing OFF failed: {exc}")
 
         with self._lock:
             if failures:
-                self._output_confirmed_off = False
+                self._output_enabled = False if smu_off_confirmed else self._output_enabled
+                self._output_confirmed_off = smu_off_confirmed
                 self._last_shutdown_ok = False
                 self._fault_latched = True
                 self._ownership = SMUOwnership.FAULT
@@ -763,8 +906,15 @@ class SMUControlManager(QObject):
                 self._output_enabled = False
                 self._output_confirmed_off = True
                 self._last_shutdown_ok = True
-                self._fault_latched = False
-                if self._emergency_latch.is_set() and owner is not SMUOwnership.EMERGENCY:
+                if self._external_interlock_fault:
+                    self._fault_latched = True
+                    self._ownership = SMUOwnership.FAULT
+                    self._operation_state = SMUOperationState.FAULT
+                else:
+                    self._fault_latched = False
+                if self._external_interlock_fault:
+                    pass
+                elif self._emergency_latch.is_set() and owner is not SMUOwnership.EMERGENCY:
                     self._ownership = SMUOwnership.EMERGENCY
                     self._operation_state = SMUOperationState.EMERGENCY
                 else:
@@ -775,6 +925,12 @@ class SMUControlManager(QObject):
                         self._recipe_cancel_latch.clear()
                     elif owner is SMUOwnership.RECIPE:
                         self._recipe_cancel_latch.clear()
+                if routing_cleared:
+                    self._active_manual_channel = ""
+                    self._active_manual_relay = None
+                    self._selected_manual_channel = ""
+                    self._manual_routing_clear = None
+                    self._manual_routing_verify = None
                 if (
                     previous is SMUOwnership.EMERGENCY
                     or (
@@ -792,10 +948,14 @@ class SMUControlManager(QObject):
         if failures:
             message = "; ".join(failures)
             LOG.error("SMU_FAULT shutdown failed reason=%s: %s", reason, message)
-            self.output_confirmation_changed.emit(False)
+            if smu_off_confirmed:
+                self.output_changed.emit(False)
+            self.output_confirmation_changed.emit(smu_off_confirmed)
             self.ownership_changed.emit(SMUOwnership.FAULT.value)
             self.operation_state_changed.emit(SMUOperationState.FAULT.value)
             self.error_occurred.emit("SMU safety stop incomplete: " + message)
+            if routing_clear is not None:
+                self.manual_channel_changed.emit("FAULT")
             return False
 
         LOG.info(
@@ -809,7 +969,43 @@ class SMUControlManager(QObject):
         self.operation_state_changed.emit(state.value)
         if previous in (SMUOwnership.MANUAL, SMUOwnership.EMERGENCY):
             self.manual_polarity_changed.emit(self._manual_polarity)
+        if routing_cleared:
+            self.manual_channel_changed.emit("")
         return True
+
+    def request_external_interlock(self, reason: str) -> bool:
+        """Latch a non-resettable routing fault and invalidate active workers."""
+
+        self._emergency_latch.set()
+        self._recipe_cancel_latch.set()
+        self._manual_cancel_latch.set()
+        with self._lock:
+            self._manual_generation += 1
+            self._external_interlock_fault = True
+            self._fault_latched = True
+            self._ownership = SMUOwnership.FAULT
+            self._operation_state = SMUOperationState.FAULT
+            has_driver = self._driver is not None
+            busy = bool(self._pending)
+        LOG.critical("SMU_EXTERNAL_INTERLOCK latched reason=%s", reason)
+        self.ownership_changed.emit(SMUOwnership.FAULT.value)
+        self.operation_state_changed.emit(SMUOperationState.FAULT.value)
+        self.error_occurred.emit(reason)
+        if not has_driver or busy:
+            return True
+        return self._submit(
+            lambda: self.safe_shutdown(reason="external routing interlock"),
+            allow_busy=True,
+            operation_state=SMUOperationState.FAULT,
+        )
+
+    def mark_external_routing_off_verified(self) -> None:
+        """Publish an independently verified Emergency routing disconnect."""
+
+        with self._lock:
+            self._active_manual_channel = ""
+            self._active_manual_relay = None
+        self.manual_channel_changed.emit("")
 
     def request_emergency_off(self) -> bool:
         """Latch immediately; shutdown is serialized behind active VISA I/O."""
@@ -857,6 +1053,25 @@ class SMUControlManager(QObject):
                 return False
 
         def operation() -> None:
+            with self._lock:
+                routing_verify = self._manual_routing_verify
+                active_channel = self._active_manual_channel
+                active_relay = self._active_manual_relay
+                routing_should_be_active = (
+                    routing_verify is not None
+                    and bool(active_channel)
+                    and self._ownership is SMUOwnership.MANUAL
+                    and self._operation_state is SMUOperationState.OUTPUT_ON
+                )
+            if routing_should_be_active:
+                if (
+                    routing_verify is None
+                    or not active_channel
+                    or routing_verify(active_channel) != active_relay
+                ):
+                    raise SMUInterlockError(
+                        "SMU routing verification failed during live readback"
+                    )
             with self._io_lock:
                 driver = self._required_driver()
                 output_enabled = driver.query_output_enabled()
@@ -902,6 +1117,13 @@ class SMUControlManager(QObject):
                     output_enabled=output_enabled,
                     compliance_tripped=compliance_tripped,
                 )
+            if routing_should_be_active and (
+                routing_verify is None
+                or routing_verify(active_channel) != active_relay
+            ):
+                raise SMUInterlockError(
+                    "SMU routing changed during live readback"
+                )
             with self._lock:
                 if reading.output_enabled is not None:
                     self._output_enabled = reading.output_enabled
@@ -913,7 +1135,11 @@ class SMUControlManager(QObject):
             self.output_confirmation_changed.emit(reading.output_enabled is False)
             self.readback_ready.emit(reading)
 
-        return self._submit(operation, report_errors=False)
+        return self._submit(
+            operation,
+            cleanup_owner=SMUOwnership.MANUAL,
+            report_errors=False,
+        )
 
     def confirm_output_enabled(self) -> bool | None:
         """Serialized front-panel confirmation used before disconnecting."""

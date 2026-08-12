@@ -29,7 +29,7 @@ LOG = logging.getLogger(__name__)
 
 
 class ManualSMUPanel(QWidget):
-    output_requested = Signal(str, float, float, float)
+    output_requested = Signal(str, str, float, float, float)
     output_off_requested = Signal()
     handover_requested = Signal()
 
@@ -44,6 +44,10 @@ class ManualSMUPanel(QWidget):
 
         self.state_message = QLabel(self._ui_state.manual_lock_reason)
         self.state_message.setWordWrap(True)
+
+        self.channel_combo = QComboBox()
+        for channel_id in ("Ch1", "Ch2", "Ch3", "Ch4"):
+            self.channel_combo.addItem(channel_id, channel_id)
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("定電流密度", "CC")
@@ -72,12 +76,14 @@ class ManualSMUPanel(QWidget):
         self.handover_button.setVisible(False)
 
         form = QFormLayout()
+        form.addRow("輸出通道", self.channel_combo)
         form.addRow("輸出模式", self.mode_combo)
         form.addRow("元件面積", self.area_spin)
         form.addRow(self.setpoint_label, self.setpoint_spin)
         form.addRow(self.compliance_label, self.compliance_spin)
 
         self.output_value = QLabel("OFF")
+        self.active_channel_value = QLabel("—")
         self.factor_value = QLabel("待輸出確認")
         self.voltage_value = QLabel("— V")
         self.current_density_value = QLabel("— mA/cm²")
@@ -85,6 +91,7 @@ class ManualSMUPanel(QWidget):
         self.compliance_value.setStyleSheet("color: #b3261e; font-weight: 600;")
         readback = QFormLayout()
         readback.addRow("輸出狀態", self.output_value)
+        readback.addRow("目前通道", self.active_channel_value)
         readback.addRow("極性", self.factor_value)
         readback.addRow("量測電壓", self.voltage_value)
         readback.addRow("量測電流密度", self.current_density_value)
@@ -130,6 +137,10 @@ class ManualSMUPanel(QWidget):
 
     def update_sequence_status(self, message: str) -> None:
         self.state_message.setText(message)
+
+    def update_active_channel(self, channel_state: str) -> None:
+        labels = {"": "—", "SWITCHING": "切換中…", "FAULT": "故障"}
+        self.active_channel_value.setText(labels.get(channel_state, channel_state))
 
     def update_polarity(self, result: object) -> None:
         if not isinstance(result, ManualPolarityResult):
@@ -180,6 +191,7 @@ class ManualSMUPanel(QWidget):
         self.voltage_value.setText("— V")
         self.current_density_value.setText("— mA/cm²")
         self.compliance_value.setText("—")
+        self.active_channel_value.setText("—")
         if not self._ui_state.output_enabled:
             self.output_button.setText("輸出")
 
@@ -223,7 +235,13 @@ class ManualSMUPanel(QWidget):
             requested = requested * area / 1000.0
         else:
             compliance = compliance * area / 1000.0
-        self.output_requested.emit(self.mode, requested, compliance, area)
+        self.output_requested.emit(
+            str(self.channel_combo.currentData()),
+            self.mode,
+            requested,
+            compliance,
+            area,
+        )
 
     def _update_area_limits(self, _area: float) -> None:
         limits = self._limits
@@ -240,6 +258,7 @@ class ManualSMUPanel(QWidget):
 
     def _update_enabled(self) -> None:
         editable = self._ui_state.manual_editable
+        self.channel_combo.setEnabled(editable)
         self.mode_combo.setEnabled(editable)
         self.area_spin.setEnabled(editable)
         self.setpoint_spin.setEnabled(editable)

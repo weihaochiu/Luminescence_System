@@ -76,6 +76,9 @@ class ManualSMUSequenceTests(unittest.TestCase):
         self.driver = SequenceSMU(self.events)
         self.control = SMUControlManager()
         self.control.bind_driver(self.driver, output_confirmed_off=True)
+        self.active_channel: str | None = None
+        self.fail_clear = False
+        self.routing = {"Ch1": 5, "Ch2": 6, "Ch3": 7, "Ch4": 8}
 
     def tearDown(self) -> None:
         self.control.shutdown()
@@ -88,7 +91,28 @@ class ManualSMUSequenceTests(unittest.TestCase):
             time.sleep(0.005)
         self.fail("condition did not become true")
 
-    def request(self, *, stabilization_s: float = 0.0) -> bool:
+    def select_channel(self, channel_id: str, check_cancel) -> int:
+        check_cancel()
+        for relay in range(5, 9):
+            self.events.append(("RELAY", relay, False))
+        check_cancel()
+        relay = self.routing[channel_id]
+        self.events.append(("RELAY", relay, True))
+        self.active_channel = channel_id
+        check_cancel()
+        return relay
+
+    def verify_channel(self, channel_id: str) -> int | None:
+        return self.routing[channel_id] if self.active_channel == channel_id else None
+
+    def clear_channels(self) -> None:
+        if self.fail_clear:
+            raise RuntimeError("routing clear failed")
+        for relay in range(5, 9):
+            self.events.append(("RELAY", relay, False))
+        self.active_channel = None
+
+    def request(self, *, channel_id: str = "Ch1", stabilization_s: float = 0.0) -> bool:
         settings = PolarityMeasurementSettings(
             white_light_stabilization_ms=round(stabilization_s * 1000),
             anti_flicker_enabled=False,
@@ -101,10 +125,14 @@ class ManualSMUSequenceTests(unittest.TestCase):
             voc_minimum_valid_v=0.001,
         )
         return self.control.request_manual_output_sequence(
+            channel_id,
             "CC",
             0.006,
             2.0,
             2.0,
+            self.select_channel,
+            self.verify_channel,
+            self.clear_channels,
             lambda: self.events.append("LIGHT_ON"),
             lambda: self.events.append("LIGHT_OFF"),
             settings,
@@ -117,10 +145,14 @@ class ManualSMUSequenceTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "Jsc current compliance"):
             self.control.request_manual_output_sequence(
+                "Ch1",
                 "CC",
                 0.006,
                 2.0,
                 2.0,
+                self.select_channel,
+                self.verify_channel,
+                self.clear_channels,
                 lambda: None,
                 lambda: None,
                 settings,
@@ -144,13 +176,19 @@ class ManualSMUSequenceTests(unittest.TestCase):
         self.assertEqual(1, results[-1].factor)
         self.assertLess(self.events.index("LIGHT_ON"), self.events.index("MEASURE_JSC"))
         self.assertLess(self.events.index("MEASURE_JSC"), self.events.index("MEASURE_VOC"))
-        self.assertLess(self.events.index("MEASURE_VOC"), self.events.index("LIGHT_OFF"))
+        final_light_off = max(
+            index for index, event in enumerate(self.events) if event == "LIGHT_OFF"
+        )
+        self.assertLess(self.events.index("MEASURE_VOC"), final_light_off)
+        self.assertLess(self.events.index("LIGHT_OFF"), self.events.index(("RELAY", 5, False)))
+        self.assertLess(self.events.index(("RELAY", 5, True)), self.events.index("LIGHT_ON"))
         final_cc = [event for event in self.events if isinstance(event, tuple) and event[0] == "CC"][-1]
         self.assertAlmostEqual(0.006, final_cc[1])
-        self.assertEqual(("OUTPUT", True), self.events[-2])
+        self.assertIn(("OUTPUT", True), self.events)
+        self.assertEqual("Ch1", self.control.manual_routing_snapshot["active_channel_verified"])
 
     def test_output_off_then_on_rechecks_and_remaps_reversed_sample(self) -> None:
-        self.assertTrue(self.request())
+        self.assertTrue(self.request(channel_id="Ch1"))
         self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
         self.assertTrue(self.control.request_manual_off())
         self.wait_until(
@@ -158,15 +196,17 @@ class ManualSMUSequenceTests(unittest.TestCase):
             and not self.control.is_busy
         )
         self.assertEqual(PolarityState.UNKNOWN, self.control.manual_polarity.state)
+        self.assertIsNone(self.active_channel)
         first_jsc_count = self.events.count("MEASURE_JSC")
 
         self.driver.jsc_current_a = 0.002
         self.driver.voc_v = -0.8
-        self.assertTrue(self.request())
+        self.assertTrue(self.request(channel_id="Ch2"))
         self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
 
         self.assertEqual(first_jsc_count + 1, self.events.count("MEASURE_JSC"))
         self.assertEqual(PolarityState.REVERSED, self.control.manual_polarity.state)
+        self.assertEqual("Ch2", self.active_channel)
         final_cc = [event for event in self.events if isinstance(event, tuple) and event[0] == "CC"][-1]
         self.assertAlmostEqual(-0.006, final_cc[1])
 
@@ -193,10 +233,14 @@ class ManualSMUSequenceTests(unittest.TestCase):
 
         self.assertTrue(
             self.control.request_manual_output_sequence(
+                "Ch1",
                 "CV",
                 1.0,
                 0.010,
                 1.0,
+                self.select_channel,
+                self.verify_channel,
+                self.clear_channels,
                 fail_light,
                 lambda: self.events.append("LIGHT_OFF"),
                 PolarityMeasurementSettings(
@@ -226,6 +270,141 @@ class ManualSMUSequenceTests(unittest.TestCase):
         self.assertFalse(self.driver.output)
         self.assertNotEqual(SMUOperationState.OUTPUT_ON, self.control.operation_state)
 
+    def test_ch4_route_precedes_light_and_formal_output(self) -> None:
+        self.assertTrue(self.request(channel_id="Ch4"))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        self.assertLess(self.events.index(("RELAY", 8, True)), self.events.index("LIGHT_ON"))
+        final_output_on = max(
+            index for index, event in enumerate(self.events) if event == ("OUTPUT", True)
+        )
+        final_light_off = max(
+            index for index, event in enumerate(self.events) if event == "LIGHT_OFF"
+        )
+        self.assertLess(final_light_off, final_output_on)
+        self.assertEqual("Ch4", self.active_channel)
+
+    def test_manual_stop_confirms_smu_off_before_clearing_relays(self) -> None:
+        self.assertTrue(self.request(channel_id="Ch3"))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        stop_start = len(self.events)
+        self.assertTrue(self.control.request_manual_off())
+        self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE and not self.control.is_busy)
+        stopped = self.events[stop_start:]
+        self.assertLess(stopped.index(("SAFE_STOP", False)), stopped.index(("RELAY", 5, False)))
+        self.assertIsNone(self.active_channel)
+        self.assertIsNone(self.control.manual_routing_snapshot["active_channel_verified"])
+
+    def test_routing_clear_failure_latches_fault_but_reports_smu_off(self) -> None:
+        self.assertTrue(self.request(channel_id="Ch1"))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        self.fail_clear = True
+        self.assertTrue(self.control.request_manual_off())
+        self.wait_until(lambda: not self.control.is_busy)
+        self.assertFalse(self.driver.output)
+        self.assertFalse(self.control.output_enabled)
+        self.assertTrue(self.control.output_confirmed_off)
+        self.assertIs(self.control.ownership, SMUOwnership.FAULT)
+        self.fail_clear = False
+
+    def test_same_channel_after_stop_still_rechecks_polarity(self) -> None:
+        self.assertTrue(self.request(channel_id="Ch1"))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        first_count = self.events.count("MEASURE_JSC")
+        self.assertTrue(self.control.request_manual_off())
+        self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE and not self.control.is_busy)
+        self.assertTrue(self.request(channel_id="Ch1"))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        self.assertEqual(first_count + 1, self.events.count("MEASURE_JSC"))
+
+    def test_live_readback_routing_mismatch_forces_smu_off(self) -> None:
+        self.assertTrue(self.request(channel_id="Ch1"))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        self.active_channel = None
+        self.assertTrue(self.control.request_readback())
+        self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE and not self.control.is_busy)
+        self.assertFalse(self.driver.output)
+        self.assertIsNone(self.control.manual_routing_snapshot["active_channel_verified"])
+
+    def test_external_routing_fault_latches_fault_after_safe_shutdown(self) -> None:
+        self.assertTrue(self.request(channel_id="Ch3"))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        self.assertTrue(self.control.request_external_interlock("multiple routing relays"))
+        self.wait_until(lambda: not self.control.is_busy)
+        self.assertFalse(self.driver.output)
+        self.assertIs(self.control.ownership, SMUOwnership.FAULT)
+        self.assertIs(self.control.operation_state, SMUOperationState.FAULT)
+        self.assertIsNone(self.active_channel)
+
+    def test_authoritative_smu_on_blocks_relay_switch(self) -> None:
+        self.driver.output = True
+        self.assertTrue(self.request(channel_id="Ch2"))
+        self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE and not self.control.is_busy)
+        self.assertNotIn(("RELAY", 6, True), self.events)
+        self.assertNotIn("LIGHT_ON", self.events)
+        self.assertFalse(self.driver.output)
+
+    def test_emergency_during_relay_switch_prevents_target_and_light(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_select(channel_id: str, check_cancel) -> int:
+            for relay in range(5, 9):
+                self.events.append(("RELAY", relay, False))
+            entered.set()
+            release.wait(2.0)
+            check_cancel()
+            relay = self.routing[channel_id]
+            self.events.append(("RELAY", relay, True))
+            return relay
+
+        original = self.select_channel
+        self.select_channel = blocked_select
+        try:
+            self.assertTrue(self.request(channel_id="Ch2"))
+            self.assertTrue(entered.wait(1.0))
+            self.assertTrue(self.control.request_emergency_off())
+            release.set()
+            self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE and not self.control.is_busy, 3.0)
+        finally:
+            self.select_channel = original
+        self.assertNotIn(("RELAY", 6, True), self.events)
+        self.assertNotIn("LIGHT_ON", self.events)
+        self.assertIsNone(self.active_channel)
+
+    def test_emergency_after_route_on_before_polarity_clears_route(self) -> None:
+        light_entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_light_on() -> None:
+            self.events.append("LIGHT_ON")
+            light_entered.set()
+            release.wait(2.0)
+
+        settings = PolarityMeasurementSettings(
+            white_light_stabilization_ms=0,
+            anti_flicker_enabled=False,
+            jsc_settle_ms=0,
+            jsc_sample_count=1,
+            jsc_minimum_valid_ma_cm2=0.001,
+            jsc_compliance_ma_cm2=20.0,
+            voc_settle_ms=0,
+            voc_sample_count=1,
+            voc_minimum_valid_v=0.001,
+        )
+        self.assertTrue(
+            self.control.request_manual_output_sequence(
+                "Ch2", "CC", 0.006, 2.0, 2.0,
+                self.select_channel, self.verify_channel, self.clear_channels,
+                blocked_light_on, lambda: self.events.append("LIGHT_OFF"), settings,
+            )
+        )
+        self.assertTrue(light_entered.wait(1.0))
+        self.assertTrue(self.control.request_emergency_off())
+        release.set()
+        self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE and not self.control.is_busy, 3.0)
+        self.assertFalse(self.driver.output)
+        self.assertIsNone(self.active_channel)
+
     def test_emergency_during_polarity_invalidates_late_worker_result(self) -> None:
         entered = threading.Event()
         release = threading.Event()
@@ -243,6 +422,7 @@ class ManualSMUSequenceTests(unittest.TestCase):
         )
 
         self.assertFalse(self.driver.output)
+        self.assertIsNone(self.active_channel)
         self.assertNotEqual(SMUOperationState.OUTPUT_ON, self.control.operation_state)
         final_nonzero = [
             event
@@ -269,6 +449,7 @@ class ManualSMUSequenceTests(unittest.TestCase):
             timeout=3.0,
         )
         self.assertFalse(self.driver.output)
+        self.assertIsNone(self.active_channel)
         final_nonzero = [
             event
             for event in self.events

@@ -14,6 +14,7 @@ from . import __version__
 from .camera_exposure import ExposureMode, validate_auto_target
 from .image_io import save_image_and_metadata
 from .instrument_state_manager import SMUUIState
+from .relay_controller import RelayError
 from .smu_base import SMUDevice
 from .smu_control import SMUInterlockError, SMUOwnership
 from .smu_manager import select_auto_connect_device
@@ -80,15 +81,36 @@ class MainWindowDeviceMixin:
         self.smu_manager.disconnect(force=False)
 
     def request_manual_smu_output(
-        self, mode: str, requested: float, compliance: float, area_cm2: float
+        self,
+        channel_id: str,
+        mode: str,
+        requested: float,
+        compliance: float,
+        area_cm2: float,
     ) -> None:
         try:
             self.emergency_manager.begin_operator_operation()
             accepted = self.smu_manager.control.request_manual_output_sequence(
+                channel_id,
                 mode,
                 requested,
                 compliance,
                 area_cm2,
+                lambda requested_channel, check_cancel: (
+                    self.relay_service.select_smu_output_channel(
+                        requested_channel,
+                        self.smu_manager.control.confirm_output_off_for_routing,
+                        check_cancel,
+                        "manual_smu_output",
+                    )
+                ),
+                lambda expected_channel: self.relay_service.verify_smu_output_channel_state(
+                    expected_channel,
+                    "manual_smu_output",
+                ),
+                lambda: self.relay_service.clear_smu_output_channels(
+                    "manual_smu_stop"
+                ),
                 lambda: self.relay_service.group_on(
                     "white_light", "manual_smu_polarity"
                 ),
@@ -99,8 +121,10 @@ class MainWindowDeviceMixin:
             )
             if not accepted:
                 raise SMUInterlockError("SMU 正忙碌，請稍後再試。")
-            self.status_message.setText("手動輸出：正在重新確認本次接線極性…")
-        except (ValueError, SMUInterlockError) as exc:
+            self.status_message.setText(
+                f"手動輸出：正在以 Break-Before-Make 切換 {channel_id}…"
+            )
+        except (ValueError, SMUInterlockError, RelayError) as exc:
             self.show_smu_error(str(exc))
 
     def on_manual_smu_sequence_finished(self, success: bool) -> None:
@@ -139,7 +163,9 @@ class MainWindowDeviceMixin:
         if not accepted:
             self.show_smu_error("目前無法執行 SMU OUTPUT OFF 安全復歸。")
             return
-        self.status_message.setText("正在執行 SMU OUTPUT OFF 並確認實際輸出狀態。")
+        self.status_message.setText(
+            "正在確認 SMU OUTPUT OFF；確認後將關閉並驗證所有 SMU routing Relay。"
+        )
 
     def request_smu_emergency_off(self) -> None:
         self.emergency_stop_measurement()
@@ -490,6 +516,7 @@ class MainWindowDeviceMixin:
             ),
             "polarity_measurement_settings_snapshot": self.polarity_settings_store.settings.snapshot(),
             "last_manual_polarity_measurement": self.smu_manager.control.last_manual_polarity_snapshot,
+            "manual_smu_routing": self.smu_manager.control.manual_routing_snapshot,
         }
         try:
             image_path, sidecar_path = save_image_and_metadata(self.last_image, path, metadata)

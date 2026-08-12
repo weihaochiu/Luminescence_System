@@ -59,6 +59,9 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.polarity_settings_store = PolaritySettingsStore(polarity_settings_path)
         self.relay_controller = RelayController()
         self.relay_service = RelayService(self.relay_controller, self.relay_settings_store)
+        self.relay_service.set_routing_fault_handler(
+            self.smu_manager.control.request_external_interlock
+        )
         self.emergency_manager = EmergencyManager(
             self.smu_manager.control,
             self.relay_service,
@@ -271,9 +274,9 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API name
         self.stop_background_measurement()
         self.smu_monitor.stop()
-        self.controller.close_camera()
         self.smu_manager.shutdown()
         self.relay_service.shutdown()
+        self.controller.close_camera()
         event.accept()
 
 attach_relay_handlers(MainWindow)
