@@ -99,21 +99,17 @@ class ResponsiveLayoutTests(unittest.TestCase):
                         self.app.processEvents()
                         bar = window.measurement_control_bar
                         emergency = window.emergency_stop_button
-                        header = emergency.parentWidget()
+                        toolbar = window.main_toolbar
                         self.assertEqual(mode, manager.mode)
                         self.assertEqual(mode, bar.layout_mode)
                         self.assertFalse(emergency.isHidden())
                         self.assertLessEqual(
-                            emergency.geometry().right(), header.contentsRect().right()
+                            emergency.geometry().right(), toolbar.contentsRect().right()
                         )
                         self.assertLessEqual(
-                            emergency.geometry().bottom(), header.contentsRect().bottom()
+                            emergency.geometry().bottom(), toolbar.contentsRect().bottom()
                         )
-                        layout = header.layout()
-                        self.assertLess(
-                            layout.indexOf(window.live_actual_size_button),
-                            layout.indexOf(emergency),
-                        )
+                        self.assertNotIn("live_actual_size_button", vars(window))
                         workspace = window.main_splitter.widget(1)
                         self.assertGreaterEqual(workspace.width(), workspace.minimumWidth())
             finally:

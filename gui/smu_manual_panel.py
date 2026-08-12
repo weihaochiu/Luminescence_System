@@ -66,7 +66,7 @@ class ManualSMUPanel(QWidget):
         self.compliance_spin.setDecimals(4)
         self.compliance_spin.setKeyboardTracking(False)
 
-        self.output_button = QPushButton("OUTPUT OFF")
+        self.output_button = QPushButton("輸出")
         self.output_button.setObjectName("manualOutputToggle")
         self.handover_button = QPushButton("安全交接至手動控制")
         self.handover_button.setVisible(False)
@@ -77,12 +77,14 @@ class ManualSMUPanel(QWidget):
         form.addRow(self.setpoint_label, self.setpoint_spin)
         form.addRow(self.compliance_label, self.compliance_spin)
 
+        self.output_value = QLabel("OFF")
         self.factor_value = QLabel("待輸出確認")
         self.voltage_value = QLabel("— V")
         self.current_density_value = QLabel("— mA/cm²")
-        self.compliance_value = QLabel("")
+        self.compliance_value = QLabel("—")
         self.compliance_value.setStyleSheet("color: #b3261e; font-weight: 600;")
         readback = QFormLayout()
+        readback.addRow("輸出狀態", self.output_value)
         readback.addRow("極性", self.factor_value)
         readback.addRow("量測電壓", self.voltage_value)
         readback.addRow("量測電流密度", self.current_density_value)
@@ -113,12 +115,15 @@ class ManualSMUPanel(QWidget):
 
     def apply_ui_state(self, state: SMUUIState) -> None:
         self._ui_state = state
+        self.output_value.setText("ON" if state.output_enabled else "OFF")
         if state.output_enabled:
-            self.output_button.setText("OUTPUT ON")
+            self.output_button.setText("停止")
         elif state.operation is SMUOperationState.BUSY:
-            self.output_button.setText("確認極性中…")
+            self.output_button.setText("正在確認極性…")
+        elif state.operation is SMUOperationState.SHUTTING_DOWN:
+            self.output_button.setText("停止中…")
         else:
-            self.output_button.setText("OUTPUT OFF")
+            self.output_button.setText("輸出")
         self.state_message.setText(state.manual_lock_reason)
         self.setToolTip(state.manual_lock_reason)
         self._update_enabled()
@@ -132,8 +137,8 @@ class ManualSMUPanel(QWidget):
             return
         labels = {
             PolarityState.UNKNOWN: "待輸出確認",
-            PolarityState.NORMAL: "正常 (+1)",
-            PolarityState.REVERSED: "反向 (-1)",
+            PolarityState.NORMAL: "正常",
+            PolarityState.REVERSED: "反向",
             PolarityState.FAILED: "確認失敗",
         }
         self.factor_value.setText(labels[result.state])
@@ -168,15 +173,15 @@ class ManualSMUPanel(QWidget):
             kind = "Current" if self.mode == "CV" else "Voltage"
             self.compliance_value.setText(f"⚠ {kind} Compliance Active")
         else:
-            self.compliance_value.setText("")
+            self.compliance_value.setText("—")
 
     def reset_for_output_off(self) -> None:
         self.factor_value.setText("待輸出確認")
         self.voltage_value.setText("— V")
         self.current_density_value.setText("— mA/cm²")
-        self.compliance_value.setText("")
+        self.compliance_value.setText("—")
         if not self._ui_state.output_enabled:
-            self.output_button.setText("OUTPUT OFF")
+            self.output_button.setText("輸出")
 
     def _update_mode(self) -> None:
         limits = self._limits

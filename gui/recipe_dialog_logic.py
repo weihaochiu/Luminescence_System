@@ -69,16 +69,6 @@ class RecipeDialogLogicMixin:
         self.id_value.setText(recipe.recipe_id)
         self.version_value.setText(f"v{recipe.version}")
 
-        self._set_combo_data(self.light_control_combo, recipe.polarity.light_control)
-        self.light_stable_spin.setValue(recipe.polarity.light_stabilization_s)
-        self.dark_recovery_spin.setValue(recipe.polarity.dark_recovery_s)
-        self.polarity_nplc_spin.setValue(recipe.polarity.nplc)
-        self.polarity_samples_spin.setValue(recipe.polarity.sample_count)
-        self.voc_min_spin.setValue(recipe.polarity.voc_min_v)
-        self.voc_max_spin.setValue(recipe.polarity.voc_max_v)
-        self.jsc_min_spin.setValue(recipe.polarity.jsc_min_ma_cm2)
-        self.jsc_max_spin.setValue(recipe.polarity.jsc_max_ma_cm2)
-        self._set_combo_data(self.polarity_failure_combo, recipe.polarity.failure_action)
 
         self.dark_stable_spin.setValue(recipe.dark_iv.dark_stabilization_s)
         self.dark_start_spin.setValue(recipe.dark_iv.start_v)
@@ -158,16 +148,6 @@ class RecipeDialogLogicMixin:
         recipe.geometry.device_id_required = self.device_id_required_check.isChecked()
 
         recipe.polarity.enabled = True
-        recipe.polarity.light_control = str(self.light_control_combo.currentData())
-        recipe.polarity.light_stabilization_s = self.light_stable_spin.value()
-        recipe.polarity.dark_recovery_s = self.dark_recovery_spin.value()
-        recipe.polarity.nplc = self.polarity_nplc_spin.value()
-        recipe.polarity.sample_count = self.polarity_samples_spin.value()
-        recipe.polarity.voc_min_v = self.voc_min_spin.value()
-        recipe.polarity.voc_max_v = self.voc_max_spin.value()
-        recipe.polarity.jsc_min_ma_cm2 = self.jsc_min_spin.value()
-        recipe.polarity.jsc_max_ma_cm2 = self.jsc_max_spin.value()
-        recipe.polarity.failure_action = str(self.polarity_failure_combo.currentData())
 
         recipe.dark_iv.enabled = True
         recipe.dark_iv.dark_stabilization_s = self.dark_stable_spin.value()
@@ -357,7 +337,7 @@ class RecipeDialogLogicMixin:
             f"狀態：{state}｜Area {recipe.geometry.active_area_cm2:g} cm²\n\n"
             "固定執行流程\n"
             "[1/4] 白光極性確認\n"
-            f"  手動燈源提示；Voc/Jsc 各 {recipe.polarity.sample_count} 次\n"
+            "  使用「設定 → 極性確認…」的全域 Jsc / Voc 條件\n"
             "[2/4] Dark I–V\n"
             f"  {recipe.dark_iv.start_v:g} → {recipe.dark_iv.stop_v:g} V / Step {recipe.dark_iv.step_v:g} V\n"
             f"  {recipe.dark_iv_point_count()} points；{recipe.dark_iv.current_compliance_ma:g} mA compliance\n"

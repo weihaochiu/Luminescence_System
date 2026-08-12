@@ -13,6 +13,11 @@ from typing import Any, Callable
 from PySide6.QtCore import QObject, Signal
 
 from .smu_base import SMUDriver
+from .polarity_measurement import (
+    PolarityMeasurementError,
+    PolarityMeasurementService,
+)
+from .polarity_settings import PolarityMeasurementSettings
 
 
 LOG = logging.getLogger(__name__)
@@ -96,34 +101,6 @@ class PolarityService:
             )
         return float(requested_value) * self._factor
 
-    @staticmethod
-    def determine_manual(
-        jsc_current_a: float,
-        voc_v: float,
-        *,
-        minimum_current_a: float = 1e-9,
-        minimum_voltage_v: float = 1e-6,
-    ) -> "ManualPolarityResult":
-        """Map an illuminated Jsc/Voc pair without carrying state across runs."""
-
-        current = float(jsc_current_a)
-        voltage = float(voc_v)
-        if abs(current) < minimum_current_a or abs(voltage) < minimum_voltage_v:
-            state = PolarityState.FAILED
-        elif voltage > 0.0 and current < 0.0:
-            state = PolarityState.NORMAL
-        elif voltage < 0.0 and current > 0.0:
-            state = PolarityState.REVERSED
-        else:
-            state = PolarityState.FAILED
-        return ManualPolarityResult(
-            state=state,
-            factor=POLARITY_FACTORS.get(state),
-            jsc_current_a=current,
-            voc_v=voltage,
-        )
-
-
 class SMUSafetyService:
     def __init__(self, limits: SMUSafetyLimits | None = None) -> None:
         self.limits = limits or SMUSafetyLimits()
@@ -205,6 +182,7 @@ class SMUControlManager(QObject):
     ) -> None:
         super().__init__(parent)
         self.polarity = polarity or PolarityService()
+        self.polarity_measurement = PolarityMeasurementService()
         self.safety = safety or SMUSafetyService()
         self._driver: SMUDriver | None = None
         self._ownership = SMUOwnership.IDLE
@@ -217,6 +195,7 @@ class SMUControlManager(QObject):
         self._manual_cancel_latch = Event()
         self._manual_generation = 0
         self._manual_polarity = ManualPolarityResult(PolarityState.UNKNOWN, None)
+        self._last_manual_polarity_snapshot: dict[str, Any] | None = None
         self._operation_state = SMUOperationState.READY
         self._mode = "CC"
         self._lock = RLock()
@@ -260,6 +239,15 @@ class SMUControlManager(QObject):
             return self._manual_polarity
 
     @property
+    def last_manual_polarity_snapshot(self) -> dict[str, Any] | None:
+        with self._lock:
+            return (
+                None
+                if self._last_manual_polarity_snapshot is None
+                else dict(self._last_manual_polarity_snapshot)
+            )
+
+    @property
     def operation_state(self) -> SMUOperationState:
         with self._lock:
             return self._operation_state
@@ -297,6 +285,7 @@ class SMUControlManager(QObject):
             self._manual_cancel_latch.clear()
             self._manual_generation += 1
             self._manual_polarity = ManualPolarityResult(PolarityState.UNKNOWN, None)
+            self._last_manual_polarity_snapshot = None
             self._ownership = SMUOwnership.IDLE
             self._operation_state = SMUOperationState.READY
         self.output_changed.emit(False)
@@ -412,15 +401,31 @@ class SMUControlManager(QObject):
         area_cm2: float,
         light_on: Callable[[], None],
         light_off: Callable[[], None],
-        *,
-        stabilization_s: float = 0.25,
+        settings: PolarityMeasurementSettings,
     ) -> bool:
         """Run a new illuminated polarity check before every Manual OUTPUT ON."""
 
         if area_cm2 <= 0.0:
             raise ValueError("Device area must be greater than 0 cm²")
-        if stabilization_s < 0.0:
-            raise ValueError("Illumination stabilization time cannot be negative")
+        settings_errors = settings.validate()
+        if settings_errors:
+            raise ValueError("Polarity settings are invalid: " + "; ".join(settings_errors))
+        polarity_current_compliance_a = (
+            settings.jsc_compliance_ma_cm2 * area_cm2 / 1000.0
+        )
+        limits = self.safety.limits
+        if polarity_current_compliance_a > limits.maximum_current_compliance_a:
+            raise ValueError(
+                "Polarity Jsc current compliance exceeds the SMU safety limit: "
+                f"{polarity_current_compliance_a * 1000:g} mA > "
+                f"{limits.maximum_current_compliance_a * 1000:g} mA"
+            )
+        if settings.voc_compliance_v > limits.maximum_voltage_compliance_v:
+            raise ValueError(
+                "Polarity Voc voltage compliance exceeds the SMU safety limit: "
+                f"{settings.voc_compliance_v:g} V > "
+                f"{limits.maximum_voltage_compliance_v:g} V"
+            )
         self.safety.validate(mode, requested, compliance)
         with self._lock:
             if self._pending:
@@ -438,6 +443,7 @@ class SMUControlManager(QObject):
             generation = self._manual_generation
             self._manual_cancel_latch.clear()
             self._manual_polarity = ManualPolarityResult(PolarityState.UNKNOWN, None)
+            self._last_manual_polarity_snapshot = None
             self._ownership = SMUOwnership.MANUAL
             self._operation_state = SMUOperationState.BUSY
 
@@ -453,47 +459,40 @@ class SMUControlManager(QObject):
 
         def operation() -> None:
             success = False
-            light_enabled = False
             try:
-                self._check_manual_generation(generation)
-                self.manual_sequence_status.emit("開啟白光…")
-                light_on()
-                light_enabled = True
-                self._wait_for_manual_stabilization(generation, stabilization_s)
-
-                self.manual_sequence_status.emit("量測 Jsc…")
                 with self._io_lock:
                     driver = self._required_driver()
-                    self._check_manual_generation(generation)
-                    current_limit = self.safety.limits.maximum_current_compliance_a
-                    driver.configure_voltage_source(0.0, current_limit)
-                    jsc_current_a = self._measure_with_temporary_output(
+                    measured = self.polarity_measurement.measure(
                         driver,
-                        generation,
-                        driver.measure_current,
+                        settings,
+                        area_cm2,
+                        light_on=light_on,
+                        light_off=light_off,
+                        check_cancel=lambda: self._check_manual_generation(generation),
+                        wait_ms=lambda milliseconds: self._wait_for_manual_stabilization(
+                            generation,
+                            milliseconds / 1000.0,
+                        ),
+                        status=self.manual_sequence_status.emit,
                     )
-
-                    self.manual_sequence_status.emit("量測 Voc…")
-                    voltage_limit = self.safety.limits.maximum_voltage_compliance_v
-                    driver.configure_current_source(0.0, voltage_limit)
-                    voc_v = self._measure_with_temporary_output(
-                        driver,
-                        generation,
-                        driver.measure_voltage,
-                    )
-
-                self.manual_sequence_status.emit("判斷極性…")
-                result = self.polarity.determine_manual(jsc_current_a, voc_v)
+                result = ManualPolarityResult(
+                    state=PolarityState(measured.state),
+                    factor=measured.factor,
+                    jsc_current_a=measured.jsc_ma_cm2.representative * area_cm2 / 1000.0,
+                    voc_v=measured.voc_v.representative,
+                )
                 with self._lock:
                     self._manual_polarity = result
+                    self._last_manual_polarity_snapshot = measured.to_dict()
                 self.manual_polarity_changed.emit(result)
                 LOG.info(
-                    "MANUAL_SMU POLARITY JSC_A=%+.9g JSC_MA_CM2=%+.9g VOC_V=%+.9g result=%s factor=%s",
-                    jsc_current_a,
-                    jsc_current_a * 1000.0 / area_cm2,
-                    voc_v,
+                    "MANUAL_SMU POLARITY JSC_A=%+.9g JSC_MA_CM2=%+.9g VOC_V=%+.9g result=%s factor=%s snapshot=%s",
+                    result.jsc_current_a,
+                    measured.jsc_ma_cm2.representative,
+                    result.voc_v,
                     result.state.value,
                     result.factor,
+                    measured.to_dict(),
                 )
                 if result.factor is None:
                     raise SMUInterlockError(
@@ -501,10 +500,6 @@ class SMUControlManager(QObject):
                     )
 
                 self._check_manual_generation(generation)
-                self.manual_sequence_status.emit("關閉白光…")
-                light_off()
-                light_enabled = False
-
                 physical = float(requested) * result.factor
                 self.safety.validate(mode, physical, compliance)
                 self.manual_sequence_status.emit("設定 SMU…")
@@ -554,22 +549,29 @@ class SMUControlManager(QObject):
                     generation,
                 )
                 raise
-            except Exception:
+            except Exception as exc:
                 with self._lock:
                     self._manual_polarity = ManualPolarityResult(
                         PolarityState.FAILED,
                         None,
                     )
                     failed_result = self._manual_polarity
+                    if self._last_manual_polarity_snapshot is None:
+                        self._last_manual_polarity_snapshot = {
+                            "settings_snapshot": settings.snapshot(),
+                            "polarity_result": PolarityState.FAILED.value,
+                            "polarity_factor": None,
+                            "failure_reason": str(exc),
+                            "partial_results": (
+                                exc.details
+                                if isinstance(exc, PolarityMeasurementError)
+                                else {}
+                            ),
+                        }
                 self.manual_polarity_changed.emit(failed_result)
                 LOG.exception("MANUAL_SMU OUTPUT_ON_ABORT generation=%d", generation)
                 raise
             finally:
-                if light_enabled:
-                    try:
-                        light_off()
-                    except Exception:
-                        LOG.exception("MANUAL_SMU White Light OFF cleanup failed")
                 self.manual_sequence_finished.emit(success)
 
         accepted = self._submit(

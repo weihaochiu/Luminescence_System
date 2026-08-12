@@ -41,17 +41,20 @@ class MainToolbarStructureTests(unittest.TestCase):
                 "capture_action",
                 "auto_capture_action",
                 "fit_action",
+                "actual_action",
             ],
             action_names,
         )
 
-    def test_actual_size_and_global_emergency_are_in_live_view_header(self) -> None:
+    def test_actual_size_and_global_emergency_are_in_main_toolbar(self) -> None:
         source = self.source_path.read_text(encoding="utf-8")
-        actual = source.index("header_layout.addWidget(self.live_actual_size_button)")
-        emergency = source.index("header_layout.addWidget(self.emergency_stop_button)")
+        actual = source.index("toolbar.addAction(self.actual_action)")
+        emergency = source.index("toolbar.addWidget(self.emergency_stop_button)")
         self.assertLess(actual, emergency)
         self.assertIn('QPushButton("⚠ 緊急停止")', source)
         self.assertIn('setObjectName("globalEmergencyStop")', source)
+        self.assertNotIn("live_actual_size_button", source)
+        self.assertNotIn("header_layout.addWidget(self.emergency_stop_button)", source)
 
     def test_toolbar_buttons_use_font_metrics_minimum_size(self) -> None:
         calls = []

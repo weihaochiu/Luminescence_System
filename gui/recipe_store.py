@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .numeric import decimal_from_number, normalize_json_numbers, quantize_number
+from .polarity_settings import PolarityMeasurementSettings
 from uuid import uuid4
 
 
@@ -35,17 +36,9 @@ class GeometryRecipe:
 
 @dataclass
 class PolarityRecipe:
+    """Recipe opt-in only; all measurement conditions are application-wide."""
+
     enabled: bool = True
-    light_control: str = "manual"
-    light_stabilization_s: float = 2.0
-    dark_recovery_s: float = 5.0
-    nplc: float = 1.0
-    sample_count: int = 3
-    voc_min_v: float = 0.20
-    voc_max_v: float = 1.50
-    jsc_min_ma_cm2: float = 1.0
-    jsc_max_ma_cm2: float = 40.0
-    failure_action: str = "confirm"
 
 
 @dataclass
@@ -304,12 +297,6 @@ class Recipe:
             errors.append("極性確認是 EL Recipe 的必做階段")
         if not self.dark_iv.enabled:
             errors.append("Dark I–V 是 EL Recipe 的必做階段")
-        if self.polarity.sample_count < 1 or self.polarity.nplc <= 0:
-            errors.append("極性確認的取樣次數與 NPLC 必須大於 0")
-        if self.polarity.voc_min_v >= self.polarity.voc_max_v:
-            errors.append("Voc 合理範圍的上限必須大於下限")
-        if self.polarity.jsc_min_ma_cm2 >= self.polarity.jsc_max_ma_cm2:
-            errors.append("Jsc 合理範圍的上限必須大於下限")
         if self.dark_iv.step_v <= 0 or self.dark_iv.start_v == self.dark_iv.stop_v:
             errors.append("Dark I–V 必須設定非零範圍及大於 0 的 Step")
         if max(abs(self.dark_iv.start_v), abs(self.dark_iv.stop_v)) > self.safety.max_voltage_v:
@@ -417,11 +404,20 @@ class Recipe:
         return errors
 
     def estimated_time_s(self, hdr_settings: Any | None = None) -> float:
+        # Polarity duration is global and captured at execution time; a Recipe
+        # no longer owns a second, potentially stale parameter set. The editor
+        # uses the system defaults for its non-binding estimate because Recipe
+        # execution is not currently enabled.
+        polarity = PolarityMeasurementSettings()
         polarity_time = (
-            self.polarity.light_stabilization_s
-            + self.polarity.dark_recovery_s
-            + self.polarity.sample_count * self.polarity.nplc / 50.0 * 2
-        )
+            polarity.white_light_stabilization_ms
+            + polarity.jsc_settle_ms
+            + polarity.voc_settle_ms
+        ) / 1000.0
+        if polarity.anti_flicker_enabled:
+            polarity_time += (
+                polarity.jsc_sample_count + polarity.voc_sample_count
+            ) * polarity.integration_nplc / polarity.mains_frequency_hz
         dark_iv_time = (
             self.dark_iv.dark_stabilization_s
             + self.dark_iv_point_count() * (self.dark_iv.dwell_s + self.dark_iv.nplc / 50.0)

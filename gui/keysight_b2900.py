@@ -53,3 +53,50 @@ class KeysightB2900Driver(SMUDriver):
             return False
         return None
 
+    @staticmethod
+    def _nplc_function(mode: str) -> str:
+        normalized = str(mode).strip().upper()
+        if normalized not in {"CURR", "VOLT"}:
+            raise ValueError("Measurement NPLC mode must be CURR or VOLT")
+        return normalized
+
+    def supports_measurement_nplc(self, mode: str) -> bool:
+        try:
+            self._nplc_function(mode)
+        except ValueError:
+            return False
+        return True
+
+    def get_measurement_nplc(self, mode: str) -> float | None:
+        function = self._nplc_function(mode)
+        try:
+            return float(str(self.resource.query(f":SENS:{function}:NPLC?")).strip())
+        except Exception:
+            return None
+
+    def set_measurement_nplc(self, mode: str, nplc: float) -> None:
+        function = self._nplc_function(mode)
+        if not 0.001 <= float(nplc) <= 100.0:
+            raise ValueError("B2900 NPLC must be between 0.001 and 100")
+        self.resource.write(f":SENS:{function}:NPLC {format_scpi_number(nplc)}")
+
+    def get_measurement_nplc_auto(self, mode: str) -> bool | None:
+        function = self._nplc_function(mode)
+        try:
+            response = str(self.resource.query(f":SENS:{function}:NPLC:AUTO?")).strip().upper()
+        except Exception:
+            return None
+        if response in {"1", "ON"}:
+            return True
+        if response in {"0", "OFF"}:
+            return False
+        return None
+
+    def supports_measurement_nplc_auto(self, mode: str) -> bool:
+        return self.supports_measurement_nplc(mode)
+
+    def set_measurement_nplc_auto(self, mode: str, enabled: bool) -> None:
+        function = self._nplc_function(mode)
+        state = "ON" if enabled else "OFF"
+        self.resource.write(f":SENS:{function}:NPLC:AUTO {state}")
+

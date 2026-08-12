@@ -12,6 +12,7 @@ from gui.smu_control import (
     SMUOperationState,
     SMUOwnership,
 )
+from gui.polarity_settings import PolarityMeasurementSettings
 
 
 class SequenceSMU:
@@ -23,6 +24,8 @@ class SequenceSMU:
         self.fail_configuration = False
         self.measure_current_entered: threading.Event | None = None
         self.release_measure_current: threading.Event | None = None
+        self.measure_voltage_entered: threading.Event | None = None
+        self.release_measure_voltage: threading.Event | None = None
 
     def configure_voltage_source(self, volts: float, compliance: float) -> None:
         if self.fail_configuration:
@@ -52,6 +55,10 @@ class SequenceSMU:
 
     def measure_voltage(self) -> float:
         self.events.append("MEASURE_VOC")
+        if self.measure_voltage_entered is not None:
+            self.measure_voltage_entered.set()
+        if self.release_measure_voltage is not None:
+            self.release_measure_voltage.wait(2.0)
         return self.voc_v
 
     def query_compliance_tripped(self, _mode: str) -> bool:
@@ -82,6 +89,17 @@ class ManualSMUSequenceTests(unittest.TestCase):
         self.fail("condition did not become true")
 
     def request(self, *, stabilization_s: float = 0.0) -> bool:
+        settings = PolarityMeasurementSettings(
+            white_light_stabilization_ms=round(stabilization_s * 1000),
+            anti_flicker_enabled=False,
+            jsc_settle_ms=0,
+            jsc_sample_count=1,
+            jsc_minimum_valid_ma_cm2=0.001,
+            jsc_compliance_ma_cm2=20.0,
+            voc_settle_ms=0,
+            voc_sample_count=1,
+            voc_minimum_valid_v=0.001,
+        )
         return self.control.request_manual_output_sequence(
             "CC",
             0.006,
@@ -89,8 +107,25 @@ class ManualSMUSequenceTests(unittest.TestCase):
             2.0,
             lambda: self.events.append("LIGHT_ON"),
             lambda: self.events.append("LIGHT_OFF"),
-            stabilization_s=stabilization_s,
+            settings,
         )
+
+    def test_polarity_compliance_must_fit_smu_safety_limits(self) -> None:
+        settings = PolarityMeasurementSettings(
+            white_light_stabilization_ms=0,
+            jsc_compliance_ma_cm2=50.0,
+        )
+        with self.assertRaisesRegex(ValueError, "Jsc current compliance"):
+            self.control.request_manual_output_sequence(
+                "CC",
+                0.006,
+                2.0,
+                2.0,
+                lambda: None,
+                lambda: None,
+                settings,
+            )
+        self.assertFalse(self.events)
 
     def test_current_density_sequence_measures_polarity_before_output(self) -> None:
         results = []
@@ -164,7 +199,14 @@ class ManualSMUSequenceTests(unittest.TestCase):
                 1.0,
                 fail_light,
                 lambda: self.events.append("LIGHT_OFF"),
-                stabilization_s=0.0,
+                PolarityMeasurementSettings(
+                    white_light_stabilization_ms=0,
+                    anti_flicker_enabled=False,
+                    jsc_settle_ms=0,
+                    jsc_sample_count=1,
+                    voc_settle_ms=0,
+                    voc_sample_count=1,
+                ),
             )
         )
         self.wait_until(
@@ -202,6 +244,31 @@ class ManualSMUSequenceTests(unittest.TestCase):
 
         self.assertFalse(self.driver.output)
         self.assertNotEqual(SMUOperationState.OUTPUT_ON, self.control.operation_state)
+        final_nonzero = [
+            event
+            for event in self.events
+            if isinstance(event, tuple)
+            and event[0] in ("CC", "CV")
+            and abs(event[1]) > 0.0
+        ]
+        self.assertEqual([], final_nonzero)
+
+    def test_emergency_during_voc_sampling_never_reaches_formal_output(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        self.driver.measure_voltage_entered = entered
+        self.driver.release_measure_voltage = release
+        self.assertTrue(self.request())
+        self.assertTrue(entered.wait(1.0))
+
+        self.assertTrue(self.control.request_emergency_off())
+        release.set()
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and not self.control.is_busy,
+            timeout=3.0,
+        )
+        self.assertFalse(self.driver.output)
         final_nonzero = [
             event
             for event in self.events

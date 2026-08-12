@@ -3,6 +3,7 @@ from __future__ import annotations
 """Shared SCPI primitives and driver contract for supported SMUs."""
 
 from dataclasses import asdict, dataclass
+from contextlib import contextmanager
 from typing import Any
 
 
@@ -83,6 +84,59 @@ class SMUDriver:
         if response in {"0", "OFF"}:
             return False
         return None
+
+    def supports_measurement_nplc(self, mode: str) -> bool:
+        del mode
+        return False
+
+    def get_measurement_nplc(self, mode: str) -> float | None:
+        del mode
+        return None
+
+    def set_measurement_nplc(self, mode: str, nplc: float) -> None:
+        del mode, nplc
+        raise NotImplementedError("This SMU driver does not support measurement NPLC")
+
+    def get_measurement_nplc_auto(self, mode: str) -> bool | None:
+        del mode
+        return None
+
+    def supports_measurement_nplc_auto(self, mode: str) -> bool:
+        del mode
+        return False
+
+    def set_measurement_nplc_auto(self, mode: str, enabled: bool) -> None:
+        del mode, enabled
+        raise NotImplementedError("This SMU driver does not support automatic measurement NPLC")
+
+    @contextmanager
+    def temporary_measurement_nplc(self, mode: str, nplc: float):
+        """Apply integration only when supported, restoring the prior value."""
+
+        if not self.supports_measurement_nplc(mode):
+            yield False
+            return
+        previous = self.get_measurement_nplc(mode)
+        if previous is None:
+            raise RuntimeError("Cannot safely change NPLC because its current value is unavailable")
+        previous_auto: bool | None = None
+        if self.supports_measurement_nplc_auto(mode):
+            previous_auto = self.get_measurement_nplc_auto(mode)
+            if previous_auto is None:
+                raise RuntimeError(
+                    "Cannot safely change NPLC because its automatic-mode state is unavailable"
+                )
+        try:
+            if previous_auto is not None:
+                self.set_measurement_nplc_auto(mode, False)
+            self.set_measurement_nplc(mode, nplc)
+            yield True
+        finally:
+            try:
+                self.set_measurement_nplc(mode, previous)
+            finally:
+                if previous_auto is not None:
+                    self.set_measurement_nplc_auto(mode, previous_auto)
 
     def safe_stop(self) -> list[str]:
         """Best effort, OFF-first neutralization with explicit OFF confirmation."""

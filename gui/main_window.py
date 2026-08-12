@@ -21,6 +21,8 @@ from .main_window_ui import MainWindowUIMixin
 from .main_window_measurement import attach_measurement_handlers
 from .recipe_dialog import RecipeManagerDialog
 from .recipe_store import Recipe, RecipeStore
+from .polarity_settings import PolaritySettingsStore
+from .polarity_settings_dialog import PolaritySettingsDialog
 from .relay_controller import RelayController, RelayService
 from .main_window_relay import attach_relay_handlers
 from .relay_settings import RelaySettingsStore
@@ -51,6 +53,10 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         )
         relay_settings_path = (Path(app_data) if app_data else Path.cwd()) / "relay_settings.json"
         self.relay_settings_store = RelaySettingsStore(relay_settings_path)
+        polarity_settings_path = (
+            Path(app_data) if app_data else Path.cwd()
+        ) / "polarity_settings.json"
+        self.polarity_settings_store = PolaritySettingsStore(polarity_settings_path)
         self.relay_controller = RelayController()
         self.relay_service = RelayService(self.relay_controller, self.relay_settings_store)
         self.emergency_manager = EmergencyManager(
@@ -134,6 +140,13 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
                 "HDR 系統設定已更新；既有量測快照與 T0 Profile 不會被覆寫"
             )
             self._update_measurement_controls()
+
+    def open_polarity_settings(self) -> None:
+        dialog = PolaritySettingsDialog(self.polarity_settings_store, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.status_message.setText(
+                "極性確認共用設定已更新；後續手動輸出與 Recipe 將使用新設定"
+            )
 
     def choose_measurement_output_root(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "選擇量測資料儲存位置")

@@ -41,7 +41,8 @@ class SMUUIStructureTests(unittest.TestCase):
             "設定電流密度",
             "Voltage Compliance",
             "Current Compliance",
-            "OUTPUT OFF",
+            'QPushButton("輸出")',
+            'QLabel("OFF")',
             "量測電壓",
             "量測電流密度",
             "待輸出確認",
@@ -104,10 +105,16 @@ class SMUUIStructureTests(unittest.TestCase):
         if self.app is None:
             self.skipTest("A non-GUI Qt application already exists")
         panel = ManualSMUPanel()
+        self.assertEqual("輸出", panel.output_button.text())
+        self.assertEqual("OFF", panel.output_value.text())
         ready = self.ready_state()
         panel.apply_ui_state(ready)
         panel.update_polarity(ManualPolarityResult(PolarityState.NORMAL, 1))
         self.assertTrue(panel.output_button.isEnabled())
+
+        panel.apply_ui_state(replace(ready, output_enabled=True, manual_editable=False, manual_off_enabled=True))
+        self.assertEqual("停止", panel.output_button.text())
+        self.assertEqual("ON", panel.output_value.text())
 
         panel.apply_ui_state(
             replace(
@@ -147,7 +154,7 @@ class SMUUIStructureTests(unittest.TestCase):
             )
         )
         self.assertTrue(panel.output_button.isEnabled())
-        self.assertEqual("OUTPUT ON", panel.output_button.text())
+        self.assertEqual("停止", panel.output_button.text())
         self.assertFalse(hasattr(panel, "off_button"))
         self.assertFalse(hasattr(panel, "emergency_button"))
 
@@ -160,9 +167,9 @@ class SMUUIStructureTests(unittest.TestCase):
         panel = ManualSMUPanel()
         self.assertEqual("待輸出確認", panel.factor_value.text())
         panel.update_polarity(ManualPolarityResult(PolarityState.REVERSED, -1))
-        self.assertEqual("反向 (-1)", panel.factor_value.text())
+        self.assertEqual("反向", panel.factor_value.text())
         panel.update_command("CC", 0.002, 0.002, 2.0, 1)
-        self.assertEqual("反向 (-1)", panel.factor_value.text())
+        self.assertEqual("反向", panel.factor_value.text())
 
     def test_density_and_current_compliance_are_converted_with_area(self) -> None:
         if self.app is None:
@@ -199,7 +206,7 @@ class SMUUIStructureTests(unittest.TestCase):
         )
         self.assertEqual("— V", panel.voltage_value.text())
         self.assertEqual("— mA/cm²", panel.current_density_value.text())
-        self.assertEqual("", panel.compliance_value.text())
+        self.assertEqual("—", panel.compliance_value.text())
 
     def test_readback_uses_measured_current_not_requested_value(self) -> None:
         if self.app is None:

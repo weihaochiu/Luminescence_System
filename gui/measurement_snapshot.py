@@ -21,6 +21,8 @@ def build_measurement_snapshot(
     exposure_plan: Any | None = None,
     execution_summary: dict[str, Any] | None = None,
     output_records: list[dict[str, Any]] | None = None,
+    polarity_settings: Any | None = None,
+    polarity_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Capture the complete effective configuration used by one measurement."""
     profile_payload = hdr_profile.to_dict() if hdr_profile is not None else None
@@ -53,6 +55,12 @@ def build_measurement_snapshot(
             "execution": execution_summary,
         },
         "camera": dict(camera_info or {}),
+        "polarity_measurement": {
+            "system_settings_snapshot": (
+                polarity_settings.snapshot() if polarity_settings is not None else None
+            ),
+            "result": dict(polarity_result or {}),
+        },
         "smu_scan": {
             "drive_mode": recipe.el_sweep.drive_mode,
             "setpoint_basis": recipe.el_sweep.setpoint_basis,

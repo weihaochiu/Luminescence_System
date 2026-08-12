@@ -95,6 +95,7 @@ class MainWindowDeviceMixin:
                 lambda: self.relay_service.group_off(
                     "white_light", "manual_smu_polarity"
                 ),
+                self.polarity_settings_store.settings,
             )
             if not accepted:
                 raise SMUInterlockError("SMU 正忙碌，請稍後再試。")
@@ -487,6 +488,8 @@ class MainWindowDeviceMixin:
                 if self.device_panel.selected_smu() is not None
                 else ""
             ),
+            "polarity_measurement_settings_snapshot": self.polarity_settings_store.settings.snapshot(),
+            "last_manual_polarity_measurement": self.smu_manager.control.last_manual_polarity_snapshot,
         }
         try:
             image_path, sidecar_path = save_image_and_metadata(self.last_image, path, metadata)

@@ -116,6 +116,19 @@ class EmergencyManager(QObject):
             failures.append(f"SMU OUTPUT OFF: {exc}")
             LOG.exception("GLOBAL_EMERGENCY SMU shutdown request failed")
 
+        # White Light OFF is attempted before callbacks because camera SDK close
+        # or a worker callback may block. Optical power must not wait for them.
+        try:
+            actions["White Light OFF"] = bool(
+                self.relay_service.safe_white_light_off("global_emergency")
+            )
+            if not actions["White Light OFF"] and self.relay_service.controller.connected:
+                failures.append("White Light OFF: could not verify OFF")
+        except Exception as exc:  # noqa: BLE001 - callbacks still need cancellation
+            actions["White Light OFF"] = False
+            failures.append(f"White Light OFF: {exc}")
+            LOG.exception("GLOBAL_EMERGENCY White Light shutdown failed")
+
         for name, action in abort_actions:
             try:
                 action()
@@ -125,17 +138,6 @@ class EmergencyManager(QObject):
                 actions[name] = False
                 failures.append(f"{name}: {exc}")
                 LOG.exception("GLOBAL_EMERGENCY action=%s failed", name)
-
-        try:
-            actions["White Light OFF"] = bool(
-                self.relay_service.safe_white_light_off("global_emergency")
-            )
-            if not actions["White Light OFF"] and self.relay_service.controller.connected:
-                failures.append("White Light OFF: could not verify OFF")
-        except Exception as exc:  # noqa: BLE001 - report without masking other results
-            actions["White Light OFF"] = False
-            failures.append(f"White Light OFF: {exc}")
-            LOG.exception("GLOBAL_EMERGENCY White Light shutdown failed")
 
         report = EmergencyReport(
             timestamp=timestamp,

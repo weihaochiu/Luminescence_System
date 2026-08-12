@@ -71,13 +71,13 @@ class EmergencyManagerTests(unittest.TestCase):
         self.assertEqual(2, self.relay.calls)
 
     def test_smu_abort_latch_is_requested_before_other_callbacks(self) -> None:
-        observed: list[int] = []
+        observed: list[tuple[int, int]] = []
         self.manager.register_abort_action(
             "slow camera callback",
-            lambda: observed.append(self.smu.calls),
+            lambda: observed.append((self.smu.calls, self.relay.calls)),
         )
         self.manager.trigger("manual polarity")
-        self.assertEqual([1], observed)
+        self.assertEqual([(1, 1)], observed)
 
     def test_explicit_new_operation_uses_new_generation_token(self) -> None:
         stale = self.manager.begin_operator_operation()

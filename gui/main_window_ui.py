@@ -74,6 +74,8 @@ class MainWindowUIMixin:
         self.recipe_manager_action.setToolTip("建立、編輯、驗證或匯入／匯出 Recipe（Ctrl+R）")
         self.hdr_settings_action = QAction("HDR…", self)
         self.hdr_settings_action.setToolTip("設定共用的定量 HDR 參數與過曝提前終止規則")
+        self.polarity_settings_action = QAction("極性確認…", self)
+        self.polarity_settings_action.setToolTip("設定手動輸出與 Recipe 共用的 Jsc / Voc 極性確認條件")
         self.relay_settings_action = QAction("Relay 設定…", self)
         self.relay_settings_action.setToolTip("設定 USBRelay8 Channel、群組與手動測試")
         self.smu_auto_connect_action = QAction("啟動時自動連線 SMU", self)
@@ -95,6 +97,7 @@ class MainWindowUIMixin:
         self.about_action.triggered.connect(self.show_about)
         self.recipe_manager_action.triggered.connect(self.open_recipe_manager)
         self.hdr_settings_action.triggered.connect(self.open_hdr_settings)
+        self.polarity_settings_action.triggered.connect(self.open_polarity_settings)
         self.relay_settings_action.triggered.connect(self.open_relay_settings)
         self.smu_auto_connect_action.toggled.connect(
             lambda enabled: self.settings.setValue("devices/auto_connect_smu", enabled)
@@ -117,6 +120,7 @@ class MainWindowUIMixin:
 
         settings_menu = self.menuBar().addMenu("設定(&S)")
         settings_menu.addAction(self.recipe_manager_action)
+        settings_menu.addAction(self.polarity_settings_action)
         settings_menu.addAction(self.hdr_settings_action)
         settings_menu.addAction(self.relay_settings_action)
         settings_menu.addSeparator()
@@ -142,6 +146,13 @@ class MainWindowUIMixin:
         toolbar.addAction(self.auto_capture_action)
         toolbar.addSeparator()
         toolbar.addAction(self.fit_action)
+        toolbar.addAction(self.actual_action)
+        self.emergency_stop_button = QPushButton("⚠ 緊急停止")
+        self.emergency_stop_button.setObjectName("globalEmergencyStop")
+        self.emergency_stop_button.setToolTip(
+            "立即封鎖 SMU 輸出，關閉白光，取消量測並停止相機擷取。"
+        )
+        toolbar.addWidget(self.emergency_stop_button)
 
         # Use font metrics so Windows DPI scaling cannot clip toolbar labels. Qt
         # moves excess actions into its overflow menu on compact windows.
@@ -301,18 +312,6 @@ class MainWindowUIMixin:
         self.view_title.setStyleSheet("font-weight: 600;")
         header_layout.addWidget(self.view_title)
         header_layout.addStretch()
-        self.live_actual_size_button = QToolButton()
-        self.live_actual_size_button.setDefaultAction(self.actual_action)
-        self.live_actual_size_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
-        self.emergency_stop_button = QPushButton("⚠ 緊急停止")
-        self.emergency_stop_button.setObjectName("globalEmergencyStop")
-        self.emergency_stop_button.setToolTip(
-            "立即取消 active workflow，並嘗試關閉 SMU、白光與相機擷取。"
-        )
-        header_layout.addWidget(self.live_actual_size_button)
-        header_layout.addWidget(self.emergency_stop_button)
 
         workspace = QWidget()
         workspace_layout = QVBoxLayout(workspace)
