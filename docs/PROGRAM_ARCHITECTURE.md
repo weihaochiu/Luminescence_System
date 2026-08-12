@@ -1,7 +1,7 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.5.2
-對應程式版本：V1.5.2
+文件版本：1.6.0
+對應程式版本：V1.6.0
 最後更新：2026-08-12（UTC+8）
 
 ## 1. 文件目的
@@ -42,7 +42,7 @@
 
 `MainWindow` 使用少量 mixin 組合完整行為。Mixin 只用來分離大型 UI 類別的明確職責，不應再拆成每個按鈕或每個事件一個檔案。
 
-曝光控制的 widget 狀態統一由 `main_window_devices.py::_update_exposure_control_state()` 決定。共用的相機連線／中斷函式不可直接覆寫 Exposure、Gain、自動曝光目標或套用按鈕的個別狀態，避免連線狀態與自動／手動模式互相衝突。
+曝光控制的 widget 狀態統一由 `main_window_devices.py::_update_exposure_control_state()` 決定。`ExposureMode` 與影像亮度目標驗證位於 `camera_exposure.py`；目前影像亮度的 0–255 preview 計算位於 `image_brightness.py`。`CameraController` 負責 SDK capability/status query 與 300 ms refresh，GUI 只呈現狀態並 routing 使用者命令。共用的相機連線／中斷函式不可直接覆寫 Exposure、Gain、影像亮度目標或套用按鈕的個別狀態，避免連線狀態與自動／手動模式互相衝突。
 
 類別內不需要 instance 狀態的格式化 helper 必須明確使用 `@staticmethod`；其餘方法必須保留 `self`／`cls` 參數。`_format_exposure()` 由相機開啟、手動套用與自動曝光訊號共同呼叫，測試需驗證其 descriptor 綁定方式，不能只檢查函式內容。
 

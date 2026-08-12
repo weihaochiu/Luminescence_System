@@ -11,6 +11,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from . import __version__
+from .camera_exposure import ExposureMode, validate_auto_target
 from .image_io import save_image_and_metadata
 from .instrument_state_manager import SMUUIState
 from .smu_base import SMUDevice
@@ -198,15 +199,39 @@ class MainWindowDeviceMixin:
                 self.resolution_combo.addItem(f"{width} × {height}")
             self.resolution_combo.setCurrentIndex(info["resolution_index"])
 
-        exp_min, exp_max, _ = info["exposure_range_us"]
-        gain_min, gain_max, _ = info["gain_range"]
-        self.exposure_spin.setRange(exp_min / 1000.0, exp_max / 1000.0)
-        self.gain_spin.setRange(gain_min, gain_max)
-        self.auto_target_spin.setValue(info["auto_target"])
-        self.on_exposure_changed(info["exposure_us"], info["gain"])
+        exposure_range = info.get("exposure_range_us")
+        gain_range = info.get("gain_range")
+        if exposure_range is not None:
+            exp_min, exp_max, _ = exposure_range
+            self.exposure_spin.setRange(exp_min / 1000.0, exp_max / 1000.0)
+            self.exposure_spin.setToolTip(
+                "相機允許曝光範圍：\n"
+                f"{exp_min / 1000.0:.3f}–{exp_max / 1000.0:.3f} ms"
+            )
+        else:
+            self.exposure_spin.setToolTip("無法從相機 SDK 取得曝光時間硬體範圍")
+        if gain_range is not None:
+            gain_min, gain_max, _ = gain_range
+            self.gain_spin.setRange(gain_min, gain_max)
+            self.gain_spin.setToolTip(
+                f"相機允許 Gain 範圍：\n{gain_min}–{gain_max} %"
+            )
+        else:
+            self.gain_spin.setToolTip("無法從相機 SDK 取得 Gain 硬體範圍")
 
-        with QSignalBlocker(self.auto_exposure_check):
-            self.auto_exposure_check.setChecked(True)
+        target = info.get("auto_target")
+        try:
+            self._last_valid_auto_target = validate_auto_target(
+                int(target) if target is not None else 120
+            )
+        except (TypeError, ValueError):
+            self._last_valid_auto_target = 120
+        self.auto_target_edit.setText(str(self._last_valid_auto_target))
+        if info.get("exposure_us") is not None and info.get("gain") is not None:
+            self.on_exposure_changed(info["exposure_us"], info["gain"])
+
+        self._active_exposure_mode = ExposureMode.CONTINUOUS_AUTO
+        self._set_exposure_mode_ui(ExposureMode.CONTINUOUS_AUTO)
         self._set_camera_controls_enabled(True)
         self._revalidate_locked_hdr_profile()
 
@@ -223,21 +248,77 @@ class MainWindowDeviceMixin:
         self.gain_status.setText("Gain —")
         self.fps_status.setText("FPS —")
         self.camera_status.setText("相機 —")
+        self.current_exposure_value.setText("--")
+        self.current_gain_value.setText("--")
+        self.current_brightness_value.setText("-- /255")
 
     def change_resolution(self, index: int) -> None:
         if index >= 0 and self.controller.is_open:
             self.controller.set_resolution(index)
 
-    def toggle_auto_exposure(self, enabled: bool) -> None:
+    def change_exposure_mode(self, index: int) -> None:
+        if index < 0:
+            return
+        mode = ExposureMode(self.exposure_mode_combo.itemData(index))
+        previous = getattr(self, "_active_exposure_mode", ExposureMode.CONTINUOUS_AUTO)
+        if not self.controller.is_open or mode is previous:
+            self._update_exposure_control_state()
+            return
+
+        if mode is ExposureMode.MANUAL:
+            changed = self.controller.switch_to_manual_exposure()
+        else:
+            changed = self.controller.enable_continuous_auto_exposure(
+                getattr(self, "_last_valid_auto_target", 120)
+            )
+        if not changed:
+            self._set_exposure_mode_ui(previous)
+            return
+        self._active_exposure_mode = mode
         self._update_exposure_control_state()
-        self.controller.set_continuous_auto_exposure(enabled)
+
+    def _set_exposure_mode_ui(self, mode: ExposureMode) -> None:
+        with QSignalBlocker(self.exposure_mode_combo):
+            index = self.exposure_mode_combo.findData(mode.value)
+            if index >= 0:
+                self.exposure_mode_combo.setCurrentIndex(index)
+
+    def _selected_exposure_mode(self) -> ExposureMode:
+        value = self.exposure_mode_combo.currentData()
+        return ExposureMode(value or ExposureMode.CONTINUOUS_AUTO.value)
+
+    def apply_auto_exposure_target(self) -> None:
+        previous = getattr(self, "_last_valid_auto_target", 120)
+        try:
+            target = validate_auto_target(int(self.auto_target_edit.text().strip()))
+        except (TypeError, ValueError) as exc:
+            self.auto_target_edit.setText(str(previous))
+            message = str(exc) if str(exc) else "影像亮度目標必須是整數。"
+            if "允許範圍" not in message:
+                message = "影像亮度目標必須是 16–220 範圍內的整數 /255。"
+            QMessageBox.warning(self, "影像亮度目標輸入錯誤", message)
+            return
+
+        if self.controller.is_open and not self.controller.set_auto_exposure_target(target):
+            self.auto_target_edit.setText(str(previous))
+            return
+        self._last_valid_auto_target = target
+        self.auto_target_edit.setText(str(target))
 
     def _update_exposure_control_state(self) -> None:
-        manual = self.controller.is_open and not self.auto_exposure_check.isChecked()
-        self.exposure_spin.setEnabled(manual)
-        self.gain_spin.setEnabled(manual)
-        self.apply_manual_button.setEnabled(manual)
-        self.auto_target_spin.setEnabled(self.controller.is_open and self.auto_exposure_check.isChecked())
+        connected = self.controller.is_open
+        mode = self._selected_exposure_mode()
+        manual = connected and mode is ExposureMode.MANUAL
+        limits_available = bool(
+            self.camera_info.get("exposure_range_us") and self.camera_info.get("gain_range")
+        )
+        self.exposure_mode_combo.setEnabled(connected)
+        self.exposure_stack.setCurrentIndex(0 if mode is ExposureMode.CONTINUOUS_AUTO else 1)
+        self.auto_target_edit.setEnabled(connected and mode is ExposureMode.CONTINUOUS_AUTO)
+        self.exposure_spin.setEnabled(manual and limits_available)
+        self.gain_spin.setEnabled(manual and limits_available)
+        self.apply_manual_button.setEnabled(manual and limits_available)
+        self.camera_connection_hint.setVisible(not connected)
 
     def apply_manual_exposure(self) -> None:
         exposure_us = round(self.exposure_spin.value() * 1000.0)
@@ -250,6 +331,25 @@ class MainWindowDeviceMixin:
             self.gain_spin.setValue(gain)
         self.exposure_status.setText(f"曝光 {self._format_exposure(exposure_us)}")
         self.gain_status.setText(f"Gain {gain}%")
+        self.current_exposure_value.setText(f"{exposure_us / 1000.0:.3f} ms")
+        self.current_gain_value.setText(f"{gain} %")
+
+    def on_exposure_status_changed(
+        self, exposure_us: int | None, gain: int | None, brightness: int | None
+    ) -> None:
+        if exposure_us is None or gain is None:
+            self.current_exposure_value.setText("--")
+            self.current_gain_value.setText("--")
+            self.exposure_status.setText("曝光 —")
+            self.gain_status.setText("Gain —")
+        else:
+            self.current_exposure_value.setText(f"{exposure_us / 1000.0:.3f} ms")
+            self.current_gain_value.setText(f"{gain} %")
+            self.exposure_status.setText(f"曝光 {self._format_exposure(exposure_us)}")
+            self.gain_status.setText(f"Gain {gain}%")
+        self.current_brightness_value.setText(
+            f"{brightness} /255" if brightness is not None else "-- /255"
+        )
 
     def on_frame_ready(self, image: QImage) -> None:
         self.last_image = image.copy()
@@ -273,7 +373,11 @@ class MainWindowDeviceMixin:
             return
         path = self._choose_capture_path("manual")
         if path:
-            mode = "auto_continuous" if self.auto_exposure_check.isChecked() else "manual"
+            mode = (
+                "auto_continuous"
+                if self._selected_exposure_mode() is ExposureMode.CONTINUOUS_AUTO
+                else "manual"
+            )
             self._save_image(path, capture_mode=mode, auto_converged=None)
 
     def auto_expose_and_capture(self) -> None:
@@ -291,7 +395,7 @@ class MainWindowDeviceMixin:
         self.auto_capture_button.setEnabled(False)
         self.capture_action.setEnabled(False)
         self.auto_capture_action.setEnabled(False)
-        self.auto_exposure_check.setEnabled(False)
+        self.exposure_mode_combo.setEnabled(False)
         self.auto_capture_timer.start()
         self.controller.start_auto_exposure_once()
 
@@ -301,14 +405,14 @@ class MainWindowDeviceMixin:
         self.auto_capture_timer.stop()
         if success:
             self._auto_capture_converged = True
-            with QSignalBlocker(self.auto_exposure_check):
-                self.auto_exposure_check.setChecked(False)
+            self._active_exposure_mode = ExposureMode.MANUAL
+            self._set_exposure_mode_ui(ExposureMode.MANUAL)
             self._update_exposure_control_state()
             self.status_message.setText("曝光已收斂，正在取得拍攝影像…")
             self._capture_next_frame = True
         else:
-            with QSignalBlocker(self.auto_exposure_check):
-                self.auto_exposure_check.setChecked(False)
+            self._active_exposure_mode = ExposureMode.MANUAL
+            self._set_exposure_mode_ui(ExposureMode.MANUAL)
             self._cancel_auto_capture()
             QMessageBox.warning(self, "自動曝光失敗", message)
 
@@ -316,8 +420,8 @@ class MainWindowDeviceMixin:
         if self._pending_auto_path is None:
             return
         self.controller.lock_current_exposure()
-        with QSignalBlocker(self.auto_exposure_check):
-            self.auto_exposure_check.setChecked(False)
+        self._active_exposure_mode = ExposureMode.MANUAL
+        self._set_exposure_mode_ui(ExposureMode.MANUAL)
         if self.last_image is not None:
             path = self._pending_auto_path
             self._pending_auto_path = None
@@ -338,7 +442,7 @@ class MainWindowDeviceMixin:
 
     def _finish_auto_capture_ui(self) -> None:
         connected = self.controller.is_open
-        self.auto_exposure_check.setEnabled(connected)
+        self.exposure_mode_combo.setEnabled(connected)
         self.capture_button.setEnabled(connected and self.last_image is not None)
         self.auto_capture_button.setEnabled(connected and self.last_image is not None)
         self.capture_action.setEnabled(connected and self.last_image is not None)
@@ -363,7 +467,7 @@ class MainWindowDeviceMixin:
             "exposure_time_ms": exposure_us / 1000.0,
             "gain_percent": gain,
             "capture_mode": capture_mode,
-            "auto_exposure_target": self.auto_target_spin.value(),
+            "auto_exposure_target": getattr(self, "_last_valid_auto_target", 120),
             "auto_converged": auto_converged,
             "selected_recipe": self.selected_recipe.to_dict() if self.selected_recipe else None,
             "smu": self.smu_manager.connection_metadata(
@@ -409,10 +513,10 @@ class MainWindowDeviceMixin:
         self.capture_action.setEnabled(False)
         self.auto_capture_action.setEnabled(False)
         self.resolution_combo.setEnabled(enabled)
-        self.auto_exposure_check.setEnabled(enabled)
+        self.exposure_mode_combo.setEnabled(enabled)
         # Exposure widgets have two states, not only connected/disconnected.
         # Delegate them to one state function so a newly opened camera does not
-        # overwrite the manual-mode state calculated from the checkbox.
+        # overwrite the manual-mode state calculated from the mode selector.
         self._update_exposure_control_state()
 
     def show_error(self, message: str) -> None:

@@ -5,25 +5,27 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSplitter,
     QSpinBox,
     QStatusBar,
     QStyle,
+    QStackedWidget,
     QToolBar,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from .camera_exposure import AUTO_TARGET_MAX, AUTO_TARGET_MIN, ExposureMode
 from .device_panel import DevicePanel
 from .measurement_control_bar import MeasurementControlBar
 from .responsive_layout import LayoutMode, ResponsiveLayoutManager
@@ -185,11 +187,24 @@ class MainWindowUIMixin:
         capture_form.addRow("格式", self.format_combo)
         capture_layout.addLayout(capture_form)
 
-        self.auto_exposure_check = QCheckBox("持續自動曝光")
-        self.auto_target_spin = QSpinBox()
-        self.auto_target_spin.setRange(16, 220)
-        self.auto_target_spin.setValue(120)
-        self.auto_target_spin.setToolTip("SDK 自動曝光亮度目標，數值越高影像越亮")
+        self.exposure_mode_combo = QComboBox()
+        for mode in ExposureMode:
+            self.exposure_mode_combo.addItem(mode.label, mode.value)
+
+        self.auto_target_edit = QLineEdit("120")
+        self.auto_target_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.auto_target_edit.setMaximumWidth(100)
+        self.auto_target_edit.setToolTip(
+            "自動曝光所使用的目標影像亮度。\n"
+            "RisingCam SDK 使用 0–255 等效亮度尺度，\n"
+            f"目前可設定範圍為 {AUTO_TARGET_MIN}–{AUTO_TARGET_MAX}。"
+        )
+        auto_target_row = QWidget()
+        auto_target_layout = QHBoxLayout(auto_target_row)
+        auto_target_layout.setContentsMargins(0, 0, 0, 0)
+        auto_target_layout.addWidget(self.auto_target_edit)
+        auto_target_layout.addWidget(QLabel("/255"))
+        auto_target_layout.addStretch(1)
 
         self.exposure_spin = QDoubleSpinBox()
         self.exposure_spin.setDecimals(3)
@@ -201,16 +216,45 @@ class MainWindowUIMixin:
         self.gain_spin.setKeyboardTracking(False)
         self.apply_manual_button = QPushButton("套用手動設定")
 
+        self.current_exposure_value = QLabel("--")
+        self.current_gain_value = QLabel("--")
+        auto_page = QWidget()
+        auto_form = QFormLayout(auto_page)
+        auto_form.setContentsMargins(0, 0, 0, 0)
+        auto_form.addRow("影像亮度目標", auto_target_row)
+        auto_form.addRow("目前曝光時間", self.current_exposure_value)
+        auto_form.addRow("目前 Gain", self.current_gain_value)
+
+        manual_page = QWidget()
+        manual_layout = QVBoxLayout(manual_page)
+        manual_layout.setContentsMargins(0, 0, 0, 0)
+        manual_form = QFormLayout()
+        manual_form.addRow("曝光時間", self.exposure_spin)
+        manual_form.addRow("Gain", self.gain_spin)
+        manual_layout.addLayout(manual_form)
+        manual_layout.addWidget(self.apply_manual_button)
+
+        self.exposure_stack = QStackedWidget()
+        self.exposure_stack.addWidget(auto_page)
+        self.exposure_stack.addWidget(manual_page)
+        self.current_brightness_value = QLabel("-- /255")
+        self.camera_connection_hint = QLabel("請先連線相機")
+        self.camera_connection_hint.setStyleSheet("color: #a66a00;")
+
         exposure_content = QWidget()
         exposure_layout = QVBoxLayout(exposure_content)
         exposure_layout.setContentsMargins(8, 8, 8, 10)
-        exposure_layout.addWidget(self.auto_exposure_check)
         exposure_form = QFormLayout()
-        exposure_form.addRow("曝光目標", self.auto_target_spin)
-        exposure_form.addRow("曝光時間", self.exposure_spin)
-        exposure_form.addRow("Gain", self.gain_spin)
+        exposure_form.addRow("曝光模式", self.exposure_mode_combo)
         exposure_layout.addLayout(exposure_form)
-        exposure_layout.addWidget(self.apply_manual_button)
+        exposure_layout.addWidget(self.exposure_stack)
+        exposure_separator = QFrame()
+        exposure_separator.setFrameShape(QFrame.Shape.HLine)
+        exposure_layout.addWidget(exposure_separator)
+        brightness_form = QFormLayout()
+        brightness_form.addRow("目前影像亮度", self.current_brightness_value)
+        exposure_layout.addLayout(brightness_form)
+        exposure_layout.addWidget(self.camera_connection_hint)
 
         self.manual_smu_panel = ManualSMUPanel(
             limits=self.smu_manager.control.safety.limits
@@ -372,10 +416,8 @@ class MainWindowUIMixin:
         self.capture_button.clicked.connect(self.capture_current_frame)
         self.auto_capture_button.clicked.connect(self.auto_expose_and_capture)
         self.apply_manual_button.clicked.connect(self.apply_manual_exposure)
-        self.auto_exposure_check.toggled.connect(self.toggle_auto_exposure)
-        self.auto_target_spin.editingFinished.connect(
-            lambda: self.controller.set_auto_exposure_target(self.auto_target_spin.value())
-        )
+        self.exposure_mode_combo.currentIndexChanged.connect(self.change_exposure_mode)
+        self.auto_target_edit.editingFinished.connect(self.apply_auto_exposure_target)
         self.resolution_combo.currentIndexChanged.connect(self.change_resolution)
         self.image_view.zoom_changed.connect(lambda value: self.zoom_status.setText(f"縮放 {value:.1f}%"))
 
@@ -411,6 +453,7 @@ class MainWindowUIMixin:
         self.controller.camera_opened.connect(self.on_camera_opened)
         self.controller.camera_closed.connect(self.on_camera_closed)
         self.controller.exposure_changed.connect(self.on_exposure_changed)
+        self.controller.exposure_status_changed.connect(self.on_exposure_status_changed)
         self.controller.auto_exposure_result.connect(self.on_auto_exposure_result)
         self.controller.fps_changed.connect(
             lambda fps, total: self.fps_status.setText(f"FPS {fps:.1f}｜幀 {total}")

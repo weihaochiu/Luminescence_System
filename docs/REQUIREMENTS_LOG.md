@@ -174,6 +174,19 @@
 - 測試與驗證：擴充 `tests/test_manual_exposure_controls.py`，加入 formatter decorator 與 mixin 方法綁定檢查；完整測試套件通過。
 - 完成版本：V1.3.6。
 
+### UI-004－相機曝光模式、硬體範圍與即時亮度
+
+- 狀態：已完成（V1.6.0；待 RisingCam 實機驗收）。
+- 提出日期：2026-08-12（UTC+8）。
+- 使用者原意：曝光控制改為持續自動／手動下拉模式，清楚分離硬體 range 與 AE allowed range，並顯示相機實際 Exposure/Gain 與目前影像亮度。
+- 詳細行為：Auto 顯示可修改的影像亮度目標 `/255` 及唯讀實際值；Manual 顯示依 SDK hardware range 建立的 Exposure/Gain 欄位；兩種模式皆顯示 0–255 目前影像亮度。
+- 驗收條件：Auto → Manual 保留相機當下值；Manual → Auto 先送 target 再開 AE；非法 target 顯示錯誤並保留上一個有效值；未連線或 SDK query 失敗不 crash。
+- 影響模組：`camera_controller.py`、`camera_exposure.py`、`image_brightness.py`、`main_window_ui.py`、`main_window_devices.py`。
+- 相容性／資料遷移：Recipe、HDR、SMU、溫度、影像 metadata schema 不變；既有單次自動曝光拍攝流程保留。
+- 安全風險：僅讀寫相機曝光、Gain 與原廠 AE；不改變 AE limit/policy，不觸發 SMU output。
+- 測試與驗證：新增 capability、mode ordering、亮度與 UI 用語測試；更新既有曝光 UI 結構測試，並執行無頭 UI smoke test。RisingCam 實機數值仍需連線驗收。
+- 完成版本：V1.6.0。
+
 ## 6. 相機溫度監控
 
 ### TEMP-001－確認 SDK 溫度讀取能力
@@ -350,6 +363,13 @@
 ```
 
 ## 9. 版本變更摘要
+
+### V1.6.0－2026-08-12
+
+- 曝光控制改為持續自動／手動下拉模式與固定 `QStackedWidget` 頁面；統一使用影像亮度、影像亮度目標、曝光時間與 Gain。
+- Manual Exposure/Gain range 與 tooltip 由 SDK hardware range 產生；AE allowed range 分開查詢與記錄，不再混用 350 ms／500%。
+- 新增 300 ms SDK Exposure/Gain status refresh 與獨立的 0–255 preview brightness helper；相機中斷與查詢失敗顯示 `--`。
+- Auto ↔ Manual 切換依指定順序保留相機實際 Exposure/Gain 並套用既有影像亮度目標；新增 capability、亮度、模式順序與 UI 結構測試。
 
 ### V1.5.2－2026-08-12
 

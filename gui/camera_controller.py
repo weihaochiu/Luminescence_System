@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from PySide6.QtGui import QImage
 
+from .camera_exposure import validate_auto_target
+from .image_brightness import equivalent_brightness_8bit
 from .sdk import nncam
+
+
+LOG = logging.getLogger(__name__)
 
 
 class CameraController(QObject):
@@ -15,6 +21,7 @@ class CameraController(QObject):
     camera_opened = Signal(object)
     camera_closed = Signal()
     exposure_changed = Signal(int, int)
+    exposure_status_changed = Signal(object, object, object)
     auto_exposure_result = Signal(bool, str)
     fps_changed = Signal(float, int)
     status_changed = Signal(str)
@@ -30,11 +37,16 @@ class CameraController(QObject):
         self._height = 0
         self._pitch = 0
         self._auto_mode = 0
+        self._latest_image: QImage | None = None
+        self._status_query_failed = False
 
         self._sdk_event.connect(self._handle_sdk_event)
         self._fps_timer = QTimer(self)
         self._fps_timer.setInterval(1000)
         self._fps_timer.timeout.connect(self._poll_frame_rate)
+        self._camera_status_timer = QTimer(self)
+        self._camera_status_timer.setInterval(300)
+        self._camera_status_timer.timeout.connect(self._poll_camera_status)
 
     @property
     def is_open(self) -> bool:
@@ -75,24 +87,27 @@ class CameraController(QObject):
             self._auto_mode = 1
             self._start_stream()
 
-            exp_min, exp_max, exp_default = camera.get_ExpTimeRange()
-            gain_min, gain_max, gain_default = camera.get_ExpoAGainRange()
+            capabilities = self._query_camera_capabilities(camera)
+            current = self._read_current_exposure(camera)
+            auto_target = self._query_optional(camera, "get_AutoExpoTarget", "Auto Exposure Target")
             info = {
                 "name": device.displayname,
                 "model": device.model.name,
                 "resolution_index": resolution_index,
                 "resolutions": [(r.width, r.height) for r in device.model.res],
                 "preview_count": device.model.preview,
-                "exposure_range_us": (exp_min, exp_max, exp_default),
-                "gain_range": (gain_min, gain_max, gain_default),
-                "exposure_us": camera.get_ExpoTime(),
-                "gain": camera.get_ExpoAGain(),
-                "auto_target": camera.get_AutoExpoTarget(),
+                **capabilities,
+                "exposure_us": current[0] if current is not None else None,
+                "gain": current[1] if current is not None else None,
+                "auto_target": auto_target,
                 "mono": bool(device.model.flag & nncam.NNCAM_FLAG_MONO),
                 "sdk_version": self.sdk_version(),
             }
+            self._log_camera_capabilities(info)
             self.camera_opened.emit(info)
-            self._emit_exposure()
+            if current is not None:
+                self.exposure_changed.emit(*current)
+            self._camera_status_timer.start()
             self.status_changed.emit(f"已連線：{device.displayname}")
         except Exception as exc:
             self.close_camera()
@@ -100,6 +115,7 @@ class CameraController(QObject):
 
     def close_camera(self) -> None:
         self._fps_timer.stop()
+        self._camera_status_timer.stop()
         if self._camera is not None:
             try:
                 self._camera.Close()
@@ -113,6 +129,8 @@ class CameraController(QObject):
         self._height = 0
         self._pitch = 0
         self._auto_mode = 0
+        self._latest_image = None
+        self._status_query_failed = False
         if was_open:
             self.camera_closed.emit()
             self.status_changed.emit("相機已中斷連線")
@@ -149,16 +167,44 @@ class CameraController(QObject):
         except Exception as exc:
             self.error_occurred.emit(self._format_error("套用手動曝光失敗", exc))
 
-    def set_continuous_auto_exposure(self, enabled: bool) -> None:
+    def switch_to_manual_exposure(self) -> bool:
+        """Disable AE and preserve the camera's last actual exposure and gain."""
+
         if self._camera is None:
-            return
+            return False
         try:
-            mode = 1 if enabled else 0
-            self._camera.put_AutoExpoEnable(mode)
-            self._auto_mode = mode
-            self.status_changed.emit("持續自動曝光已開啟" if enabled else "自動曝光已關閉")
+            self._camera.put_AutoExpoEnable(0)
+            self._auto_mode = 0
+            current = self._read_current_exposure(self._camera)
+            if current is None:
+                raise RuntimeError("SDK 無法讀回目前 Exposure/Gain")
+            self.exposure_changed.emit(*current)
+            self.status_changed.emit("已切換為手動曝光並保留目前 Exposure/Gain")
+            return True
         except Exception as exc:
-            self.error_occurred.emit(self._format_error("切換自動曝光失敗", exc))
+            try:
+                self._camera.put_AutoExpoEnable(1)
+                self._auto_mode = 1
+            except Exception as rollback_exc:
+                LOG.error("Failed to restore continuous AE after mode-switch error: %s", rollback_exc)
+            self.error_occurred.emit(self._format_error("切換手動曝光失敗", exc))
+            return False
+
+    def enable_continuous_auto_exposure(self, target: int) -> bool:
+        """Apply the retained target first, then enable continuous AE."""
+
+        if self._camera is None:
+            return False
+        try:
+            target = validate_auto_target(target)
+            self._camera.put_AutoExpoTarget(target)
+            self._camera.put_AutoExpoEnable(1)
+            self._auto_mode = 1
+            self.status_changed.emit("持續自動曝光已開啟")
+            return True
+        except Exception as exc:
+            self.error_occurred.emit(self._format_error("切換持續自動曝光失敗", exc))
+            return False
 
     def start_auto_exposure_once(self) -> None:
         if self._camera is None:
@@ -180,21 +226,88 @@ class CameraController(QObject):
         except Exception as exc:
             self.error_occurred.emit(self._format_error("鎖定曝光失敗", exc))
 
-    def set_auto_exposure_target(self, target: int) -> None:
+    def set_auto_exposure_target(self, target: int) -> bool:
         if self._camera is None:
-            return
+            return False
         try:
-            self._camera.put_AutoExpoTarget(int(target))
+            self._camera.put_AutoExpoTarget(validate_auto_target(target))
+            return True
         except Exception as exc:
-            self.error_occurred.emit(self._format_error("設定自動曝光目標失敗", exc))
+            self.error_occurred.emit(self._format_error("設定影像亮度目標失敗", exc))
+            return False
 
     def current_exposure(self) -> tuple[int, int]:
         if self._camera is None:
             return 0, 0
+        current = self._read_current_exposure(self._camera)
+        return current if current is not None else (0, 0)
+
+    @staticmethod
+    def _read_current_exposure(camera: Any) -> tuple[int, int] | None:
         try:
-            return self._camera.get_ExpoTime(), self._camera.get_ExpoAGain()
+            return int(camera.get_ExpoTime()), int(camera.get_ExpoAGain())
         except Exception:
-            return 0, 0
+            return None
+
+    @staticmethod
+    def _query_optional(camera: Any, method_name: str, description: str) -> Any | None:
+        try:
+            return getattr(camera, method_name)()
+        except Exception as exc:
+            LOG.warning("RisingCam SDK query failed for %s: %s", description, exc)
+            return None
+
+    @classmethod
+    def _query_camera_capabilities(cls, camera: Any) -> dict[str, Any]:
+        exposure_range = cls._query_optional(
+            camera, "get_ExpTimeRange", "Camera Exposure Hardware Range"
+        )
+        gain_range = cls._query_optional(
+            camera, "get_ExpoAGainRange", "Camera Gain Hardware Range"
+        )
+
+        auto_range_raw = cls._query_optional(camera, "get_AutoExpoRange", "Auto Exposure Range")
+        auto_min = cls._query_optional(
+            camera, "get_MinAutoExpoTimeAGain", "Auto Exposure minimum limit"
+        )
+        auto_max = cls._query_optional(
+            camera, "get_MaxAutoExpoTimeAGain", "Auto Exposure maximum limit"
+        )
+        auto_range = None
+        if auto_range_raw is not None:
+            max_time, min_time, max_gain, min_gain = auto_range_raw
+            auto_range = (int(min_time), int(max_time), int(min_gain), int(max_gain))
+        if auto_min is not None and auto_max is not None:
+            auto_range = (
+                int(auto_min[0]),
+                int(auto_max[0]),
+                int(auto_min[1]),
+                int(auto_max[1]),
+            )
+
+        return {
+            "exposure_range_us": tuple(map(int, exposure_range)) if exposure_range else None,
+            "gain_range": tuple(map(int, gain_range)) if gain_range else None,
+            "auto_exposure_range": auto_range,
+        }
+
+    @staticmethod
+    def _log_camera_capabilities(info: dict[str, Any]) -> None:
+        exposure = info.get("exposure_range_us")
+        gain = info.get("gain_range")
+        auto_range = info.get("auto_exposure_range")
+        target = info.get("auto_target")
+        LOG.info(
+            "Camera Exposure Hardware Range: min = %s us, max = %s us, default = %s us\n"
+            "Camera Gain Hardware Range: min = %s %%, max = %s %%, default = %s %%\n"
+            "Auto Exposure Range: min exposure = %s us, max exposure = %s us, "
+            "min gain = %s %%, max gain = %s %%\n"
+            "Auto Exposure Target: %s /255",
+            *(exposure or ("--", "--", "--")),
+            *(gain or ("--", "--", "--")),
+            *(auto_range or ("--", "--", "--", "--")),
+            target if target is not None else "--",
+        )
 
     @staticmethod
     def sdk_version() -> str:
@@ -251,13 +364,40 @@ class CameraController(QObject):
                 self._pitch,
                 QImage.Format.Format_RGB888,
             ).copy()
+            self._latest_image = image
             self.frame_ready.emit(image)
         except Exception as exc:
             self.error_occurred.emit(self._format_error("讀取影像失敗", exc))
 
     def _emit_exposure(self) -> None:
-        exposure_us, gain = self.current_exposure()
-        self.exposure_changed.emit(exposure_us, gain)
+        if self._camera is None:
+            return
+        current = self._read_current_exposure(self._camera)
+        if current is not None:
+            self.exposure_changed.emit(*current)
+
+    @Slot()
+    def _poll_camera_status(self) -> None:
+        if self._camera is None:
+            return
+        current = self._read_current_exposure(self._camera)
+        try:
+            brightness = (
+                equivalent_brightness_8bit(self._latest_image)
+                if self._latest_image is not None
+                else None
+            )
+        except Exception as exc:
+            LOG.warning("Unable to calculate current image brightness: %s", exc)
+            brightness = None
+        if current is None:
+            if not self._status_query_failed:
+                LOG.warning("RisingCam SDK failed to refresh current Exposure/Gain")
+            self._status_query_failed = True
+            self.exposure_status_changed.emit(None, None, brightness)
+            return
+        self._status_query_failed = False
+        self.exposure_status_changed.emit(current[0], current[1], brightness)
 
     @Slot()
     def _poll_frame_rate(self) -> None:

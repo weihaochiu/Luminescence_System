@@ -1,4 +1,11 @@
-# EL 量測設備控制程式 V1.5.2
+# EL 量測設備控制程式 V1.6.0
+
+## V1.6.0 Camera Exposure Control
+
+- 曝光控制改為「持續自動曝光／手動曝光」下拉模式，依模式顯示影像亮度目標或可編輯的 Exposure/Gain。
+- 相機連線時由 RisingCam SDK 讀取 Exposure/Gain hardware range 與 Auto Exposure allowed range；Manual tooltip 與輸入範圍不再使用固定上限。
+- Auto 模式每 300 ms 讀回實際 Exposure/Gain；兩種模式皆顯示目前影像亮度，使用 RGB preview 的全畫面等距取樣 Rec.709 luminance（0–255）。
+- Auto → Manual 會保留相機當下實際 Exposure/Gain；Manual → Auto 先套用影像亮度目標再開啟 continuous AE。
 
 ## V1.5.2 Keysight B2901BL readback safety hotfix
 
