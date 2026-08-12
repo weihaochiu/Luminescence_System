@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 import logging
 from threading import Event, RLock
+from time import monotonic
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Signal
@@ -33,6 +34,19 @@ class SMUOperationState(str, Enum):
     EMERGENCY = "EMERGENCY"
     SHUTTING_DOWN = "SHUTTING_DOWN"
     FAULT = "FAULT"
+
+
+class PolarityState(str, Enum):
+    UNKNOWN = "UNKNOWN"
+    NORMAL = "NORMAL"
+    REVERSED = "REVERSED"
+    FAILED = "FAILED"
+
+
+POLARITY_FACTORS: dict[PolarityState, int] = {
+    PolarityState.NORMAL: 1,
+    PolarityState.REVERSED: -1,
+}
 
 
 class SMUInterlockError(RuntimeError):
@@ -81,6 +95,33 @@ class PolarityService:
                 "尚未確認 Device-to-SMU Polarity，禁止 Recipe 輸出"
             )
         return float(requested_value) * self._factor
+
+    @staticmethod
+    def determine_manual(
+        jsc_current_a: float,
+        voc_v: float,
+        *,
+        minimum_current_a: float = 1e-9,
+        minimum_voltage_v: float = 1e-6,
+    ) -> "ManualPolarityResult":
+        """Map an illuminated Jsc/Voc pair without carrying state across runs."""
+
+        current = float(jsc_current_a)
+        voltage = float(voc_v)
+        if abs(current) < minimum_current_a or abs(voltage) < minimum_voltage_v:
+            state = PolarityState.FAILED
+        elif voltage > 0.0 and current < 0.0:
+            state = PolarityState.NORMAL
+        elif voltage < 0.0 and current > 0.0:
+            state = PolarityState.REVERSED
+        else:
+            state = PolarityState.FAILED
+        return ManualPolarityResult(
+            state=state,
+            factor=POLARITY_FACTORS.get(state),
+            jsc_current_a=current,
+            voc_v=voltage,
+        )
 
 
 class SMUSafetyService:
@@ -132,6 +173,14 @@ class SMUReadback:
     compliance_tripped: bool | None
 
 
+@dataclass(frozen=True)
+class ManualPolarityResult:
+    state: PolarityState
+    factor: int | None
+    jsc_current_a: float | None = None
+    voc_v: float | None = None
+
+
 class SMUControlManager(QObject):
     """Single hardware authority for ownership, output state, and safe shutdown."""
 
@@ -141,6 +190,9 @@ class SMUControlManager(QObject):
     busy_changed = Signal(bool)
     operation_state_changed = Signal(str)
     polarity_changed = Signal(object)
+    manual_polarity_changed = Signal(object)
+    manual_sequence_status = Signal(str)
+    manual_sequence_finished = Signal(bool)
     command_applied = Signal(str, float, float, float, int)
     readback_ready = Signal(object)
     error_occurred = Signal(str)
@@ -162,6 +214,9 @@ class SMUControlManager(QObject):
         self._fault_latched = False
         self._emergency_latch = Event()
         self._recipe_cancel_latch = Event()
+        self._manual_cancel_latch = Event()
+        self._manual_generation = 0
+        self._manual_polarity = ManualPolarityResult(PolarityState.UNKNOWN, None)
         self._operation_state = SMUOperationState.READY
         self._mode = "CC"
         self._lock = RLock()
@@ -193,6 +248,16 @@ class SMUControlManager(QObject):
     @property
     def emergency_latched(self) -> bool:
         return self._emergency_latch.is_set()
+
+    @property
+    def is_connected(self) -> bool:
+        with self._lock:
+            return self._driver is not None
+
+    @property
+    def manual_polarity(self) -> ManualPolarityResult:
+        with self._lock:
+            return self._manual_polarity
 
     @property
     def operation_state(self) -> SMUOperationState:
@@ -229,12 +294,16 @@ class SMUControlManager(QObject):
             self._fault_latched = False
             self._emergency_latch.clear()
             self._recipe_cancel_latch.clear()
+            self._manual_cancel_latch.clear()
+            self._manual_generation += 1
+            self._manual_polarity = ManualPolarityResult(PolarityState.UNKNOWN, None)
             self._ownership = SMUOwnership.IDLE
             self._operation_state = SMUOperationState.READY
         self.output_changed.emit(False)
         self.output_confirmation_changed.emit(self._output_confirmed_off)
         self.ownership_changed.emit(SMUOwnership.IDLE.value)
         self.operation_state_changed.emit(SMUOperationState.READY.value)
+        self.manual_polarity_changed.emit(self._manual_polarity)
 
     def set_confirmed_polarity_factor(self, factor: int) -> None:
         with self._lock:
@@ -335,10 +404,194 @@ class SMUControlManager(QObject):
         )
         return True
 
+    def request_manual_output_sequence(
+        self,
+        mode: str,
+        requested: float,
+        compliance: float,
+        area_cm2: float,
+        light_on: Callable[[], None],
+        light_off: Callable[[], None],
+        *,
+        stabilization_s: float = 0.25,
+    ) -> bool:
+        """Run a new illuminated polarity check before every Manual OUTPUT ON."""
+
+        if area_cm2 <= 0.0:
+            raise ValueError("Device area must be greater than 0 cm²")
+        if stabilization_s < 0.0:
+            raise ValueError("Illumination stabilization time cannot be negative")
+        self.safety.validate(mode, requested, compliance)
+        with self._lock:
+            if self._pending:
+                return False
+            if self._driver is None:
+                raise SMUInterlockError("No supported SMU is connected")
+            self._ensure_normal_output_allowed_locked()
+            if self._ownership is not SMUOwnership.IDLE:
+                raise SMUInterlockError(
+                    f"SMU is owned by {self._ownership.value}; MANUAL is blocked"
+                )
+            if self._output_enabled or not self._output_confirmed_off:
+                raise SMUInterlockError("SMU OUTPUT OFF has not been confirmed")
+            self._manual_generation += 1
+            generation = self._manual_generation
+            self._manual_cancel_latch.clear()
+            self._manual_polarity = ManualPolarityResult(PolarityState.UNKNOWN, None)
+            self._ownership = SMUOwnership.MANUAL
+            self._operation_state = SMUOperationState.BUSY
+
+        self.manual_polarity_changed.emit(self._manual_polarity)
+        LOG.info(
+            "MANUAL_SMU OUTPUT_ON_REQUEST area_cm2=%g mode=%s requested=%+.9g compliance=%g generation=%d",
+            area_cm2,
+            mode,
+            requested,
+            compliance,
+            generation,
+        )
+
+        def operation() -> None:
+            success = False
+            light_enabled = False
+            try:
+                self._check_manual_generation(generation)
+                self.manual_sequence_status.emit("開啟白光…")
+                light_on()
+                light_enabled = True
+                self._wait_for_manual_stabilization(generation, stabilization_s)
+
+                self.manual_sequence_status.emit("量測 Jsc…")
+                with self._io_lock:
+                    driver = self._required_driver()
+                    self._check_manual_generation(generation)
+                    current_limit = self.safety.limits.maximum_current_compliance_a
+                    driver.configure_voltage_source(0.0, current_limit)
+                    jsc_current_a = self._measure_with_temporary_output(
+                        driver,
+                        generation,
+                        driver.measure_current,
+                    )
+
+                    self.manual_sequence_status.emit("量測 Voc…")
+                    voltage_limit = self.safety.limits.maximum_voltage_compliance_v
+                    driver.configure_current_source(0.0, voltage_limit)
+                    voc_v = self._measure_with_temporary_output(
+                        driver,
+                        generation,
+                        driver.measure_voltage,
+                    )
+
+                self.manual_sequence_status.emit("判斷極性…")
+                result = self.polarity.determine_manual(jsc_current_a, voc_v)
+                with self._lock:
+                    self._manual_polarity = result
+                self.manual_polarity_changed.emit(result)
+                LOG.info(
+                    "MANUAL_SMU POLARITY JSC_A=%+.9g JSC_MA_CM2=%+.9g VOC_V=%+.9g result=%s factor=%s",
+                    jsc_current_a,
+                    jsc_current_a * 1000.0 / area_cm2,
+                    voc_v,
+                    result.state.value,
+                    result.factor,
+                )
+                if result.factor is None:
+                    raise SMUInterlockError(
+                        "Jsc/Voc signs do not identify a safe output polarity"
+                    )
+
+                self._check_manual_generation(generation)
+                self.manual_sequence_status.emit("關閉白光…")
+                light_off()
+                light_enabled = False
+
+                physical = float(requested) * result.factor
+                self.safety.validate(mode, physical, compliance)
+                self.manual_sequence_status.emit("設定 SMU…")
+                with self._io_lock:
+                    driver = self._required_driver()
+                    self._check_manual_generation(generation)
+                    if mode == "CV":
+                        driver.configure_voltage_source(physical, compliance)
+                    else:
+                        driver.configure_current_source(physical, compliance)
+                    with self._output_enable_lock:
+                        self._check_manual_generation(generation)
+                        driver.set_output_enabled(True)
+                        if driver.query_output_enabled() is not True:
+                            raise SMUInterlockError("SMU OUTPUT ON could not be confirmed")
+                        self._check_manual_generation(generation)
+
+                with self._lock:
+                    self._mode = mode
+                    self._output_enabled = True
+                    self._output_confirmed_off = False
+                    self._last_shutdown_ok = None
+                    self._operation_state = SMUOperationState.OUTPUT_ON
+                self.output_changed.emit(True)
+                self.output_confirmation_changed.emit(False)
+                self.command_applied.emit(
+                    mode,
+                    requested,
+                    physical,
+                    compliance,
+                    result.factor,
+                )
+                self.operation_state_changed.emit(SMUOperationState.OUTPUT_ON.value)
+                self.manual_sequence_status.emit("SMU OUTPUT ON")
+                LOG.info(
+                    "MANUAL_SMU OUTPUT_ON mode=%s requested=%+.9g physical=%+.9g compliance=%g factor=%+d",
+                    mode,
+                    requested,
+                    physical,
+                    compliance,
+                    result.factor,
+                )
+                success = True
+            except _SMUEmergencyAbort:
+                LOG.warning(
+                    "MANUAL_SMU OUTPUT_ON_CANCELLED generation=%d",
+                    generation,
+                )
+                raise
+            except Exception:
+                with self._lock:
+                    self._manual_polarity = ManualPolarityResult(
+                        PolarityState.FAILED,
+                        None,
+                    )
+                    failed_result = self._manual_polarity
+                self.manual_polarity_changed.emit(failed_result)
+                LOG.exception("MANUAL_SMU OUTPUT_ON_ABORT generation=%d", generation)
+                raise
+            finally:
+                if light_enabled:
+                    try:
+                        light_off()
+                    except Exception:
+                        LOG.exception("MANUAL_SMU White Light OFF cleanup failed")
+                self.manual_sequence_finished.emit(success)
+
+        accepted = self._submit(
+            operation,
+            cleanup_owner=SMUOwnership.MANUAL,
+            operation_state=SMUOperationState.BUSY,
+        )
+        if not accepted:
+            with self._lock:
+                self._ownership = SMUOwnership.IDLE
+                self._operation_state = SMUOperationState.READY
+            return False
+        self.operation_state_changed.emit(SMUOperationState.BUSY.value)
+        self.ownership_changed.emit(SMUOwnership.MANUAL.value)
+        return True
+
     def request_manual_off(self) -> bool:
         with self._lock:
             if self._ownership is not SMUOwnership.MANUAL or self._pending:
                 return False
+            self._manual_generation += 1
+            self._manual_cancel_latch.set()
         return self._submit(
             lambda: self.safe_shutdown(
                 SMUOwnership.MANUAL,
@@ -520,6 +773,17 @@ class SMUControlManager(QObject):
                         self._recipe_cancel_latch.clear()
                     elif owner is SMUOwnership.RECIPE:
                         self._recipe_cancel_latch.clear()
+                if (
+                    previous is SMUOwnership.EMERGENCY
+                    or (
+                        previous is SMUOwnership.MANUAL
+                        and self._manual_polarity.state is not PolarityState.FAILED
+                    )
+                ):
+                    self._manual_polarity = ManualPolarityResult(
+                        PolarityState.UNKNOWN,
+                        None,
+                    )
             ownership = self._ownership
             state = self._operation_state
 
@@ -541,6 +805,8 @@ class SMUControlManager(QObject):
         self.output_confirmation_changed.emit(True)
         self.ownership_changed.emit(ownership.value)
         self.operation_state_changed.emit(state.value)
+        if previous in (SMUOwnership.MANUAL, SMUOwnership.EMERGENCY):
+            self.manual_polarity_changed.emit(self._manual_polarity)
         return True
 
     def request_emergency_off(self) -> bool:
@@ -554,10 +820,14 @@ class SMUControlManager(QObject):
                 return True
         self._emergency_latch.set()
         self._recipe_cancel_latch.set()
+        self._manual_cancel_latch.set()
         with self._lock:
+            self._manual_generation += 1
             if self._driver is None:
-                self.error_occurred.emit("SMU is not connected")
-                return False
+                LOG.info("SMU_EMERGENCY safe: no SMU is connected")
+                self._emergency_latch.clear()
+                self._recipe_cancel_latch.clear()
+                return True
             self._ownership = SMUOwnership.EMERGENCY
             self._operation_state = SMUOperationState.EMERGENCY
         LOG.critical(
@@ -602,6 +872,8 @@ class SMUControlManager(QObject):
                     current = driver.measure_current()
                     power = voltage * current
                     compliance_tripped = driver.query_compliance_tripped(mode)
+                    if compliance_tripped:
+                        LOG.warning("MANUAL_SMU COMPLIANCE_ACTIVE mode=%s", mode)
                     LOG.debug(
                         "SMU_READBACK output=ON owner=MANUAL mode=MEASURE"
                     )
@@ -680,6 +952,51 @@ class SMUControlManager(QObject):
             raise _SMUEmergencyAbort("SMU output cancelled by Emergency OFF")
         if self._recipe_cancel_latch.is_set():
             raise _SMUEmergencyAbort("SMU output cancelled by Recipe handover")
+
+    def _check_manual_generation(self, generation: int) -> None:
+        with self._lock:
+            current_generation = self._manual_generation
+            owner = self._ownership
+        if (
+            generation != current_generation
+            or owner is not SMUOwnership.MANUAL
+            or self._manual_cancel_latch.is_set()
+            or self._emergency_latch.is_set()
+        ):
+            raise _SMUEmergencyAbort("Manual SMU sequence was cancelled")
+
+    def _wait_for_manual_stabilization(self, generation: int, seconds: float) -> None:
+        deadline = monotonic() + seconds
+        while True:
+            self._check_manual_generation(generation)
+            remaining = deadline - monotonic()
+            if remaining <= 0.0:
+                return
+            self._manual_cancel_latch.wait(min(0.05, remaining))
+
+    def _measure_with_temporary_output(
+        self,
+        driver: SMUDriver,
+        generation: int,
+        measure: Callable[[], float],
+    ) -> float:
+        output_enabled = False
+        try:
+            with self._output_enable_lock:
+                self._check_manual_generation(generation)
+                driver.set_output_enabled(True)
+                if driver.query_output_enabled() is not True:
+                    raise SMUInterlockError("SMU measurement OUTPUT ON could not be confirmed")
+                output_enabled = True
+            self._check_manual_generation(generation)
+            value = float(measure())
+            self._check_manual_generation(generation)
+            return value
+        finally:
+            if output_enabled:
+                driver.set_output_enabled(False)
+                if driver.query_output_enabled() is not False:
+                    raise SMUInterlockError("SMU measurement OUTPUT OFF could not be confirmed")
 
     def _apply_output(
         self,

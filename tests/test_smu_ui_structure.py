@@ -11,6 +11,8 @@ from PySide6.QtWidgets import QApplication
 
 from gui.instrument_state_manager import SMUInstrumentState, SMUUIState
 from gui.smu_control import (
+    ManualPolarityResult,
+    PolarityState,
     SMUOperationState,
     SMUOwnership,
     SMUReadback,
@@ -33,18 +35,19 @@ class SMUUIStructureTests(unittest.TestCase):
     def test_manual_panel_is_presentational_and_has_required_controls(self) -> None:
         source = (self.gui / "smu_manual_panel.py").read_text(encoding="utf-8")
         for required in (
-            "定電流 CC",
-            "定電壓 CV",
-            "Compliance",
-            "Output ON",
-            "Output OFF",
-            "Emergency OFF",
-            "Measured Voltage",
-            "Measured Current",
-            "Power",
-            "手動輸入使用 SMU 實體座標",
+            "定電流密度",
+            "定電壓",
+            "元件面積",
+            "設定電流密度",
+            "Voltage Compliance",
+            "Current Compliance",
+            "OUTPUT OFF",
+            "量測電壓",
+            "量測電流密度",
+            "待輸出確認",
         ):
             self.assertIn(required, source)
+        self.assertNotIn("Emergency OFF", source)
         lowered = source.lower()
         for forbidden in ("pyvisa", "keysight", "resource.write", "resource.query"):
             self.assertNotIn(forbidden, lowered)
@@ -103,7 +106,7 @@ class SMUUIStructureTests(unittest.TestCase):
         panel = ManualSMUPanel()
         ready = self.ready_state()
         panel.apply_ui_state(ready)
-        panel.update_polarity(1)
+        panel.update_polarity(ManualPolarityResult(PolarityState.NORMAL, 1))
         self.assertTrue(panel.output_button.isEnabled())
 
         panel.apply_ui_state(
@@ -115,6 +118,7 @@ class SMUUIStructureTests(unittest.TestCase):
             )
         )
         self.assertFalse(panel.mode_combo.isEnabled())
+        self.assertFalse(panel.area_spin.isEnabled())
         self.assertFalse(panel.setpoint_spin.isEnabled())
         self.assertFalse(panel.compliance_spin.isEnabled())
         self.assertFalse(panel.output_button.isEnabled())
@@ -142,19 +146,43 @@ class SMUUIStructureTests(unittest.TestCase):
                 manual_off_enabled=True,
             )
         )
-        self.assertFalse(panel.output_button.isEnabled())
-        self.assertTrue(panel.off_button.isEnabled())
-        self.assertTrue(panel.emergency_button.isEnabled())
+        self.assertTrue(panel.output_button.isEnabled())
+        self.assertEqual("OUTPUT ON", panel.output_button.text())
+        self.assertFalse(hasattr(panel, "off_button"))
+        self.assertFalse(hasattr(panel, "emergency_button"))
+
+        panel.update_readback(SMUReadback(1.0, 0.001, 0.001, True, True))
+        self.assertEqual("⚠ Voltage Compliance Active", panel.compliance_value.text())
 
     def test_polarity_label_updates_without_command_applied(self) -> None:
         if self.app is None:
             self.skipTest("A non-GUI Qt application already exists")
         panel = ManualSMUPanel()
-        self.assertEqual("UNKNOWN", panel.factor_value.text())
-        panel.update_polarity(-1)
-        self.assertEqual("-1", panel.factor_value.text())
+        self.assertEqual("待輸出確認", panel.factor_value.text())
+        panel.update_polarity(ManualPolarityResult(PolarityState.REVERSED, -1))
+        self.assertEqual("反向 (-1)", panel.factor_value.text())
         panel.update_command("CC", 0.002, 0.002, 2.0, 1)
-        self.assertEqual("-1", panel.factor_value.text())
+        self.assertEqual("反向 (-1)", panel.factor_value.text())
+
+    def test_density_and_current_compliance_are_converted_with_area(self) -> None:
+        if self.app is None:
+            self.skipTest("A non-GUI Qt application already exists")
+        panel = ManualSMUPanel()
+        panel.apply_ui_state(self.ready_state())
+        emitted: list[tuple[str, float, float, float]] = []
+        panel.output_requested.connect(lambda *values: emitted.append(values))
+        panel.area_spin.setValue(2.0)
+        panel.setpoint_spin.setValue(3.0)
+        panel.output_button.click()
+        self.assertEqual("CC", emitted[-1][0])
+        self.assertAlmostEqual(0.006, emitted[-1][1])
+        self.assertAlmostEqual(2.0, emitted[-1][3])
+
+        panel.mode_combo.setCurrentIndex(1)
+        panel.compliance_spin.setValue(4.0)
+        panel.output_button.click()
+        self.assertEqual("CV", emitted[-1][0])
+        self.assertAlmostEqual(0.008, emitted[-1][2])
 
     def test_output_off_readback_displays_unavailable_values(self) -> None:
         if self.app is None:
@@ -170,9 +198,17 @@ class SMUUIStructureTests(unittest.TestCase):
             )
         )
         self.assertEqual("— V", panel.voltage_value.text())
-        self.assertEqual("— mA", panel.current_value.text())
-        self.assertEqual("— mW", panel.power_value.text())
-        self.assertEqual("—", panel.compliance_value.text())
+        self.assertEqual("— mA/cm²", panel.current_density_value.text())
+        self.assertEqual("", panel.compliance_value.text())
+
+    def test_readback_uses_measured_current_not_requested_value(self) -> None:
+        if self.app is None:
+            self.skipTest("A non-GUI Qt application already exists")
+        panel = ManualSMUPanel()
+        panel.area_spin.setValue(2.0)
+        panel.update_readback(SMUReadback(1.23456, 0.006, 0.0, True, False))
+        self.assertEqual("1.2346 V", panel.voltage_value.text())
+        self.assertEqual("3.00 mA/cm²", panel.current_density_value.text())
 
     @staticmethod
     def ready_state() -> SMUUIState:

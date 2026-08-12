@@ -28,6 +28,7 @@ def start_background_measurement(self: Any, run: Any) -> None:
         if answer != QMessageBox.StandardButton.Yes:
             return
     try:
+        self.emergency_manager.begin_operator_operation()
         control.prepare_recipe_start(close_manual=True)
     except SMUInterlockError as exc:
         self.show_smu_error(str(exc))
@@ -59,13 +60,26 @@ def stop_background_measurement(self: Any) -> None:
 
 
 def emergency_stop_measurement(self: Any) -> None:
+    workflow = "Recipe / measurement" if self._measurement_worker is not None else "idle / manual"
+    report = self.emergency_manager.trigger(workflow)
+    self.manual_smu_panel.reset_for_output_off()
+    self._update_white_light_control()
+    failed = "；".join(report.failures)
+    suffix = f"；注意：{failed}" if failed else ""
+    self.status_message.setText(
+        "已執行緊急停止：量測已中止，SMU OUTPUT OFF 已排程，白光與相機已停止"
+        + suffix
+    )
+
+
+def _cancel_measurement_for_emergency(self: Any) -> None:
     if self._measurement_worker is not None:
         self._measurement_worker.request_cancel()
-    self.relay_service.safe_white_light_off("measurement_abort")
-    self.smu_manager.control.request_emergency_off()
-    self.status_message.setText(
-        "Emergency 已鎖定；新輸出已封鎖，OUTPUT OFF 將在目前 VISA I/O 完成後執行。"
-    )
+
+
+def _stop_camera_for_emergency(self: Any) -> None:
+    self._cancel_auto_capture()
+    self.controller.close_camera()
 
 
 def _on_measurement_progress(self: Any, progress: MeasurementProgress) -> None:
@@ -75,13 +89,20 @@ def _on_measurement_progress(self: Any, progress: MeasurementProgress) -> None:
 
 def _on_measurement_finished(self: Any, _result: object) -> None:
     self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE)
-    self.status_message.setText("Measurement completed")
+    if self.emergency_manager.is_active:
+        self.status_message.setText("ABORTED / EMERGENCY STOP")
+    else:
+        self.status_message.setText("Measurement completed")
 
 
 def _on_measurement_cancelled(self: Any) -> None:
     self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE)
     self.relay_service.safe_white_light_off("measurement_cancelled")
-    self.status_message.setText("Measurement stopped safely")
+    self.status_message.setText(
+        "ABORTED / EMERGENCY STOP"
+        if self.emergency_manager.is_active
+        else "Measurement stopped safely"
+    )
 
 
 def _on_measurement_failed(self: Any, message: str) -> None:
@@ -103,6 +124,8 @@ def attach_measurement_handlers(cls: type[Any]) -> None:
         start_background_measurement,
         stop_background_measurement,
         emergency_stop_measurement,
+        _cancel_measurement_for_emergency,
+        _stop_camera_for_emergency,
         _on_measurement_progress,
         _on_measurement_finished,
         _on_measurement_cancelled,

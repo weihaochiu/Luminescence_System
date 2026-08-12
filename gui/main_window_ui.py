@@ -142,7 +142,6 @@ class MainWindowUIMixin:
         toolbar.addAction(self.auto_capture_action)
         toolbar.addSeparator()
         toolbar.addAction(self.fit_action)
-        toolbar.addAction(self.actual_action)
 
         # Use font metrics so Windows DPI scaling cannot clip toolbar labels. Qt
         # moves excess actions into its overflow menu on compact windows.
@@ -302,6 +301,18 @@ class MainWindowUIMixin:
         self.view_title.setStyleSheet("font-weight: 600;")
         header_layout.addWidget(self.view_title)
         header_layout.addStretch()
+        self.live_actual_size_button = QToolButton()
+        self.live_actual_size_button.setDefaultAction(self.actual_action)
+        self.live_actual_size_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.emergency_stop_button = QPushButton("⚠ 緊急停止")
+        self.emergency_stop_button.setObjectName("globalEmergencyStop")
+        self.emergency_stop_button.setToolTip(
+            "立即取消 active workflow，並嘗試關閉 SMU、白光與相機擷取。"
+        )
+        header_layout.addWidget(self.live_actual_size_button)
+        header_layout.addWidget(self.emergency_stop_button)
 
         workspace = QWidget()
         workspace_layout = QVBoxLayout(workspace)
@@ -346,7 +357,8 @@ class MainWindowUIMixin:
             #measurementBar { background: #f1f3f4; border-top: 1px solid #aeb3b7; }
             #startMeasurement { background: #1976a8; color: white; font-weight: 600; min-height: 34px; }
             #stopMeasurement { background: #b3261e; color: white; font-weight: 600; min-height: 34px; }
-            #emergencyStop { background: #7f0000; color: white; font-weight: 700; min-height: 34px; border: 2px solid #4a0000; }
+            #globalEmergencyStop { background: #9b111e; color: white; font-weight: 700; border: 2px solid #5e0000; padding: 4px 12px; }
+            #globalEmergencyStop:hover { background: #b71c1c; border-color: #3f0000; }
             QScrollArea { background: #eef0f1; }
             """
         )
@@ -364,7 +376,6 @@ class MainWindowUIMixin:
             "white_light_button",
             "start_measurement_button",
             "stop_measurement_button",
-            "emergency_stop_button",
         ):
             setattr(self, name, getattr(bar, name))
         self.measurement_path_edit.setText(str(self.settings.value("measurement/output_root", "")))
@@ -375,7 +386,6 @@ class MainWindowUIMixin:
         self.sample_id_edit.textChanged.connect(self._on_sample_id_changed)
         self.start_measurement_button.clicked.connect(self._measurement_not_implemented)
         self.stop_measurement_button.clicked.connect(self.stop_background_measurement)
-        self.emergency_stop_button.clicked.connect(self.emergency_stop_measurement)
         return bar
 
     def _on_responsive_layout_changed(self, mode: LayoutMode) -> None:
@@ -436,17 +446,23 @@ class MainWindowUIMixin:
         self.smu_manager.error_occurred.connect(self.show_smu_error)
         self.smu_manager.control.error_occurred.connect(self.show_smu_error)
         self.instrument_state_manager.state_changed.connect(self.update_smu_ui_state)
-        self.smu_manager.control.polarity_changed.connect(
+        self.smu_manager.control.manual_polarity_changed.connect(
             self.manual_smu_panel.update_polarity
+        )
+        self.smu_manager.control.manual_sequence_status.connect(
+            self.manual_smu_panel.update_sequence_status
+        )
+        self.smu_manager.control.manual_sequence_finished.connect(
+            self.on_manual_smu_sequence_finished
         )
         self.smu_manager.control.command_applied.connect(self.manual_smu_panel.update_command)
         self.smu_manager.control.readback_ready.connect(self.manual_smu_panel.update_readback)
         self.manual_smu_panel.output_requested.connect(self.request_manual_smu_output)
         self.manual_smu_panel.output_off_requested.connect(self.request_manual_smu_off)
-        self.manual_smu_panel.emergency_off_requested.connect(self.request_smu_emergency_off)
         self.manual_smu_panel.handover_requested.connect(
             self.request_recipe_to_manual_handover
         )
+        self.emergency_stop_button.clicked.connect(self.emergency_stop_measurement)
         self.instrument_state_manager.refresh()
 
         self.controller.frame_ready.connect(self.on_frame_ready)

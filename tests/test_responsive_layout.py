@@ -36,20 +36,18 @@ class ResponsiveLayoutTests(unittest.TestCase):
         self.assertEqual(LayoutMode.WIDE, layout_mode_for_width(1920, thresholds))
         self.assertEqual(1600, effective_logical_width(1920, 1600, 1750))
 
-    def test_same_widgets_are_rearranged_and_emergency_never_hidden(self) -> None:
+    def test_same_measurement_widgets_are_rearranged_without_emergency_duplicate(self) -> None:
         if self.app is None:
             self.skipTest("A non-GUI Qt application already exists")
         bar = MeasurementControlBar()
-        widget_id = id(bar.emergency_stop_button)
         positions = {}
         for mode in (LayoutMode.WIDE, LayoutMode.STANDARD, LayoutMode.COMPACT):
             bar.set_layout_mode(mode)
-            index = bar.grid.indexOf(bar.emergency_stop_button)
+            index = bar.grid.indexOf(bar.stop_measurement_button)
             positions[mode] = bar.grid.getItemPosition(index)
-            self.assertEqual(widget_id, id(bar.emergency_stop_button))
-            self.assertFalse(bar.emergency_stop_button.isHidden())
             self.assertFalse(bar.selected_recipe_label.text().startswith("Recipe"))
             self.assertFalse(bar.recipe_label.isHidden())
+            self.assertFalse(hasattr(bar, "emergency_stop_button"))
         self.assertEqual(0, positions[LayoutMode.WIDE][0])
         self.assertEqual(4, positions[LayoutMode.COMPACT][0])
         self.assertNotEqual(positions[LayoutMode.WIDE], positions[LayoutMode.COMPACT])
@@ -100,15 +98,21 @@ class ResponsiveLayoutTests(unittest.TestCase):
                         manager.update_now()
                         self.app.processEvents()
                         bar = window.measurement_control_bar
-                        emergency = bar.emergency_stop_button
+                        emergency = window.emergency_stop_button
+                        header = emergency.parentWidget()
                         self.assertEqual(mode, manager.mode)
                         self.assertEqual(mode, bar.layout_mode)
                         self.assertFalse(emergency.isHidden())
                         self.assertLessEqual(
-                            emergency.geometry().right(), bar.contentsRect().right()
+                            emergency.geometry().right(), header.contentsRect().right()
                         )
                         self.assertLessEqual(
-                            emergency.geometry().bottom(), bar.contentsRect().bottom()
+                            emergency.geometry().bottom(), header.contentsRect().bottom()
+                        )
+                        layout = header.layout()
+                        self.assertLess(
+                            layout.indexOf(window.live_actual_size_button),
+                            layout.indexOf(emergency),
                         )
                         workspace = window.main_splitter.widget(1)
                         self.assertGreaterEqual(workspace.width(), workspace.minimumWidth())

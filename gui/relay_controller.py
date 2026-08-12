@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 import logging
+from threading import RLock
 import time
 from typing import Any, Protocol, TYPE_CHECKING
 
@@ -330,6 +331,7 @@ class RelayService:
         self.controller = controller
         self.settings_store = settings_store
         self.log_entries: list[RelayLogEntry] = []
+        self._operation_lock = RLock()
 
     def refresh_connection(self, settings: RelaySettings | None = None) -> str:
         selected = settings or self.settings_store.settings
@@ -361,6 +363,10 @@ class RelayService:
         self._record("CHANNEL", f"CH{channel}", previous, requested, "SUCCESS", source)
 
     def group_on(self, group_id: str, source: str = "main_window", group: RelayGroup | None = None) -> None:
+        with self._operation_lock:
+            self._group_on_unlocked(group_id, source, group)
+
+    def _group_on_unlocked(self, group_id: str, source: str, group: RelayGroup | None) -> None:
         selected = group or self._enabled_group(group_id)
         previous = self._group_state(selected).value
         try:
@@ -384,6 +390,10 @@ class RelayService:
         self._record("GROUP", selected.display_name, previous, "ON", "SUCCESS", source)
 
     def group_off(self, group_id: str, source: str = "main_window", group: RelayGroup | None = None) -> None:
+        with self._operation_lock:
+            self._group_off_unlocked(group_id, source, group)
+
+    def _group_off_unlocked(self, group_id: str, source: str, group: RelayGroup | None) -> None:
         selected = group or self._enabled_group(group_id)
         previous = self._group_state(selected).value
         failures: list[str] = []
@@ -413,6 +423,11 @@ class RelayService:
 
     def safe_white_light_off(self, source: str = "safety_cleanup") -> bool:
         """Best-effort logical OFF; this cannot verify coil power or contacts."""
+
+        with self._operation_lock:
+            return self._safe_white_light_off_unlocked(source)
+
+    def _safe_white_light_off_unlocked(self, source: str) -> bool:
         if not self.controller.connected:
             LOG.warning("White Light OFF skipped: USBRelay8 not connected | source=%s", source)
             return False

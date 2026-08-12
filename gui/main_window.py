@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMessageBox
 
 from . import __version__
 from .camera_controller import CameraController
+from .emergency_manager import EmergencyManager
 from .hdr_settings import HDRSettingsStore
 from .hdr_settings_dialog import HDRSettingsDialog
 from .hdr_workflow import HDRSessionState, choose_hdr_session
@@ -52,6 +53,11 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.relay_settings_store = RelaySettingsStore(relay_settings_path)
         self.relay_controller = RelayController()
         self.relay_service = RelayService(self.relay_controller, self.relay_settings_store)
+        self.emergency_manager = EmergencyManager(
+            self.smu_manager.control,
+            self.relay_service,
+            parent=self,
+        )
         self.selected_recipe: Recipe | None = None
         self.hdr_session_state: HDRSessionState | None = None
         self.devices: list[Any] = []
@@ -76,6 +82,14 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.auto_capture_timer.setSingleShot(True)
         self.auto_capture_timer.setInterval(15000)
         self.auto_capture_timer.timeout.connect(self._on_auto_capture_timeout)
+        self.emergency_manager.register_abort_action(
+            "Measurement / Recipe abort",
+            self._cancel_measurement_for_emergency,
+        )
+        self.emergency_manager.register_abort_action(
+            "Camera acquisition stop",
+            self._stop_camera_for_emergency,
+        )
 
         QTimer.singleShot(50, self.refresh_devices)
         QTimer.singleShot(300, self.auto_connect_smu_on_startup)

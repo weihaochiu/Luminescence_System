@@ -45,12 +45,6 @@ class MeasurementControlBar(QFrame):
         self.stop_measurement_button = QPushButton("停止")
         self.stop_measurement_button.setObjectName("stopMeasurement")
         self.stop_measurement_button.setEnabled(False)
-        self.emergency_stop_button = QPushButton("Emergency Stop")
-        self.emergency_stop_button.setObjectName("emergencyStop")
-        self.emergency_stop_button.setToolTip(
-            "Immediately blocks new output; OUTPUT OFF runs after active VISA I/O, then source is zeroed."
-        )
-
         self._widgets = (
             self.sample_label,
             self.sample_id_edit,
@@ -64,7 +58,6 @@ class MeasurementControlBar(QFrame):
             self.white_light_button,
             self.start_measurement_button,
             self.stop_measurement_button,
-            self.emergency_stop_button,
         )
         self._configure_size_policies()
 
@@ -89,7 +82,6 @@ class MeasurementControlBar(QFrame):
             self.white_light_button,
             self.start_measurement_button,
             self.stop_measurement_button,
-            self.emergency_stop_button,
         ):
             button.setSizePolicy(minimum, fixed)
 
@@ -108,7 +100,6 @@ class MeasurementControlBar(QFrame):
             self.white_light_button,
             self.start_measurement_button,
             self.stop_measurement_button,
-            self.emergency_stop_button,
         ):
             button.setMinimumWidth(metrics.horizontalAdvance(button.text()) + 28)
 
@@ -122,7 +113,6 @@ class MeasurementControlBar(QFrame):
                 self.white_light_button,
                 self.start_measurement_button,
                 self.stop_measurement_button,
-                self.emergency_stop_button,
             )
         )
         standard = max(1080, action_width + metrics.horizontalAdvance("M" * 35))
@@ -159,7 +149,6 @@ class MeasurementControlBar(QFrame):
             self.white_light_button,
             self.start_measurement_button,
             self.stop_measurement_button,
-            self.emergency_stop_button,
         )
         for column, widget in enumerate(widgets):
             self.grid.addWidget(widget, 0, column)
@@ -183,7 +172,6 @@ class MeasurementControlBar(QFrame):
         self.grid.addWidget(self.white_light_button, 2, 1)
         self.grid.addWidget(self.start_measurement_button, 2, 3)
         self.grid.addWidget(self.stop_measurement_button, 2, 4)
-        self.grid.addWidget(self.emergency_stop_button, 2, 5)
         self.grid.setColumnStretch(3, 1)
 
     def _layout_compact(self) -> None:
@@ -203,7 +191,6 @@ class MeasurementControlBar(QFrame):
 
         self.grid.addWidget(self.white_light_button, 4, 0)
         self.grid.addWidget(self.start_measurement_button, 4, 1)
-        self.grid.addWidget(self.stop_measurement_button, 4, 2)
-        self.grid.addWidget(self.emergency_stop_button, 4, 3, 1, 2)
+        self.grid.addWidget(self.stop_measurement_button, 4, 2, 1, 3)
         self.grid.setColumnStretch(1, 1)
         self.grid.setColumnStretch(3, 1)

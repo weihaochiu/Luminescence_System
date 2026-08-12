@@ -80,17 +80,32 @@ class MainWindowDeviceMixin:
         self.smu_manager.disconnect(force=False)
 
     def request_manual_smu_output(
-        self, mode: str, requested: float, compliance: float
+        self, mode: str, requested: float, compliance: float, area_cm2: float
     ) -> None:
         try:
-            accepted = self.smu_manager.control.request_manual_output(
-                mode, requested, compliance
+            self.emergency_manager.begin_operator_operation()
+            accepted = self.smu_manager.control.request_manual_output_sequence(
+                mode,
+                requested,
+                compliance,
+                area_cm2,
+                lambda: self.relay_service.group_on(
+                    "white_light", "manual_smu_polarity"
+                ),
+                lambda: self.relay_service.group_off(
+                    "white_light", "manual_smu_polarity"
+                ),
             )
             if not accepted:
                 raise SMUInterlockError("SMU 正忙碌，請稍後再試。")
-            self.status_message.setText("手動 SMU 輸出命令已排入序列化佇列")
+            self.status_message.setText("手動輸出：正在重新確認本次接線極性…")
         except (ValueError, SMUInterlockError) as exc:
             self.show_smu_error(str(exc))
+
+    def on_manual_smu_sequence_finished(self, success: bool) -> None:
+        self._update_white_light_control()
+        if success:
+            self.status_message.setText("手動 SMU OUTPUT ON；已啟動實際 V / J 監控。")
 
     def on_smu_connected(self, device: SMUDevice) -> None:
         self.device_panel.set_smu_connected(device)
@@ -126,10 +141,7 @@ class MainWindowDeviceMixin:
         self.status_message.setText("正在執行 SMU OUTPUT OFF 並確認實際輸出狀態。")
 
     def request_smu_emergency_off(self) -> None:
-        if self.smu_manager.control.request_emergency_off():
-            self.status_message.setText(
-                "Emergency 已鎖定；新輸出已封鎖，OUTPUT OFF 將在目前 VISA I/O 完成後執行。"
-            )
+        self.emergency_stop_measurement()
 
     def request_recipe_to_manual_handover(self) -> None:
         answer = QMessageBox.question(
