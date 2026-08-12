@@ -8,7 +8,12 @@ import logging
 
 from PySide6.QtCore import QObject, Signal
 
-from .smu_control import SMUControlManager, SMUOperationState, SMUOwnership
+from .smu_control import (
+    SMUControlManager,
+    SMUOperationState,
+    SMUOutputState,
+    SMUOwnership,
+)
 
 
 LOG = logging.getLogger(__name__)
@@ -22,6 +27,7 @@ class SMUInstrumentState(str, Enum):
     TRANSITIONING = "TRANSITIONING"
     AUTO_RUNNING = "AUTO_RUNNING"
     UNEXPECTED_OUTPUT_ON = "UNEXPECTED_OUTPUT_ON"
+    OUTPUT_UNKNOWN = "OUTPUT_UNKNOWN"
     ERROR = "ERROR"
     EMERGENCY_STOP = "EMERGENCY_STOP"
 
@@ -44,6 +50,8 @@ class SMUUIState:
     handover_enabled: bool
     status_text: str
     manual_lock_reason: str
+    output_state: SMUOutputState = SMUOutputState.OFF
+    fault_reason: str = ""
 
     @classmethod
     def disconnected(cls) -> "SMUUIState":
@@ -62,6 +70,7 @@ class SMUUIState:
             handover_enabled=False,
             status_text="SMU 未連線",
             manual_lock_reason="請先掃描並連線支援的 SMU。",
+            output_state=SMUOutputState.UNKNOWN,
         )
 
 
@@ -84,12 +93,14 @@ class InstrumentStateManager(QObject):
         self._ownership = control.ownership
         self._operation = control.operation_state
         self._output_enabled = control.output_enabled
+        self._output_state = control.output_state
         self._output_confirmed_off = control.output_confirmed_off
         self._last_state = SMUUIState.disconnected()
 
         control.ownership_changed.connect(self.update_ownership)
         control.operation_state_changed.connect(self.update_operation_state)
         control.output_changed.connect(self.update_output)
+        control.output_state_changed.connect(self.update_output_state)
         control.output_confirmation_changed.connect(self.update_output_confirmation)
 
     @property
@@ -114,17 +125,35 @@ class InstrumentStateManager(QObject):
         self._ownership = self._control.ownership
         self._operation = self._control.operation_state
         self._output_enabled = self._control.output_enabled
+        self._output_state = self._control.output_state
         self._output_confirmed_off = self._control.output_confirmed_off
         self._publish()
 
     def set_disconnected(self) -> None:
-        self._connection_state = SMUInstrumentState.DISCONNECTED
+        preserve_unknown = (
+            self._control.output_unknown_latched
+            and self._control.output_state is SMUOutputState.UNKNOWN
+        )
+        self._connection_state = (
+            SMUInstrumentState.ERROR
+            if preserve_unknown
+            else SMUInstrumentState.DISCONNECTED
+        )
         self._connected = False
         self._supported = False
-        self._device_label = ""
-        self._ownership = SMUOwnership.IDLE
-        self._operation = SMUOperationState.READY
-        self._output_enabled = False
+        self._device_label = "SMU 通訊失聯" if preserve_unknown else ""
+        self._ownership = (
+            self._control.ownership if preserve_unknown else SMUOwnership.IDLE
+        )
+        self._operation = (
+            self._control.operation_state
+            if preserve_unknown
+            else SMUOperationState.READY
+        )
+        self._output_enabled = self._control.output_enabled if preserve_unknown else False
+        self._output_state = (
+            self._control.output_state if preserve_unknown else SMUOutputState.UNKNOWN
+        )
         self._output_confirmed_off = False
         self._publish()
 
@@ -151,16 +180,35 @@ class InstrumentStateManager(QObject):
 
     def update_output(self, enabled: bool) -> None:
         self._output_enabled = bool(enabled)
+        self._output_state = (
+            SMUOutputState.ON if enabled else self._control.output_state
+        )
+        self._output_confirmed_off = self._control.output_confirmed_off
+        self._publish()
+
+    def update_output_state(self, output_state: str) -> None:
+        try:
+            self._output_state = SMUOutputState(output_state)
+        except ValueError:
+            self._output_state = SMUOutputState.UNKNOWN
         self._output_confirmed_off = self._control.output_confirmed_off
         self._publish()
 
     def update_output_confirmation(self, confirmed: bool) -> None:
         self._output_confirmed_off = bool(confirmed)
+        if confirmed and not self._control.output_unknown_latched:
+            self._output_enabled = False
+            self._output_state = SMUOutputState.OFF
         self._publish()
 
     def _derive_state(self) -> SMUInstrumentState:
         if self._connection_state is SMUInstrumentState.CONNECTING:
             return SMUInstrumentState.CONNECTING
+        if self._output_state is SMUOutputState.UNKNOWN and (
+            (self._connected and self._supported)
+            or self._control.output_unknown_latched
+        ):
+            return SMUInstrumentState.OUTPUT_UNKNOWN
         if self._connection_state is SMUInstrumentState.ERROR and not self._connected:
             return SMUInstrumentState.ERROR
         if not self._connected:
@@ -213,6 +261,7 @@ class InstrumentStateManager(QObject):
             in (
                 SMUInstrumentState.MANUAL_OUTPUT_ON,
                 SMUInstrumentState.UNEXPECTED_OUTPUT_ON,
+                SMUInstrumentState.OUTPUT_UNKNOWN,
             )
             or (
                 state is SMUInstrumentState.ERROR
@@ -243,6 +292,8 @@ class InstrumentStateManager(QObject):
             handover_enabled=handover_enabled,
             status_text=status_text,
             manual_lock_reason=lock_reason,
+            output_state=self._output_state,
+            fault_reason=self._control.fault_reason,
         )
         previous = self._last_state
         if previous.state is not snapshot.state:
@@ -269,7 +320,7 @@ class InstrumentStateManager(QObject):
         self,
         state: SMUInstrumentState,
     ) -> tuple[str, str]:
-        output = "ON" if self._output_enabled else "OFF"
+        output = self._output_state.value
         device = self._device_label or "SMU"
         if state is SMUInstrumentState.DISCONNECTED:
             return "SMU 未連線", "請先掃描並連線支援的 SMU。"
@@ -289,6 +340,16 @@ class InstrumentStateManager(QObject):
             return (
                 f"⚠ {device} 已連線\n偵測到未預期 OUTPUT ON｜需要安全復歸",
                 "編輯與輸出 ON 已封鎖；請先按 OUTPUT OFF 或 Emergency OFF。",
+            )
+        if state is SMUInstrumentState.OUTPUT_UNKNOWN:
+            reason = self._control.fault_reason
+            if "routing" in reason.casefold():
+                warning = "SMU Routing 狀態異常，已進入安全鎖定"
+            else:
+                warning = "⚠ 無法確認 SMU 輸出狀態\n請確認 SMU 前面板 OUTPUT 已關閉"
+            return (
+                f"⚠ {device}\nSMU 安全鎖定｜OUTPUT UNKNOWN",
+                warning,
             )
         if state is SMUInstrumentState.MANUAL_OUTPUT_ON:
             return (

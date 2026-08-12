@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from gui.smu_control import (
     PolarityState,
     SMUControlManager,
+    SMUInterlockError,
     SMUOperationState,
     SMUOwnership,
 )
@@ -316,14 +317,20 @@ class ManualSMUSequenceTests(unittest.TestCase):
         self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
         self.assertEqual(first_count + 1, self.events.count("MEASURE_JSC"))
 
-    def test_live_readback_routing_mismatch_forces_smu_off(self) -> None:
+    def test_live_readback_routing_mismatch_latches_fault_and_forces_smu_off(self) -> None:
         self.assertTrue(self.request(channel_id="Ch1"))
         self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
         self.active_channel = None
         self.assertTrue(self.control.request_readback())
-        self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE and not self.control.is_busy)
+        self.wait_until(lambda: self.control.ownership is SMUOwnership.FAULT and not self.control.is_busy)
         self.assertFalse(self.driver.output)
         self.assertIsNone(self.control.manual_routing_snapshot["active_channel_verified"])
+        self.assertTrue(self.control.fault_latched)
+        with self.assertRaises(SMUInterlockError):
+            self.request(channel_id="Ch2")
+        self.assertFalse(self.control.request_readback())
+        self.assertIs(self.control.ownership, SMUOwnership.FAULT)
+        self.assertIs(self.control.operation_state, SMUOperationState.FAULT)
 
     def test_external_routing_fault_latches_fault_after_safe_shutdown(self) -> None:
         self.assertTrue(self.request(channel_id="Ch3"))

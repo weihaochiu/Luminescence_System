@@ -180,6 +180,7 @@ class DevicePanel(QWidget):
             SMUInstrumentState.TRANSITIONING: "#8a5a00",
             SMUInstrumentState.AUTO_RUNNING: "#8a5a00",
             SMUInstrumentState.UNEXPECTED_OUTPUT_ON: "#c62828",
+            SMUInstrumentState.OUTPUT_UNKNOWN: "#c62828",
             SMUInstrumentState.ERROR: "#c62828",
             SMUInstrumentState.EMERGENCY_STOP: "#9b111e",
         }

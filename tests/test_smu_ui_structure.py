@@ -14,6 +14,7 @@ from gui.smu_control import (
     ManualPolarityResult,
     PolarityState,
     SMUOperationState,
+    SMUOutputState,
     SMUOwnership,
     SMUReadback,
     SMUSafetyLimits,
@@ -67,14 +68,20 @@ class SMUUIStructureTests(unittest.TestCase):
         self.assertNotIn("set_recipe_active", source)
 
     def test_window_close_stops_monitor_before_manager_shutdown(self) -> None:
-        source = (self.gui / "main_window.py").read_text(encoding="utf-8")
+        source = (self.gui / "main_window_close.py").read_text(encoding="utf-8")
         monitor = source.index("self.smu_monitor.stop()")
-        shutdown = source.index("self.smu_manager.shutdown()")
-        self.assertLess(monitor, shutdown)
+        confirmation = source.index("self.smu_manager.confirm_safe_for_close()")
+        self.assertLess(monitor, confirmation)
         routing_shutdown = source.index("self.relay_service.shutdown()")
-        camera_close = source.index("self.controller.close_camera()")
-        self.assertLess(shutdown, routing_shutdown)
+        shutdown = source.index("self.smu_manager.shutdown(safety_confirmed=True)")
+        camera_close = source.index("self.controller.close_camera()", routing_shutdown)
+        self.assertLess(confirmation, routing_shutdown)
+        self.assertLess(routing_shutdown, shutdown)
         self.assertLess(routing_shutdown, camera_close)
+        self.assertIn("FORCED_APPLICATION_EXIT_WITH_UNCONFIRMED_SMU_OUTPUT", source)
+        self.assertIn("取消關閉", source)
+        self.assertIn("再次嘗試安全停止", source)
+        self.assertIn("強制結束", source)
 
     def test_polarity_factor_is_assignment_not_toggle(self) -> None:
         source = (self.gui / "smu_control.py").read_text(encoding="utf-8")
@@ -235,6 +242,34 @@ class SMUUIStructureTests(unittest.TestCase):
         self.assertEqual("— V", panel.voltage_value.text())
         self.assertEqual("— mA/cm²", panel.current_density_value.text())
         self.assertEqual("—", panel.compliance_value.text())
+
+    def test_output_unknown_is_explicit_and_locks_every_manual_field(self) -> None:
+        if self.app is None:
+            self.skipTest("A non-GUI Qt application already exists")
+        panel = ManualSMUPanel()
+        unknown = replace(
+            self.ready_state(),
+            state=SMUInstrumentState.OUTPUT_UNKNOWN,
+            operation=SMUOperationState.FAULT,
+            output_state=SMUOutputState.UNKNOWN,
+            output_enabled=True,
+            output_confirmed_off=False,
+            manual_editable=False,
+            manual_off_enabled=True,
+            manual_lock_reason=(
+                "⚠ 無法確認 SMU 輸出狀態\n請確認 SMU 前面板 OUTPUT 已關閉"
+            ),
+        )
+        panel.apply_ui_state(unknown)
+        self.assertEqual("UNKNOWN", panel.output_value.text())
+        self.assertEqual("故障", panel.active_channel_value.text())
+        self.assertEqual("待確認", panel.factor_value.text())
+        self.assertFalse(panel.channel_combo.isEnabled())
+        self.assertFalse(panel.mode_combo.isEnabled())
+        self.assertFalse(panel.area_spin.isEnabled())
+        self.assertFalse(panel.setpoint_spin.isEnabled())
+        self.assertFalse(panel.compliance_spin.isEnabled())
+        self.assertIn("無法確認", panel.state_message.text())
 
     def test_readback_uses_measured_current_not_requested_value(self) -> None:
         if self.app is None:

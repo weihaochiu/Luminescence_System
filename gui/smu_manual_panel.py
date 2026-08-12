@@ -20,6 +20,7 @@ from .smu_control import (
     ManualPolarityResult,
     PolarityState,
     SMUOperationState,
+    SMUOutputState,
     SMUReadback,
     SMUSafetyLimits,
 )
@@ -122,9 +123,16 @@ class ManualSMUPanel(QWidget):
 
     def apply_ui_state(self, state: SMUUIState) -> None:
         self._ui_state = state
-        self.output_value.setText("ON" if state.output_enabled else "OFF")
-        if state.output_enabled:
+        display_output_state = (
+            state.output_state
+            if state.output_state is SMUOutputState.UNKNOWN
+            else SMUOutputState.ON if state.output_enabled else state.output_state
+        )
+        self.output_value.setText(display_output_state.value)
+        if display_output_state is SMUOutputState.ON:
             self.output_button.setText("停止")
+        elif display_output_state is SMUOutputState.UNKNOWN:
+            self.output_button.setText("安全復歸")
         elif state.operation is SMUOperationState.BUSY:
             self.output_button.setText("正在確認極性…")
         elif state.operation is SMUOperationState.SHUTTING_DOWN:
@@ -132,6 +140,9 @@ class ManualSMUPanel(QWidget):
         else:
             self.output_button.setText("輸出")
         self.state_message.setText(state.manual_lock_reason)
+        if state.operation is SMUOperationState.FAULT:
+            self.active_channel_value.setText("故障")
+            self.factor_value.setText("待確認")
         self.setToolTip(state.manual_lock_reason)
         self._update_enabled()
 

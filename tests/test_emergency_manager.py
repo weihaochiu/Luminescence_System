@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 from gui.emergency_manager import EmergencyManager
 
@@ -111,6 +112,15 @@ class EmergencyManagerTests(unittest.TestCase):
         self.assertEqual(["camera"], callbacks)
         self.assertFalse(report.actions["SMU routing Relays OFF"])
         self.assertTrue(any("routing relay failure" in item for item in report.failures))
+
+    def test_output_unknown_does_not_block_emergency_actions(self) -> None:
+        self.smu.output_enabled = False
+        self.smu.output_state = SimpleNamespace(value="UNKNOWN")
+        report = self.manager.trigger("OUTPUT_UNKNOWN")
+        self.assertEqual("UNKNOWN", report.smu_state_before)
+        self.assertTrue(report.actions["SMU OUTPUT OFF"])
+        self.assertTrue(report.actions["White Light OFF"])
+        self.assertTrue(report.actions["SMU routing Relays OFF"])
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ class FakeSMU(SMUDriver):
         self.configure_started = threading.Event()
         self.continue_configure = threading.Event()
         self.query_returns_unknown = False
+        self.query_raises = False
         self.query_output_calls = 0
         self.measure_voltage_calls = 0
         self.measure_current_calls = 0
@@ -115,6 +116,8 @@ class FakeSMU(SMUDriver):
     def query_output_enabled(self) -> bool | None:
         self.query_output_calls += 1
         self.readback_commands.append("OUTP?")
+        if self.query_raises:
+            raise TimeoutError("simulated VISA timeout")
         return None if self.query_returns_unknown else self.output
 
     def query_compliance_tripped(self, mode: str) -> bool:
@@ -224,6 +227,19 @@ class SMUControlTests(unittest.TestCase):
         self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE)
         self.assertFalse(self.driver.output)
 
+    def test_disconnected_never_owned_smu_does_not_block_application_close(self) -> None:
+        control = SMUControlManager()
+        try:
+            self.assertFalse(control.requires_close_output_confirmation)
+            driver = FakeSMU()
+            control.bind_driver(driver, output_confirmed_off=True)
+            self.assertTrue(control.requires_close_output_confirmation)
+            control.bind_driver(None, force=True)
+            self.assertFalse(control.requires_close_output_confirmation)
+            self.assertFalse(control.output_unknown_latched)
+        finally:
+            control.shutdown()
+
     def test_driver_bind_publishes_clean_ready_snapshot(self) -> None:
         ownership: list[str] = []
         operations: list[str] = []
@@ -330,6 +346,64 @@ class SMUControlTests(unittest.TestCase):
         self.assertFalse(self.control.last_shutdown_ok)
         self.assertEqual(SMUOwnership.FAULT, self.control.ownership)
         self.driver.query_returns_unknown = False
+
+    def test_output_on_readback_timeout_latches_unknown_fault(self) -> None:
+        self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        self.driver.query_raises = True
+        self.assertTrue(self.control.request_readback())
+        self.wait_until(lambda: not self.control.is_busy)
+        self.assertTrue(self.control.output_unknown_latched)
+        self.assertEqual("UNKNOWN", self.control.output_state.value)
+        self.assertEqual(SMUOwnership.FAULT, self.control.ownership)
+        with self.assertRaisesRegex(SMUInterlockError, "blocked|safety stop"):
+            self.control.request_manual_output("CC", 0.001, 2.0)
+        with self.assertRaisesRegex(SMUInterlockError, "blocked|safety stop"):
+            self.control.acquire_recipe()
+        self.driver.query_raises = False
+
+    def test_usb_disconnect_after_output_on_preserves_unknown_latch(self) -> None:
+        self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        self.control.bind_driver(None, force=True)
+        self.assertTrue(self.control.output_unknown_latched)
+        self.assertEqual("UNKNOWN", self.control.output_state.value)
+        self.assertEqual(SMUOwnership.FAULT, self.control.ownership)
+
+    def test_reconnect_does_not_clear_unknown_until_full_recovery(self) -> None:
+        self.control._latch_output_unknown("connection lost")
+        self.control.bind_driver(None, force=True)
+        reconnected = FakeSMU()
+        reconnected.output = True
+        self.control.bind_driver(reconnected, output_confirmed_off=False)
+        self.assertTrue(self.control.output_unknown_latched)
+        self.control.configure_safety_recovery(lambda: True, lambda: True)
+        self.assertFalse(self.control.recover_safety_fault())
+        reconnected.output = False
+        self.assertTrue(self.control.recover_safety_fault())
+        self.assertEqual("OFF", self.control.output_state.value)
+
+    def test_unknown_recovery_requires_output_routing_and_light_off(self) -> None:
+        routing_ok = False
+        light_ok = False
+        self.control.configure_safety_recovery(
+            lambda: routing_ok,
+            lambda: light_ok,
+        )
+        self.control._latch_output_unknown("unit test communication loss")
+        self.assertFalse(self.control.recover_safety_fault())
+        self.driver.output = True
+        routing_ok = True
+        light_ok = True
+        self.assertFalse(self.control.recover_safety_fault())
+        self.driver.output = False
+        routing_ok = False
+        self.assertFalse(self.control.recover_safety_fault())
+        routing_ok = True
+        self.assertTrue(self.control.recover_safety_fault())
+        self.assertFalse(self.control.output_unknown_latched)
+        self.assertEqual("OFF", self.control.output_state.value)
+        self.assertEqual(SMUOwnership.IDLE, self.control.ownership)
 
     def test_safe_recovery_confirms_off_before_manual_output(self) -> None:
         driver = FakeSMU()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -316,10 +317,99 @@ class RelayTests(unittest.TestCase):
     def test_direct_or_group_on_cannot_bypass_smu_routing_api(self) -> None:
         with self.assertRaisesRegex(RelayError, "routing"):
             self.service.channel_on(5)
+        with self.assertRaisesRegex(RelayError, "routing"):
+            self.service.channel_off(5)
         group = RelayGroup("unsafe", "Unsafe", [5])
         with self.assertRaisesRegex(RelayError, "routing"):
             self.service.group_on("unsafe", group=group)
+        with self.assertRaisesRegex(RelayError, "routing"):
+            self.service.group_off("unsafe", group=group)
         self.assertEqual(0, self.transport.bitmask & 0xF0)
+
+    def test_routing_protection_follows_dynamic_mapping(self) -> None:
+        self.store.settings.smu_output_channels = {
+            "Ch1": 3,
+            "Ch2": 4,
+            "Ch3": 7,
+            "Ch4": 8,
+        }
+        with self.assertRaisesRegex(RelayError, "routing"):
+            self.service.channel_off(3)
+        self.service.channel_on(5)
+        self.assertTrue(self.transport.bitmask & (1 << 4))
+
+    def test_enabled_group_cannot_include_routing_relay(self) -> None:
+        settings = RelaySettings.defaults()
+        settings.groups.append(RelayGroup("unsafe", "Unsafe", [3, 5], True))
+        self.assertTrue(
+            any("Routing" in error and "CH5" in error for error in settings.validate())
+        )
+        settings.groups[-1].enabled = False
+        self.assertFalse(any("unsafe" in error for error in settings.validate()))
+
+    def test_dialog_marks_dynamic_routing_relays_as_dedicated(self) -> None:
+        if self.app is None:
+            self.skipTest("A QCoreApplication already owns the full-suite process")
+        dialog = RelaySettingsDialog(self.store, self.service)
+        try:
+            self.assertFalse(dialog.channel_on_buttons[5].isEnabled())
+            self.assertFalse(dialog.channel_off_buttons[5].isEnabled())
+            self.assertFalse(dialog.channel_routing_labels[5].isHidden())
+            combo = dialog.smu_routing_combos["Ch1"]
+            combo.setCurrentIndex(combo.findData(3))
+            self.assertFalse(dialog.channel_on_buttons[3].isEnabled())
+            self.assertFalse(dialog.channel_off_buttons[3].isEnabled())
+            self.assertTrue(dialog.channel_on_buttons[5].isEnabled())
+        finally:
+            dialog.close()
+
+    def test_smu_confirmation_runs_outside_relay_operation_lock(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        result: list[object] = []
+
+        def confirm() -> bool:
+            entered.set()
+            release.wait(2.0)
+            return True
+
+        worker = threading.Thread(
+            target=lambda: result.append(
+                self.service.select_smu_output_channel("Ch1", confirm)
+            )
+        )
+        worker.start()
+        self.assertTrue(entered.wait(1.0))
+        acquired = self.service._operation_lock.acquire(timeout=0.25)
+        self.assertTrue(acquired)
+        if acquired:
+            self.service._operation_lock.release()
+        self.assertTrue(self.service.safe_white_light_off("lock_test"))
+        release.set()
+        worker.join(2.0)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual([5], result)
+
+    def test_generation_change_after_off_confirmation_prevents_relay_switch(self) -> None:
+        cancelled = False
+
+        def confirm() -> bool:
+            nonlocal cancelled
+            cancelled = True
+            return True
+
+        def check_cancel() -> None:
+            if cancelled:
+                raise RuntimeError("workflow generation changed")
+
+        before = list(self.transport.writes)
+        with self.assertRaisesRegex(RuntimeError, "generation changed"):
+            self.service.select_smu_output_channel(
+                "Ch2",
+                confirm,
+                check_cancel=check_cancel,
+            )
+        self.assertEqual(before, self.transport.writes)
 
     def test_multiple_active_routes_trigger_fault_handler_and_all_off(self) -> None:
         faults: list[str] = []
@@ -331,6 +421,17 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(1, len(faults))
         self.assertIn("Ch1", faults[0])
         self.assertIn("Ch3", faults[0])
+
+    def test_expected_ch1_actual_ch2_latches_same_routing_fault_path(self) -> None:
+        faults: list[str] = []
+        self.service.set_routing_fault_handler(faults.append)
+        self.transport.bitmask = 1 << (6 - 1)
+        with self.assertRaises(RelayRoutingFault):
+            self.service.verify_smu_output_channel_state("Ch1", "live_monitor")
+        self.assertEqual(1, len(faults))
+        self.assertIn("expected=['Ch1']", faults[0])
+        self.assertIn("actual=['Ch2']", faults[0])
+        self.assertEqual(0, self.transport.bitmask & 0xF0)
 
     def test_target_on_verification_failure_never_leaves_route_or_light_on(self) -> None:
         self.transport.ignore_commands = True
@@ -365,7 +466,7 @@ class RelayTests(unittest.TestCase):
 
     def test_settings_round_trip_and_channel_conflict(self) -> None:
         self.store.settings.channels[2].display_name = "Fixture"
-        self.store.settings.groups.append(RelayGroup("fixture", "Fixture", [3, 4, 5]))
+        self.store.settings.groups.append(RelayGroup("fixture", "Fixture", [3, 4]))
         self.store.save()
         restored = RelaySettingsStore(self.store.path)
         self.assertEqual("Fixture", restored.settings.channels[2].display_name)

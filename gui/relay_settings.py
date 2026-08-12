@@ -102,6 +102,14 @@ class RelaySettings:
         for channel_id, relay_number in self.smu_output_channels.items():
             if relay_number in range(1, 9) and not enabled_by_number.get(relay_number, False):
                 errors.append(f"{channel_id} 對應的 Relay {relay_number} 必須啟用")
+        routing_relays = set(relay_numbers)
+        for group in self.groups:
+            overlap = routing_relays & set(group.members)
+            if group.enabled and overlap:
+                channels = "、".join(f"CH{channel}" for channel in sorted(overlap))
+                errors.append(
+                    f"啟用的 Group「{group.group_id}」不可包含 SMU Routing 專用 Relay：{channels}"
+                )
         return errors
 
     def to_dict(self) -> dict[str, Any]:

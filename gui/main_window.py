@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, QStandardPaths, QTimer
-from PySide6.QtGui import QCloseEvent, QImage
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMessageBox
 
 from . import __version__
@@ -19,6 +19,7 @@ from .instrument_state_manager import InstrumentStateManager
 from .main_window_devices import MainWindowDeviceMixin
 from .main_window_ui import MainWindowUIMixin
 from .main_window_measurement import attach_measurement_handlers
+from .main_window_close import attach_close_handlers
 from .recipe_dialog import RecipeManagerDialog
 from .recipe_store import Recipe, RecipeStore
 from .polarity_settings import PolaritySettingsStore
@@ -28,6 +29,8 @@ from .main_window_relay import attach_relay_handlers
 from .relay_settings import RelaySettingsStore
 from .smu_manager import SMUManager
 from .smu_monitor import SMUMonitor
+
+
 class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
     """Top-level state owner and Recipe/HDR measurement coordinator."""
 
@@ -62,6 +65,10 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.relay_service.set_routing_fault_handler(
             self.smu_manager.control.request_external_interlock
         )
+        self.smu_manager.control.configure_safety_recovery(
+            lambda: self.relay_service.safe_smu_output_channels_off("smu_recovery"),
+            lambda: self.relay_service.safe_white_light_off("smu_recovery"),
+        )
         self.emergency_manager = EmergencyManager(
             self.smu_manager.control,
             self.relay_service,
@@ -78,6 +85,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self._measurement_thread: Any | None = None
         self._measurement_worker: Any | None = None
         self._auto_connect_after_scan = False
+        self._close_in_progress = False
 
         self._build_actions()
         self._build_menu_and_toolbar()
@@ -271,13 +279,6 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             "相機介面：RisingCam SDK 57.27250.20241216",
         )
 
-    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API name
-        self.stop_background_measurement()
-        self.smu_monitor.stop()
-        self.smu_manager.shutdown()
-        self.relay_service.shutdown()
-        self.controller.close_camera()
-        event.accept()
-
 attach_relay_handlers(MainWindow)
 attach_measurement_handlers(MainWindow)
+attach_close_handlers(MainWindow)

@@ -85,9 +85,11 @@ class InstrumentStateManagerTests(unittest.TestCase):
     def test_ready_manual_requires_confirmed_output_off(self) -> None:
         self.manager.set_connected("Keysight B2901BL", supported=True)
         state = self.manager.current
-        self.assertEqual(SMUInstrumentState.ERROR, state.state)
+        self.assertEqual(SMUInstrumentState.OUTPUT_UNKNOWN, state.state)
         self.assertFalse(state.manual_editable)
         self.assertTrue(state.manual_off_enabled)
+        self.assertEqual("UNKNOWN", state.output_state.value)
+        self.assertIn("無法確認", state.manual_lock_reason)
 
 
 if __name__ == "__main__":

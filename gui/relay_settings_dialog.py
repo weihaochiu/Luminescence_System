@@ -55,6 +55,9 @@ class RelaySettingsDialog(QDialog):
         self.channel_table.setColumnWidth(3, 240)
         self.channel_table.setColumnWidth(4, 130)
         self.channel_table.setColumnWidth(5, 95)
+        self.channel_on_buttons: dict[int, QPushButton] = {}
+        self.channel_off_buttons: dict[int, QPushButton] = {}
+        self.channel_routing_labels: dict[int, QLabel] = {}
         for row in range(8):
             item = QTableWidgetItem(f"CH{row + 1}")
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -74,7 +77,13 @@ class RelaySettingsDialog(QDialog):
             on, off = QPushButton("開啟"), QPushButton("關閉")
             on.clicked.connect(lambda _checked=False, ch=row + 1: self._channel(ch, True))
             off.clicked.connect(lambda _checked=False, ch=row + 1: self._channel(ch, False))
-            layout.addWidget(on); layout.addWidget(off)
+            routing_label = QLabel("SMU Routing 專用")
+            routing_label.setStyleSheet("color:#9b111e; font-weight:600;")
+            routing_label.hide()
+            self.channel_on_buttons[row + 1] = on
+            self.channel_off_buttons[row + 1] = off
+            self.channel_routing_labels[row + 1] = routing_label
+            layout.addWidget(on); layout.addWidget(off); layout.addWidget(routing_label)
             self.channel_table.setCellWidget(row, 6, controls)
 
         self.group_table = QTableWidget(0, 5)
@@ -105,6 +114,7 @@ class RelaySettingsDialog(QDialog):
             for relay_number in range(1, 9):
                 combo.addItem(f"Relay {relay_number}", relay_number)
             self.smu_routing_combos[channel_id] = combo
+            combo.currentIndexChanged.connect(self._refresh_routing_channel_controls)
             routing_form.addRow(channel_id, combo)
         routing_note = QLabel(
             "一般操作介面只顯示 Ch1～Ch4；實體 Relay mapping 僅在此維護。"
@@ -138,7 +148,22 @@ class RelaySettingsDialog(QDialog):
         for channel_id, combo in self.smu_routing_combos.items():
             relay_number = self.working.smu_output_channels.get(channel_id, 0)
             combo.setCurrentIndex(max(0, combo.findData(relay_number)))
+        self._refresh_routing_channel_controls()
         self._refresh_statuses()
+
+    def _refresh_routing_channel_controls(self) -> None:
+        routing_relays = {
+            int(combo.currentData())
+            for combo in self.smu_routing_combos.values()
+            if combo.currentData() is not None
+        }
+        for channel in range(1, 9):
+            dedicated = channel in routing_relays
+            self.channel_on_buttons[channel].setVisible(not dedicated)
+            self.channel_off_buttons[channel].setVisible(not dedicated)
+            self.channel_on_buttons[channel].setEnabled(not dedicated)
+            self.channel_off_buttons[channel].setEnabled(not dedicated)
+            self.channel_routing_labels[channel].setVisible(dedicated)
 
     def _append_group(self, group: RelayGroup) -> None:
         row = self.group_table.rowCount()

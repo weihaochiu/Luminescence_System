@@ -151,11 +151,29 @@ class SMUManager(QObject):
         metadata["connected"] = True
         return metadata
 
-    def shutdown(self) -> None:
+    def confirm_safe_for_close(self) -> bool:
+        """Confirm OFF only when this session has owned or may own output."""
+
+        if not self.control.requires_close_output_confirmation:
+            return True
+        return self.control.safe_shutdown(reason="application close")
+
+    def shutdown(
+        self,
+        *,
+        safety_confirmed: bool = False,
+        force: bool = False,
+    ) -> bool:
         self._poll_timer.stop()
-        self.control.shutdown()
-        self._close_session(safe_output=True, force_unbind=True)
+        if not force and not safety_confirmed and not self.confirm_safe_for_close():
+            return False
+        control_safe = self.control.shutdown(
+            safety_confirmed=safety_confirmed or force,
+            force=force,
+        )
+        self._close_session(safe_output=False, force_unbind=True)
         self._executor.shutdown(wait=False, cancel_futures=True)
+        return bool(control_safe or safety_confirmed or force)
 
     def safe_stop(self) -> bool:
         """Immediately attempt to put the connected SMU into a safe state."""

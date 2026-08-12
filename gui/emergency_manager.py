@@ -83,8 +83,11 @@ class EmergencyManager(QObject):
             self._active.set()
             abort_actions = tuple(self._abort_actions.items())
 
-        smu_state_before = (
-            "ON" if self.smu_control.output_enabled else "OFF/UNKNOWN"
+        output_state = getattr(self.smu_control, "output_state", None)
+        smu_state_before = getattr(
+            output_state,
+            "value",
+            "ON" if self.smu_control.output_enabled else "OFF/UNKNOWN",
         )
         try:
             white_light_state_before = self.relay_service.group_state("white_light").value
@@ -177,7 +180,11 @@ class EmergencyManager(QObject):
             generation,
             actions,
             failures,
-            "ON" if self.smu_control.output_enabled else "OFF/PENDING_CONFIRMATION",
+            getattr(
+                getattr(self.smu_control, "output_state", None),
+                "value",
+                "ON" if self.smu_control.output_enabled else "OFF/PENDING_CONFIRMATION",
+            ),
         )
         self.completed.emit(report)
         return report
