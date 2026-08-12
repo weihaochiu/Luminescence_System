@@ -125,9 +125,9 @@ class SMUSafetyService:
 
 @dataclass(frozen=True)
 class SMUReadback:
-    voltage_v: float
-    current_a: float
-    power_w: float
+    voltage_v: float | None
+    current_a: float | None
+    power_w: float | None
     output_enabled: bool | None
     compliance_tripped: bool | None
 
@@ -587,14 +587,46 @@ class SMUControlManager(QObject):
         def operation() -> None:
             with self._io_lock:
                 driver = self._required_driver()
-                voltage = driver.measure_voltage()
-                current = driver.measure_current()
+                output_enabled = driver.query_output_enabled()
+                with self._lock:
+                    ownership = self._ownership
+                    operation_state = self._operation_state
+                    mode = self._mode
+                measure_enabled_output = (
+                    output_enabled is True
+                    and ownership is SMUOwnership.MANUAL
+                    and operation_state is SMUOperationState.OUTPUT_ON
+                )
+                if measure_enabled_output:
+                    voltage = driver.measure_voltage()
+                    current = driver.measure_current()
+                    power = voltage * current
+                    compliance_tripped = driver.query_compliance_tripped(mode)
+                    LOG.debug(
+                        "SMU_READBACK output=ON owner=MANUAL mode=MEASURE"
+                    )
+                else:
+                    voltage = None
+                    current = None
+                    power = None
+                    compliance_tripped = None
+                    if output_enabled is False:
+                        LOG.debug("SMU_READBACK output=OFF mode=OUTPUT_ONLY")
+                    elif output_enabled is True:
+                        LOG.warning(
+                            "SMU_UNEXPECTED_OUTPUT_ON detected during readback "
+                            "owner=%s operation=%s",
+                            ownership.value,
+                            operation_state.value,
+                        )
+                    else:
+                        LOG.debug("SMU_READBACK output=UNKNOWN mode=OUTPUT_ONLY")
                 reading = SMUReadback(
                     voltage_v=voltage,
                     current_a=current,
-                    power_w=voltage * current,
-                    output_enabled=driver.query_output_enabled(),
-                    compliance_tripped=driver.query_compliance_tripped(self._mode),
+                    power_w=power,
+                    output_enabled=output_enabled,
+                    compliance_tripped=compliance_tripped,
                 )
             with self._lock:
                 if reading.output_enabled is not None:
@@ -668,6 +700,8 @@ class SMUControlManager(QObject):
             with self._output_enable_lock:
                 self._raise_if_output_blocked()
                 driver.set_output_enabled(True)
+                if driver.query_output_enabled() is not True:
+                    raise SMUInterlockError("SMU OUTPUT ON could not be confirmed")
         with self._lock:
             self._mode = mode
             self._output_enabled = True

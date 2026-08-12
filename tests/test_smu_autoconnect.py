@@ -18,23 +18,33 @@ def supported(address: str, serial: str) -> SMUDevice:
 
 
 class FakeResource:
-    def __init__(self, output_response: str = "0") -> None:
+    def __init__(
+        self,
+        output_response: str = "0",
+        auto_output_response: str = "0",
+    ) -> None:
         self.output_response = output_response
+        self.auto_output_response = auto_output_response
         self.commands: list[str] = []
+        self.transactions: list[str] = []
         self.closed = False
         self.timeout = 0
         self.write_termination = ""
         self.read_termination = ""
 
     def query(self, command: str) -> str:
+        self.transactions.append(command)
         if command == "*IDN?":
             return "Keysight Technologies,B2901BL,SERIAL-1,1.0"
         if command == ":OUTP?":
             return self.output_response
+        if command == ":OUTP:ON:AUTO?":
+            return self.auto_output_response
         raise AssertionError(f"unexpected query: {command}")
 
     def write(self, command: str) -> None:
         self.commands.append(command)
+        self.transactions.append(command)
 
     def close(self) -> None:
         self.closed = True
@@ -84,8 +94,26 @@ class SMUAutoConnectTests(unittest.TestCase):
         self.assertIs(resource, returned_resource)
         self.assertTrue(verified.supported)
         self.assertEqual(
-            [":OUTP OFF", ":SOUR:VOLT 0", ":SOUR:CURR 0"],
+            [
+                ":OUTP OFF",
+                ":OUTP:ON:AUTO OFF",
+                ":SOUR:VOLT 0",
+                ":SOUR:CURR 0",
+            ],
             resource.commands,
+        )
+        self.assertEqual(
+            [
+                "*IDN?",
+                ":OUTP OFF",
+                ":OUTP?",
+                ":OUTP:ON:AUTO OFF",
+                ":OUTP:ON:AUTO?",
+                ":SOUR:VOLT 0",
+                ":SOUR:CURR 0",
+                ":OUTP?",
+            ],
+            resource.transactions,
         )
         self.assertNotIn(":OUTP ON", resource.commands)
         driver.close(safe_stop=False)
@@ -97,6 +125,17 @@ class SMUAutoConnectTests(unittest.TestCase):
         device = supported("USB0::1::INSTR", "SERIAL-1")
         with patch.object(SMUManager, "_open_resource_manager", return_value=(manager, "test")):
             with self.assertRaisesRegex(RuntimeError, "OUTP"):
+                SMUManager._connect_worker(device)
+        self.assertTrue(resource.closed)
+        self.assertTrue(manager.closed)
+        self.assertNotIn(":OUTP ON", resource.commands)
+
+    def test_connection_fails_if_auto_output_off_cannot_be_confirmed(self) -> None:
+        resource = FakeResource(output_response="0", auto_output_response="1")
+        manager = FakeResourceManager(resource)
+        device = supported("USB0::1::INSTR", "SERIAL-1")
+        with patch.object(SMUManager, "_open_resource_manager", return_value=(manager, "test")):
+            with self.assertRaisesRegex(RuntimeError, "auto-output"):
                 SMUManager._connect_worker(device)
         self.assertTrue(resource.closed)
         self.assertTrue(manager.closed)

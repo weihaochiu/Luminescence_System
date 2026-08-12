@@ -10,7 +10,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from gui.instrument_state_manager import SMUInstrumentState, SMUUIState
-from gui.smu_control import SMUOperationState, SMUOwnership, SMUSafetyLimits
+from gui.smu_control import (
+    SMUOperationState,
+    SMUOwnership,
+    SMUReadback,
+    SMUSafetyLimits,
+)
 from gui.smu_manual_panel import ManualSMUPanel
 
 
@@ -150,6 +155,24 @@ class SMUUIStructureTests(unittest.TestCase):
         self.assertEqual("-1", panel.factor_value.text())
         panel.update_command("CC", 0.002, 0.002, 2.0, 1)
         self.assertEqual("-1", panel.factor_value.text())
+
+    def test_output_off_readback_displays_unavailable_values(self) -> None:
+        if self.app is None:
+            self.skipTest("A non-GUI Qt application already exists")
+        panel = ManualSMUPanel()
+        panel.update_readback(
+            SMUReadback(
+                voltage_v=None,
+                current_a=None,
+                power_w=None,
+                output_enabled=False,
+                compliance_tripped=None,
+            )
+        )
+        self.assertEqual("— V", panel.voltage_value.text())
+        self.assertEqual("— mA", panel.current_value.text())
+        self.assertEqual("— mW", panel.power_value.text())
+        self.assertEqual("—", panel.compliance_value.text())
 
     @staticmethod
     def ready_state() -> SMUUIState:

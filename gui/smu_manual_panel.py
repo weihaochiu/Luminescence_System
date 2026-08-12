@@ -138,14 +138,24 @@ class ManualSMUPanel(QWidget):
         self.actual_value.setText(f"{physical * scale:+.4f} {unit}")
 
     def update_readback(self, reading: SMUReadback) -> None:
-        self.voltage_value.setText(f"{reading.voltage_v:+.6f} V")
-        self.current_value.setText(f"{reading.current_a * 1000:+.6f} mA")
-        self.power_value.setText(f"{reading.power_w * 1000:+.6f} mW")
+        self.voltage_value.setText(
+            "— V" if reading.voltage_v is None else f"{reading.voltage_v:+.6f} V"
+        )
+        self.current_value.setText(
+            "— mA"
+            if reading.current_a is None
+            else f"{reading.current_a * 1000:+.6f} mA"
+        )
+        self.power_value.setText(
+            "— mW"
+            if reading.power_w is None
+            else f"{reading.power_w * 1000:+.6f} mW"
+        )
         # Output presentation is intentionally updated only by SMUUIState.
         self.compliance_value.setText(
             "TRIPPED"
             if reading.compliance_tripped
-            else ("正常" if reading.compliance_tripped is False else "未知")
+            else ("正常" if reading.compliance_tripped is False else "—")
         )
 
     def _update_mode(self) -> None:

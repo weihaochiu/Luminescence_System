@@ -1,4 +1,11 @@
-# EL 量測設備控制程式 V1.5.1
+# EL 量測設備控制程式 V1.5.2
+
+## V1.5.2 Keysight B2901BL readback safety hotfix
+
+- B2901BL 實機確認在 OUTPUT OFF 時送出 `:MEAS:VOLT?` 會自動開啟 Source Output；500 ms readback 改為先查 `:OUTP?`。
+- OUTPUT OFF 或不合法的 OUTPUT ON 狀態只發布 output 狀態，不送出 voltage/current/compliance measurement； unavailable 數值顯示為 `—`。
+- 只有 `MANUAL + OUTPUT_ON` 才允許量測；`IDLE + OUTPUT ON` 仍由既有 `UNEXPECTED_OUTPUT_ON` 安全狀態處理。
+- Keysight B2900 連線初始化會設定並讀回確認 `:OUTP:ON:AUTO OFF`，無法確認時 fail closed，不發布 `READY_MANUAL`。
 
 ## V1.5.1 SMU Manual Control／State Consistency／Safety Handover Hotfix
 

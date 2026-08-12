@@ -39,3 +39,17 @@ class KeysightB2900Driver(SMUDriver):
     def set_output_enabled(self, enabled: bool) -> None:
         self.resource.write(":OUTP ON" if enabled else ":OUTP OFF")
 
+    def set_auto_output_enabled(self, enabled: bool) -> None:
+        self.resource.write(":OUTP:ON:AUTO ON" if enabled else ":OUTP:ON:AUTO OFF")
+
+    def query_auto_output_enabled(self) -> bool | None:
+        try:
+            response = str(self.resource.query(":OUTP:ON:AUTO?")).strip().upper()
+        except Exception:
+            return None
+        if response in {"1", "ON"}:
+            return True
+        if response in {"0", "OFF"}:
+            return False
+        return None
+

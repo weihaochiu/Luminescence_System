@@ -1,7 +1,7 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.5.1
-對應程式版本：V1.5.1
+文件版本：1.5.2
+對應程式版本：V1.5.2
 最後更新：2026-08-12（UTC+8）
 
 ## 1. 文件目的
@@ -137,7 +137,7 @@ Manual 與 Recipe 在 `SMUControlManager` 互鎖。所有高階 output transitio
 
 `InstrumentStateManager` 不取代底層 interlock，而是唯一負責 GUI policy：它把非同步連線生命週期與 control 的 ownership／operation／output／`output_confirmed_off` 合併成不可變 `SMUUIState`。`READY_MANUAL` 僅允許 `IDLE + READY + output_enabled=False + output_confirmed_off=True`；Manual 正常輸出使用 `MANUAL_OUTPUT_ON`，`IDLE + READY + OUTPUT ON` 等矛盾組合進入 `UNEXPECTED_OUTPUT_ON`，只開放安全 OFF／Emergency。`SMUControlManager.bind_driver()` 每次綁定或解除都發布完整 snapshot，避免 UI 保留上一個 session 的 BUSY、RECIPE 或 FAULT。Camera state 不輸入此 manager，因此 Live View、曝光或拍攝不會鎖定 SMU Manual。
 
-啟動自動連線只選擇上次成功 serial、上次成功 VISA resource，或掃描結果中唯一受支援的 SMU；多台且無法判定時 fail closed，交由使用者手動選擇。受支援 driver 必須依序送出 `OUTPUT OFF`、以 `:OUTP?` 明確確認 False，再將 source voltage/current 歸零，才可發布 connected／READY_MANUAL；任何 driver bind／初始化失敗均關閉 resource 與 resource manager、清空所有 session 欄位並進入 connection ERROR。
+啟動自動連線只選擇上次成功 serial、上次成功 VISA resource，或掃描結果中唯一受支援的 SMU；多台且無法判定時 fail closed，交由使用者手動選擇。受支援 B2900 driver 必須依序送出 `OUTPUT OFF`、以 `:OUTP?` 明確確認 False、設定並讀回確認 `:OUTP:ON:AUTO OFF`、將 source voltage/current 歸零，再次確認 OUTPUT OFF，才可發布 connected／READY_MANUAL；任何 driver bind／初始化失敗均關閉 resource 與 resource manager、清空所有 session 欄位並進入 connection ERROR。
 
 `PolarityService` 預設為 `UNKNOWN`（factor `None`）。Manual setpoint 是 SMU 實體座標，直接送至儀器且不依賴 Polarity；Recipe setpoint 才是 Device 座標，必須明確確認 `+1` 或 `-1` 後轉換成 physical SMU command。`set_confirmed_factor()` 為 idempotent assignment 而非 toggle；polarity determination 尚未實作，其未來流程必須只產生 factor，不可預先套用未確認 factor。Manual panel 的 range 由同一份 `SMUSafetyLimits` 注入，不在 UI 維護第二份上限。
 
@@ -147,8 +147,9 @@ Manual → Recipe 交接必須先完成 verified shutdown，釋放至 IDLE 後�
 
 一般 disconnect 只有在 hardware query 明確回傳 OFF、ownership 為 IDLE 且 control 無 pending I/O 時才允許；True 或 `None` 均 fail-closed。`safe_shutdown()` 的固定順序為 `:OUTP OFF` → `:OUTP? == False` → source 歸零，並以 `output_confirmed_off`／`last_shutdown_ok` 區分完整成功與失敗；query 為 ON、UNKNOWN、exception 或任何 `safe_stop()` failure 都不得宣告安全，必須進入 FAULT。
 
-Readback 由 `SMUMonitor` 的 Qt timer 觸發，但實際 query 在控制層的單一 worker 執行；I/O lock 同時涵蓋 Manual、Recipe、readback 與 shutdown。Recipe ownership 或 busy 時不排入 readback，避免 critical command 中插入 query。
+Readback 由 `SMUMonitor` 的 Qt timer 觸發，但實際 query 在控制層的單一 worker 執行；I/O lock 同時涵蓋 Manual、Recipe、readback 與 shutdown。Recipe ownership 或 busy 時不排入 readback，避免 critical command 中插入 query。B2901BL 實機已確認 OUTPUT OFF 時送出 `:MEAS:VOLT?` 會自動開啟 Source Output，因此 periodic readback 採 OUTP-first：先查 `:OUTP?`，OFF 時禁止 voltage/current/compliance measurement；只有 `MANUAL + OUTPUT_ON` 才量測。其他 OUTPUT ON 組合只發布 output 狀態，保留既有 `UNEXPECTED_OUTPUT_ON` 復歸流程。
 
+V1.5.2 修正 B2901BL readback auto-output：OUTP-first、OUTPUT OFF 禁止 `MEAS:*` polling、B2900 auto-output 明確停用並讀回確認；Recipe、Polarity 與 `UNEXPECTED_OUTPUT_ON` 安全狀態不變。
 V1.5.1 修正 Manual 實體座標、矛盾 readback 復歸、verified shutdown、雙向安全交接與單一 UI snapshot；完整 Recipe 硬體執行仍停用。未完成 Jsc／Voc determination、Dark I–V、Dark Frames、EL 點位與相機同步前，不得啟用主畫面「開始量測」。
 
 ## 6.1 Responsive GUI 邊界

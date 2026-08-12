@@ -278,6 +278,20 @@
 - 完成版本：V1.5.1。
 - 取代或關聯需求：補強 SMU-001、SMU-002；SAFE-001 的 Recipe execution 暫緩狀態不變。
 
+### SMU-004－B2901BL OUTPUT OFF readback auto-output hotfix
+
+- 狀態：已完成（V1.5.2；Keysight B2901BL 實機 root cause 已驗證，修正版待實機驗收）。
+- 提出日期：2026-08-12（UTC+8）。
+- 使用者原意：修正 periodic readback 在 OUTPUT OFF 時送出 `:MEAS:VOLT?`，造成 B2901BL 自動開啟 Source Output 並進入 `UNEXPECTED_OUTPUT_ON` 的問題。
+- 詳細行為：readback 採 OUTP-first；OFF 時只查 output 並將量測值標成 unavailable；只有合法 `MANUAL + OUTPUT_ON` 才查 voltage/current/compliance；B2900 初始化設定並讀回確認 `:OUTP:ON:AUTO OFF`。
+- 驗收條件：IDLE／OFF 連續 polling 不送 `MEAS:*` 且保持 `READY_MANUAL`；IDLE／ON 不量測並進入既有 `UNEXPECTED_OUTPUT_ON`；auto-output 無法確認 OFF 時不得發布 connected／READY_MANUAL。
+- 影響模組：`smu_control.py`、`keysight_b2900.py`、`smu_manager.py`、`smu_manual_panel.py`、SMU tests、版本與文件。
+- 相容性／資料遷移：不改 Recipe、Polarity、InstrumentStateManager、Camera/HDR/Relay 或資料格式。
+- 安全風險：修正版仍須使用 B2901BL 驗證啟動後等待至少 10 秒保持 OUTPUT OFF，並驗證 Manual ON／readback／OFF 循環。
+- 測試與驗證：fake B2901BL auto-enable regression、readback call order、unexpected ON state、startup repeated ticks、Manual ON→OFF、auto-output initialization order／fail-closed。
+- 完成版本：V1.5.2。
+- 取代或關聯需求：補強 SMU-002、SMU-003；SAFE-001 與 Recipe execution 暫緩狀態不變。
+
 ### UI-002－Runtime responsive metrics 與 Recipe 顯示修正
 
 - 狀態：已完成（V1.5.1；Qt offscreen 驗證，Windows 多螢幕 DPI 實機待驗證）。
@@ -336,6 +350,13 @@
 ```
 
 ## 9. 版本變更摘要
+
+### V1.5.2－2026-08-12
+
+- B2901BL 實機確認 OUTPUT OFF 時 `:MEAS:VOLT?` 會自動開啟 Source Output；readback 改為 OUTP-first，OFF 時禁止 `MEAS:*` polling。
+- 只有合法 Manual OUTPUT ON 才取得 voltage/current/compliance；其他 ON 狀態保留 `UNEXPECTED_OUTPUT_ON` 安全復歸。
+- B2900 初始化新增 `:OUTP:ON:AUTO OFF` 與 query confirmation；無法確認時連線 fail closed。
+- Output OFF 的量測欄位顯示 unavailable；Recipe、Polarity、InstrumentStateManager 與完整 Recipe 停用邊界不變。
 
 ### V1.5.1－2026-08-12
 

@@ -301,11 +301,17 @@ class SMUManager(QObject):
             driver_class = KeysightB2900Driver if verified.supported else SMUDriver
             driver = driver_class(resource, verified)
             if verified.supported:
-                failures = driver.safe_stop()
-                if failures:
+                assert isinstance(driver, KeysightB2900Driver)
+                driver.set_output_enabled(False)
+                if driver.query_output_enabled() is not False:
+                    raise RuntimeError("無法確認 SMU 安全初始化時 OUTPUT 為 OFF")
+                driver.set_auto_output_enabled(False)
+                if driver.query_auto_output_enabled() is not False:
                     raise RuntimeError(
-                        "SMU 安全初始化失敗：" + "; ".join(failures)
+                        "無法確認 Keysight B2900 auto-output 已停用"
                     )
+                driver.set_voltage(0.0)
+                driver.set_current(0.0)
                 if driver.query_output_enabled() is not False:
                     raise RuntimeError("無法確認 SMU 安全初始化後 OUTPUT 為 OFF")
             return manager, resource, verified, driver

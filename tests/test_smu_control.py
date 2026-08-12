@@ -4,6 +4,9 @@ import threading
 import time
 import unittest
 
+from PySide6.QtCore import Qt
+
+from gui.instrument_state_manager import InstrumentStateManager, SMUInstrumentState
 from gui.smu_base import SMUDevice, SMUDriver
 from gui.smu_control import (
     PolarityService,
@@ -29,6 +32,12 @@ class FakeSMU(SMUDriver):
         self.configure_started = threading.Event()
         self.continue_configure = threading.Event()
         self.query_returns_unknown = False
+        self.query_output_calls = 0
+        self.measure_voltage_calls = 0
+        self.measure_current_calls = 0
+        self.compliance_query_calls = 0
+        self.measurement_enables_output_when_off = False
+        self.readback_commands: list[str] = []
         self.concurrent_io = False
         self._active_io = 0
         self._guard = threading.Lock()
@@ -89,18 +98,28 @@ class FakeSMU(SMUDriver):
     def measure_voltage(self) -> float:
         self._enter()
         try:
+            self.measure_voltage_calls += 1
+            self.readback_commands.append("MEAS:VOLT?")
+            if self.measurement_enables_output_when_off and not self.output:
+                self.output = True
             time.sleep(0.02)
             return self.voltage
         finally:
             self._leave()
 
     def measure_current(self) -> float:
+        self.measure_current_calls += 1
+        self.readback_commands.append("MEAS:CURR?")
         return self.current
 
     def query_output_enabled(self) -> bool | None:
+        self.query_output_calls += 1
+        self.readback_commands.append("OUTP?")
         return None if self.query_returns_unknown else self.output
 
     def query_compliance_tripped(self, mode: str) -> bool:
+        self.compliance_query_calls += 1
+        self.readback_commands.append("COMPLIANCE?")
         return False
 
 
@@ -362,6 +381,165 @@ class SMUControlTests(unittest.TestCase):
         worker.join(timeout=1.0)
         self.assertFalse(worker.is_alive())
         self.assertFalse(self.driver.concurrent_io)
+
+    def test_idle_output_off_readback_is_output_only(self) -> None:
+        readings = []
+        self.control.readback_ready.connect(
+            readings.append,
+            Qt.ConnectionType.DirectConnection,
+        )
+
+        self.assertTrue(self.control.request_readback())
+        self.wait_until(lambda: not self.control.is_busy and bool(readings))
+
+        self.assertEqual(1, self.driver.query_output_calls)
+        self.assertEqual(0, self.driver.measure_voltage_calls)
+        self.assertEqual(0, self.driver.measure_current_calls)
+        self.assertEqual(0, self.driver.compliance_query_calls)
+        self.assertEqual(["OUTP?"], self.driver.readback_commands)
+        self.assertFalse(readings[-1].output_enabled)
+        self.assertTrue(self.control.output_confirmed_off)
+        self.assertIsNone(readings[-1].voltage_v)
+        self.assertIsNone(readings[-1].current_a)
+        self.assertIsNone(readings[-1].power_w)
+        self.assertIsNone(readings[-1].compliance_tripped)
+
+    def test_manual_output_on_readback_measures_after_output_query(self) -> None:
+        readings = []
+        self.control.readback_ready.connect(
+            readings.append,
+            Qt.ConnectionType.DirectConnection,
+        )
+        self.assertTrue(self.control.request_manual_output("CV", 1.2, 0.020))
+        self.wait_until(
+            lambda: self.control.operation_state is SMUOperationState.OUTPUT_ON
+            and not self.control.is_busy
+        )
+        self.driver.readback_commands.clear()
+
+        self.assertTrue(self.control.request_readback())
+        self.wait_until(lambda: not self.control.is_busy and bool(readings))
+
+        self.assertEqual(1, self.driver.measure_voltage_calls)
+        self.assertEqual(1, self.driver.measure_current_calls)
+        self.assertEqual(1, self.driver.compliance_query_calls)
+        self.assertEqual(
+            ["OUTP?", "MEAS:VOLT?", "MEAS:CURR?", "COMPLIANCE?"],
+            self.driver.readback_commands,
+        )
+        self.assertTrue(readings[-1].output_enabled)
+        self.assertEqual(1.2, readings[-1].voltage_v)
+        self.assertEqual(0.0, readings[-1].current_a)
+
+    def test_idle_unexpected_output_on_skips_measurement_and_updates_state(self) -> None:
+        state_manager = InstrumentStateManager(self.control)
+        self.control.output_changed.connect(
+            state_manager.update_output,
+            Qt.ConnectionType.DirectConnection,
+        )
+        state_manager.set_connected("Keysight B2901BL", supported=True)
+        observed_outputs: list[bool] = []
+        self.control.output_changed.connect(
+            observed_outputs.append,
+            Qt.ConnectionType.DirectConnection,
+        )
+        self.driver.output = True
+
+        self.assertTrue(self.control.request_readback())
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+
+        self.assertEqual([True], observed_outputs)
+        self.assertEqual(0, self.driver.measure_voltage_calls)
+        self.assertEqual(0, self.driver.measure_current_calls)
+        self.assertEqual(0, self.driver.compliance_query_calls)
+        self.assertEqual(["OUTP?"], self.driver.readback_commands)
+        self.assertFalse(self.control.output_confirmed_off)
+        self.assertEqual(
+            SMUInstrumentState.UNEXPECTED_OUTPUT_ON,
+            state_manager.current.state,
+        )
+
+    def test_b2901bl_off_measurement_regression_does_not_enable_output(self) -> None:
+        self.driver.measurement_enables_output_when_off = True
+
+        self.assertTrue(self.control.request_readback())
+        self.wait_until(lambda: not self.control.is_busy)
+
+        self.assertEqual(0, self.driver.measure_voltage_calls)
+        self.assertEqual(0, self.driver.measure_current_calls)
+        self.assertEqual(["OUTP?"], self.driver.readback_commands)
+        self.assertFalse(self.driver.output)
+        self.assertFalse(self.control.output_enabled)
+        self.assertTrue(self.control.output_confirmed_off)
+
+    def test_startup_readback_ticks_remain_ready_manual_and_output_off(self) -> None:
+        state_manager = InstrumentStateManager(self.control)
+        state_manager.set_connected("Keysight B2901BL", supported=True)
+
+        for expected_queries in range(1, 9):
+            self.assertTrue(self.control.request_readback())
+            self.wait_until(
+                lambda: not self.control.is_busy
+                and self.driver.query_output_calls >= expected_queries
+            )
+
+        self.assertFalse(self.driver.output)
+        self.assertFalse(self.control.output_enabled)
+        self.assertTrue(self.control.output_confirmed_off)
+        self.assertEqual(0, self.driver.measure_voltage_calls)
+        self.assertEqual(0, self.driver.measure_current_calls)
+        self.assertEqual(SMUInstrumentState.READY_MANUAL, state_manager.current.state)
+        self.assertTrue(state_manager.current.manual_editable)
+
+    def test_manual_on_readback_off_returns_to_output_only_ready_state(self) -> None:
+        state_manager = InstrumentStateManager(self.control)
+        state_manager.set_connected("Keysight B2901BL", supported=True)
+        readings = []
+        self.control.readback_ready.connect(
+            readings.append,
+            Qt.ConnectionType.DirectConnection,
+        )
+
+        self.assertTrue(self.control.request_manual_output("CC", 0.010, 2.0))
+        self.wait_until(
+            lambda: self.control.operation_state is SMUOperationState.OUTPUT_ON
+            and not self.control.is_busy
+        )
+        self.driver.readback_commands.clear()
+        self.assertTrue(self.control.request_readback())
+        self.wait_until(lambda: not self.control.is_busy and len(readings) == 1)
+        self.assertIsNotNone(readings[-1].voltage_v)
+        self.assertIsNotNone(readings[-1].current_a)
+
+        self.assertTrue(self.control.request_manual_off())
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and self.control.operation_state is SMUOperationState.READY
+            and not self.control.is_busy
+        )
+        self.driver.readback_commands.clear()
+        measured_before_off_tick = (
+            self.driver.measure_voltage_calls,
+            self.driver.measure_current_calls,
+            self.driver.compliance_query_calls,
+        )
+        self.assertTrue(self.control.request_readback())
+        self.wait_until(lambda: not self.control.is_busy and len(readings) == 2)
+
+        self.assertEqual(
+            measured_before_off_tick,
+            (
+                self.driver.measure_voltage_calls,
+                self.driver.measure_current_calls,
+                self.driver.compliance_query_calls,
+            ),
+        )
+        self.assertIsNone(readings[-1].voltage_v)
+        self.assertIsNone(readings[-1].current_a)
+        self.assertEqual(["OUTP?"], self.driver.readback_commands)
+        state_manager.set_connected("Keysight B2901BL", supported=True)
+        self.assertEqual(SMUInstrumentState.READY_MANUAL, state_manager.current.state)
+        self.assertTrue(state_manager.current.manual_editable)
 
     def test_configuration_failure_cleans_up_manual_ownership(self) -> None:
         self.driver.fail_configure = True
