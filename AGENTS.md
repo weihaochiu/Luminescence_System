@@ -60,7 +60,10 @@ git status
 
 之後執行完整測試：
 
-python -m unittest discover -s tests
+python -m unittest discover -s tests -v
+
+目前 repository layout 下，`python -m unittest discover -v` 可能找不到 tests，
+因此不要將它作為正式驗證指令。
 
 只有全部必要測試通過，才可以進入備份與 GitHub 更新流程。
 

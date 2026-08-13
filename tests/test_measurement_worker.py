@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from PySide6.QtCore import QCoreApplication
+from tests.qt_test_utils import ensure_qapplication
 
 from gui.measurement_worker import MeasurementCancelled, MeasurementWorker
 
@@ -10,7 +10,7 @@ from gui.measurement_worker import MeasurementCancelled, MeasurementWorker
 class MeasurementWorkerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.app = QCoreApplication.instance() or QCoreApplication([])
+        cls.app = ensure_qapplication()
 
     def test_worker_reports_progress_and_result(self) -> None:
         events: list[object] = []

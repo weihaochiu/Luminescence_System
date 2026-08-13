@@ -29,6 +29,7 @@ from .camera_exposure import AUTO_TARGET_MAX, AUTO_TARGET_MIN, ExposureMode
 from .device_panel import DevicePanel
 from .measurement_control_bar import MeasurementControlBar
 from .responsive_layout import LayoutMode, ResponsiveLayoutManager
+from .sidebar import SidebarItem, SidebarRegistry, SidebarSettingsDialog
 from .smu_manual_panel import ManualSMUPanel
 from .widgets import CollapsibleSection, ImageView
 
@@ -78,6 +79,8 @@ class MainWindowUIMixin:
         self.polarity_settings_action.setToolTip("設定手動輸出與 Recipe 共用的 Jsc / Voc 極性確認條件")
         self.relay_settings_action = QAction("Relay 設定…", self)
         self.relay_settings_action.setToolTip("設定 USBRelay8 Channel、群組與手動測試")
+        self.sidebar_settings_action = QAction("左側工具列…", self)
+        self.sidebar_settings_action.setToolTip("調整左側功能面板的順序與顯示狀態")
         self.smu_auto_connect_action = QAction("啟動時自動連線 SMU", self)
         self.smu_auto_connect_action.setCheckable(True)
         self.smu_auto_connect_action.setChecked(
@@ -99,6 +102,7 @@ class MainWindowUIMixin:
         self.hdr_settings_action.triggered.connect(self.open_hdr_settings)
         self.polarity_settings_action.triggered.connect(self.open_polarity_settings)
         self.relay_settings_action.triggered.connect(self.open_relay_settings)
+        self.sidebar_settings_action.triggered.connect(self.open_sidebar_settings)
         self.smu_auto_connect_action.toggled.connect(
             lambda enabled: self.settings.setValue("devices/auto_connect_smu", enabled)
         )
@@ -119,6 +123,9 @@ class MainWindowUIMixin:
         view_menu.addAction(self.actual_action)
 
         settings_menu = self.menuBar().addMenu("設定(&S)")
+        interface_menu = settings_menu.addMenu("介面")
+        interface_menu.addAction(self.sidebar_settings_action)
+        settings_menu.addSeparator()
         settings_menu.addAction(self.recipe_manager_action)
         settings_menu.addAction(self.polarity_settings_action)
         settings_menu.addAction(self.hdr_settings_action)
@@ -192,10 +199,14 @@ class MainWindowUIMixin:
         capture_layout = QVBoxLayout(capture_content)
         capture_layout.setContentsMargins(8, 8, 8, 10)
         capture_layout.addLayout(capture_buttons)
+
+        resolution_content = QWidget()
+        resolution_layout = QVBoxLayout(resolution_content)
+        resolution_layout.setContentsMargins(8, 8, 8, 10)
         capture_form = QFormLayout()
         capture_form.addRow("解析度", self.resolution_combo)
         capture_form.addRow("格式", self.format_combo)
-        capture_layout.addLayout(capture_form)
+        resolution_layout.addLayout(capture_form)
 
         self.exposure_mode_combo = QComboBox()
         for mode in ExposureMode:
@@ -285,14 +296,21 @@ class MainWindowUIMixin:
         sidebar_layout = QVBoxLayout(sidebar_body)
         sidebar_layout.setContentsMargins(3, 3, 3, 3)
         sidebar_layout.setSpacing(3)
-        sidebar_layout.addWidget(CollapsibleSection("相機列表", self.device_panel.camera_content, True))
-        sidebar_layout.addWidget(CollapsibleSection("SMU 列表", self.device_panel.smu_content, True))
-        sidebar_layout.addWidget(CollapsibleSection("SMU 手動輸出", self.manual_smu_panel, True))
-        sidebar_layout.addWidget(CollapsibleSection("Recipe", self.device_panel.recipe_content, True))
-        sidebar_layout.addWidget(CollapsibleSection("拍攝與解析度", capture_content, True))
-        sidebar_layout.addWidget(CollapsibleSection("曝光控制", exposure_content, True))
-        sidebar_layout.addWidget(CollapsibleSection("相機資訊", info_content, False))
         sidebar_layout.addStretch()
+        sections = (
+            SidebarItem("camera_connection", "相機連線", CollapsibleSection("相機連線", self.device_panel.camera_content, True), 10),
+            SidebarItem("smu_connection", "SMU 連線", CollapsibleSection("SMU 連線", self.device_panel.smu_content, True), 20),
+            SidebarItem("manual_smu", "手動 SMU", CollapsibleSection("SMU 手動輸出", self.manual_smu_panel, True), 30),
+            SidebarItem("recipe", "Recipe 選擇", CollapsibleSection("Recipe", self.device_panel.recipe_content, True), 40),
+            SidebarItem("manual_capture", "手動拍攝", CollapsibleSection("手動拍攝", capture_content, True), 50),
+            SidebarItem("resolution", "影像解析度", CollapsibleSection("影像解析度", resolution_content, True), 60),
+            SidebarItem("exposure", "曝光控制", CollapsibleSection("曝光控制", exposure_content, True), 70),
+            SidebarItem("camera_info", "相機資訊", CollapsibleSection("相機資訊", info_content, False), 80),
+        )
+        self.sidebar_registry = SidebarRegistry(sidebar_layout, self.settings)
+        for item in sections:
+            self.sidebar_registry.register(item)
+        self.sidebar_registry.restore()
 
         sidebar_scroll = QScrollArea()
         sidebar_scroll.setWidgetResizable(True)
@@ -478,3 +496,7 @@ class MainWindowUIMixin:
         )
         self.controller.status_changed.connect(self.status_message.setText)
         self.controller.error_occurred.connect(self.show_error)
+
+    def open_sidebar_settings(self) -> None:
+        dialog = SidebarSettingsDialog(self.sidebar_registry, self)
+        dialog.exec()
