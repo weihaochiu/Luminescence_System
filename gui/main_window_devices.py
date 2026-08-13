@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from . import __version__
 from .camera_exposure import ExposureMode, validate_auto_target
+from .camera_temperature_monitor import TemperatureSample, format_temperature_c
 from .image_io import save_image_and_metadata
 from .instrument_state_manager import SMUUIState
 from .relay_controller import RelayError
@@ -272,6 +273,11 @@ class MainWindowDeviceMixin:
         self._active_exposure_mode = ExposureMode.CONTINUOUS_AUTO
         self._set_exposure_mode_ui(ExposureMode.CONTINUOUS_AUTO)
         self._set_camera_controls_enabled(True)
+        self.temperature_monitor.start(
+            supported=bool(info.get("temperature_supported", False)),
+            camera_model=str(info.get("model", "")),
+            camera_identifier=str(info.get("identifier", "")),
+        )
         self._revalidate_locked_hdr_profile()
 
     def on_camera_closed(self) -> None:
@@ -286,6 +292,8 @@ class MainWindowDeviceMixin:
         self.exposure_status.setText("曝光 —")
         self.gain_status.setText("Gain —")
         self.fps_status.setText("FPS —")
+        self.camera_temperature_value.setText("N/A")
+        self.temperature_status.setText("相機溫度 N/A")
         self.camera_status.setText("相機 —")
         self.current_exposure_value.setText("--")
         self.current_gain_value.setText("--")
@@ -518,6 +526,7 @@ class MainWindowDeviceMixin:
             "last_manual_polarity_measurement": self.smu_manager.control.last_manual_polarity_snapshot,
             "manual_smu_routing": self.smu_manager.control.manual_routing_snapshot,
         }
+        metadata.update(self.temperature_monitor.metadata_fields())
         try:
             image_path, sidecar_path = save_image_and_metadata(self.last_image, path, metadata)
             self.status_message.setText(f"已保存：{image_path.name}")
@@ -560,6 +569,22 @@ class MainWindowDeviceMixin:
         # Delegate them to one state function so a newly opened camera does not
         # overwrite the manual-mode state calculated from the mode selector.
         self._update_exposure_control_state()
+
+    def on_temperature_sample(self, sample: TemperatureSample) -> None:
+        text = format_temperature_c(sample.value_c)
+        self.camera_temperature_value.setText(text)
+        self.temperature_status.setText(f"相機溫度 {text}")
+
+    def on_temperature_availability_changed(self, available: bool) -> None:
+        if available:
+            return
+        self.camera_temperature_value.setText("N/A")
+        self.temperature_status.setText("相機溫度 N/A")
+
+    def open_temperature_chart(self) -> None:
+        self.temperature_chart.show()
+        self.temperature_chart.raise_()
+        self.temperature_chart.activateWindow()
 
     def show_error(self, message: str) -> None:
         self.status_message.setText(message)

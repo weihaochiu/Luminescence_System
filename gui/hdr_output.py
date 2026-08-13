@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, Sequence
 import numpy as np
 from PIL import Image
 
+from .image_io import write_metadata_sidecar
+
 if TYPE_CHECKING:
     from .auto_hdr import HDRResult
 
@@ -17,6 +19,7 @@ def save_hdr_products(
     base_path: str | Path,
     result: HDRResult,
     save_preview_png: bool = True,
+    image_metadata: dict[str, Any] | None = None,
 ) -> tuple[Path, Path | None]:
     """Save analysis float32 TIFF and optional display-only 8-bit PNG."""
     from .auto_hdr import make_preview
@@ -25,10 +28,12 @@ def save_hdr_products(
     base.parent.mkdir(parents=True, exist_ok=True)
     linear_path = base.with_name(base.name + "_HDR_linear_float32.tiff")
     Image.fromarray(result.linear_dn_per_s.astype(np.float32), mode="F").save(linear_path, format="TIFF")
+    _write_image_metadata(linear_path, image_metadata)
     preview_path: Path | None = None
     if save_preview_png:
         preview_path = base.with_name(base.name + "_HDR_preview_8bit.png")
         Image.fromarray(make_preview(result.linear_dn_per_s), mode="L").save(preview_path, format="PNG")
+        _write_image_metadata(preview_path, image_metadata)
     return linear_path, preview_path
 
 def save_hdr_capture_set(
@@ -42,6 +47,7 @@ def save_hdr_capture_set(
     save_preview_png: bool = True,
     profile_snapshot: dict[str, Any] | None = None,
     excluded_judgment_frames: Sequence[tuple[float, np.ndarray]] | None = None,
+    image_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist a complete, auditable HDR capture set.
 
@@ -68,6 +74,7 @@ def save_hdr_capture_set(
                 f"{base.name}_exp{exposure_index + 1:02d}_{exposure_token}_EL_raw_f{frame_index:03d}.tiff"
             )
             _save_tiff(path, array)
+            _write_image_metadata(path, image_metadata)
             records.append(
                 _manifest_record("el_raw", path, exposure_index, exposure_ms, gain_percent, frame_index)
             )
@@ -76,6 +83,7 @@ def save_hdr_capture_set(
                 f"{base.name}_exp{exposure_index + 1:02d}_{exposure_token}_Dark_raw_f{frame_index:03d}.tiff"
             )
             _save_tiff(path, array)
+            _write_image_metadata(path, image_metadata)
             records.append(
                 _manifest_record("dark_raw", path, exposure_index, exposure_ms, gain_percent, frame_index)
             )
@@ -84,6 +92,7 @@ def save_hdr_capture_set(
             f"{base.name}_exp{exposure_index + 1:02d}_{exposure_token}_MasterDark.tiff"
         )
         _save_tiff(master_path, master_dark.astype(np.float32))
+        _write_image_metadata(master_path, image_metadata)
         records.append(
             _manifest_record("master_dark", master_path, exposure_index, exposure_ms, gain_percent, 0)
         )
@@ -93,6 +102,7 @@ def save_hdr_capture_set(
             f"{base.name}_excluded_{_exposure_token(float(exposure_ms))}_judgment_f001.tiff"
         )
         _save_tiff(path, array)
+        _write_image_metadata(path, image_metadata)
         record = _manifest_record(
             "overexposure_judgment", path, judgment_index - 1, float(exposure_ms), gain_percent, 1
         )
@@ -115,7 +125,12 @@ def save_hdr_capture_set(
             }
         )
 
-    linear_path, preview_path = save_hdr_products(base, result, save_preview_png=save_preview_png)
+    linear_path, preview_path = save_hdr_products(
+        base,
+        result,
+        save_preview_png=save_preview_png,
+        image_metadata=image_metadata,
+    )
     records.append(
         {
             "kind": "hdr_linear_float32",
@@ -162,6 +177,7 @@ def save_hdr_capture_set(
         "profile_snapshot": profile_snapshot,
         "hdr_settings_snapshot": hdr_settings_snapshot,
         "execution_summary": execution_summary,
+        "image_metadata": dict(image_metadata) if image_metadata is not None else None,
     }
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
@@ -218,3 +234,8 @@ def _save_tiff(path: Path, array: np.ndarray) -> None:
     if data.dtype not in (np.uint8, np.uint16):
         data = data.astype(np.uint16 if np.max(data, initial=0) > 255 else np.uint8)
     Image.fromarray(data).save(path, format="TIFF")
+
+
+def _write_image_metadata(path: Path, metadata: dict[str, Any] | None) -> None:
+    if metadata is not None:
+        write_metadata_sidecar(path, metadata)

@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import QObject, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage
 
 from .camera_exposure import validate_auto_target
+from .camera_temperature_monitor import CameraTemperatureUnsupportedError
 from .image_brightness import equivalent_brightness_8bit
 from .sdk import nncam
 
@@ -19,6 +20,7 @@ class CameraController(QObject):
 
     frame_ready = Signal(QImage)
     camera_opened = Signal(object)
+    camera_closing = Signal()
     camera_closed = Signal()
     exposure_changed = Signal(int, int)
     exposure_status_changed = Signal(object, object, object)
@@ -60,6 +62,13 @@ class CameraController(QObject):
     def image_size(self) -> tuple[int, int]:
         return self._width, self._height
 
+    @property
+    def temperature_supported(self) -> bool:
+        return bool(
+            self._device is not None
+            and self._device.model.flag & nncam.NNCAM_FLAG_GETTEMPERATURE
+        )
+
     def enumerate_devices(self) -> list[Any]:
         try:
             nncam.Nncam.GigeEnable(None, None)
@@ -93,6 +102,7 @@ class CameraController(QObject):
             info = {
                 "name": device.displayname,
                 "model": device.model.name,
+                "identifier": self._device_identifier(device),
                 "resolution_index": resolution_index,
                 "resolutions": [(r.width, r.height) for r in device.model.res],
                 "preview_count": device.model.preview,
@@ -101,6 +111,9 @@ class CameraController(QObject):
                 "gain": current[1] if current is not None else None,
                 "auto_target": auto_target,
                 "mono": bool(device.model.flag & nncam.NNCAM_FLAG_MONO),
+                "temperature_supported": bool(
+                    device.model.flag & nncam.NNCAM_FLAG_GETTEMPERATURE
+                ),
                 "sdk_version": self.sdk_version(),
             }
             self._log_camera_capabilities(info)
@@ -114,6 +127,11 @@ class CameraController(QObject):
             self.error_occurred.emit(self._format_error("開啟相機失敗", exc))
 
     def close_camera(self) -> None:
+        was_open = self._camera is not None
+        if was_open:
+            # Direct Qt slots stop telemetry and close its CSV before the SDK
+            # handle can be destroyed.
+            self.camera_closing.emit()
         self._fps_timer.stop()
         self._camera_status_timer.stop()
         if self._camera is not None:
@@ -121,7 +139,6 @@ class CameraController(QObject):
                 self._camera.Close()
             except Exception:
                 pass
-        was_open = self._camera is not None
         self._camera = None
         self._device = None
         self._buffer = None
@@ -242,12 +259,38 @@ class CameraController(QObject):
         current = self._read_current_exposure(self._camera)
         return current if current is not None else (0, 0)
 
+    def read_temperature_c(self) -> float | None:
+        """Read sensor temperature via bundled SDK, returning degrees Celsius.
+
+        ``Nncam.get_Temperature`` returns signed tenths of a degree Celsius.
+        This method must run in the controller's Qt thread so it is serialized
+        with pull-mode event handling and all other camera calls.
+        """
+
+        if self._camera is None:
+            return None
+        if QThread.currentThread() != self.thread():
+            raise RuntimeError("Camera temperature query must run in the camera owner thread")
+        if not self.temperature_supported:
+            raise CameraTemperatureUnsupportedError(
+                "NNCAM_FLAG_GETTEMPERATURE is not present for this camera"
+            )
+        raw_tenths_c = int(self._camera.get_Temperature())
+        return raw_tenths_c / 10.0
+
     @staticmethod
     def _read_current_exposure(camera: Any) -> tuple[int, int] | None:
         try:
             return int(camera.get_ExpoTime()), int(camera.get_ExpoAGain())
         except Exception:
             return None
+
+    @staticmethod
+    def _device_identifier(device: Any) -> str:
+        identifier = getattr(device, "id", "")
+        if isinstance(identifier, bytes):
+            return identifier.decode("utf-8", errors="replace")
+        return str(identifier)
 
     @staticmethod
     def _query_optional(camera: Any, method_name: str, description: str) -> Any | None:

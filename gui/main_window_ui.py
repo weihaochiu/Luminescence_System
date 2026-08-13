@@ -57,6 +57,8 @@ class MainWindowUIMixin:
             style.standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton), "自動曝光拍攝", self
         )
         self.auto_capture_action.setToolTip("等待自動曝光收斂後拍攝並儲存影像")
+        self.temperature_chart_action = QAction("相機溫度趨勢圖…", self)
+        self.temperature_chart_action.setToolTip("開啟 Camera Temperature vs Time 趨勢圖")
         self.fit_action = QAction(
             style.standardIcon(QStyle.StandardPixmap.SP_TitleBarMaxButton), "符合視窗", self
         )
@@ -94,6 +96,7 @@ class MainWindowUIMixin:
         self.connect_action.triggered.connect(self.toggle_connection)
         self.capture_action.triggered.connect(self.capture_current_frame)
         self.auto_capture_action.triggered.connect(self.auto_expose_and_capture)
+        self.temperature_chart_action.triggered.connect(self.open_temperature_chart)
         self.fit_action.triggered.connect(lambda: self.image_view.fit_to_window())
         self.actual_action.triggered.connect(lambda: self.image_view.actual_size())
         self.exit_action.triggered.connect(self.close)
@@ -117,6 +120,8 @@ class MainWindowUIMixin:
         camera_menu.addAction(self.refresh_action)
         camera_menu.addAction(self.connect_action)
         camera_menu.addAction(self.auto_capture_action)
+        camera_menu.addSeparator()
+        camera_menu.addAction(self.temperature_chart_action)
 
         view_menu = self.menuBar().addMenu("檢視(&V)")
         view_menu.addAction(self.fit_action)
@@ -277,6 +282,15 @@ class MainWindowUIMixin:
         exposure_layout.addLayout(brightness_form)
         exposure_layout.addWidget(self.camera_connection_hint)
 
+        temperature_content = QWidget()
+        temperature_layout = QVBoxLayout(temperature_content)
+        temperature_layout.setContentsMargins(8, 8, 8, 10)
+        self.camera_temperature_value = QLabel("N/A")
+        self.camera_temperature_value.setStyleSheet("font-size: 18px; font-weight: 600;")
+        self.temperature_chart_button = QPushButton("開啟溫度趨勢圖")
+        temperature_layout.addWidget(self.camera_temperature_value)
+        temperature_layout.addWidget(self.temperature_chart_button)
+
         self.manual_smu_panel = ManualSMUPanel(
             limits=self.smu_manager.control.safety.limits
         )
@@ -305,6 +319,7 @@ class MainWindowUIMixin:
             SidebarItem("manual_capture", "手動拍攝", CollapsibleSection("手動拍攝", capture_content, True), 50),
             SidebarItem("resolution", "影像解析度", CollapsibleSection("影像解析度", resolution_content, True), 60),
             SidebarItem("exposure", "曝光控制", CollapsibleSection("曝光控制", exposure_content, True), 70),
+            SidebarItem("temperature", "相機溫度", CollapsibleSection("相機溫度", temperature_content, True), 75),
             SidebarItem("camera_info", "相機資訊", CollapsibleSection("相機資訊", info_content, False), 80),
         )
         self.sidebar_registry = SidebarRegistry(sidebar_layout, self.settings)
@@ -427,6 +442,7 @@ class MainWindowUIMixin:
         self.exposure_status = QLabel("曝光 —")
         self.gain_status = QLabel("Gain —")
         self.fps_status = QLabel("FPS —")
+        self.temperature_status = QLabel("相機溫度 N/A")
         bar.addWidget(self.status_message, 1)
         for widget in (
             self.camera_status,
@@ -436,12 +452,14 @@ class MainWindowUIMixin:
             self.exposure_status,
             self.gain_status,
             self.fps_status,
+            self.temperature_status,
         ):
             bar.addPermanentWidget(widget)
 
     def _connect_signals(self) -> None:
         self.capture_button.clicked.connect(self.capture_current_frame)
         self.auto_capture_button.clicked.connect(self.auto_expose_and_capture)
+        self.temperature_chart_button.clicked.connect(self.open_temperature_chart)
         self.apply_manual_button.clicked.connect(self.apply_manual_exposure)
         self.exposure_mode_combo.currentIndexChanged.connect(self.change_exposure_mode)
         self.auto_target_edit.editingFinished.connect(self.apply_auto_exposure_target)
@@ -487,6 +505,7 @@ class MainWindowUIMixin:
 
         self.controller.frame_ready.connect(self.on_frame_ready)
         self.controller.camera_opened.connect(self.on_camera_opened)
+        self.controller.camera_closing.connect(self.temperature_monitor.stop)
         self.controller.camera_closed.connect(self.on_camera_closed)
         self.controller.exposure_changed.connect(self.on_exposure_changed)
         self.controller.exposure_status_changed.connect(self.on_exposure_status_changed)
@@ -496,6 +515,12 @@ class MainWindowUIMixin:
         )
         self.controller.status_changed.connect(self.status_message.setText)
         self.controller.error_occurred.connect(self.show_error)
+        self.temperature_monitor.session_started.connect(self.temperature_chart.start_session)
+        self.temperature_monitor.sample_received.connect(self.on_temperature_sample)
+        self.temperature_monitor.sample_received.connect(self.temperature_chart.add_sample)
+        self.temperature_monitor.availability_changed.connect(
+            self.on_temperature_availability_changed
+        )
 
     def open_sidebar_settings(self) -> None:
         dialog = SidebarSettingsDialog(self.sidebar_registry, self)

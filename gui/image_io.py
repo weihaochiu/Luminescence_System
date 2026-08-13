@@ -8,6 +8,15 @@ from PIL import Image
 from PySide6.QtGui import QImage
 
 
+def write_metadata_sidecar(path: str | Path, metadata: dict[str, Any]) -> Path:
+    """Write metadata beside an image without changing its pixels or bit depth."""
+
+    output = Path(path)
+    sidecar = output.with_suffix(output.suffix + ".json")
+    sidecar.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    return sidecar
+
+
 def save_image_and_metadata(image: QImage, path: str, metadata: dict[str, Any]) -> tuple[Path, Path]:
     """Save a QImage with Pillow and write a UTF-8 JSON sidecar."""
     output = Path(path)
@@ -35,6 +44,5 @@ def save_image_and_metadata(image: QImage, path: str, metadata: dict[str, Any]) 
         save_kwargs = {"compression": "tiff_lzw"}
     pil_image.save(output, **save_kwargs)
 
-    sidecar = output.with_suffix(output.suffix + ".json")
-    sidecar.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    sidecar = write_metadata_sidecar(output, metadata)
     return output, sidecar

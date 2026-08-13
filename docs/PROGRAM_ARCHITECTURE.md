@@ -1,8 +1,8 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.6.0
-對應程式版本：V1.6.0
-最後更新：2026-08-12（UTC+8）
+文件版本：1.7.0
+對應程式版本：V1.7.0
+最後更新：2026-08-13（UTC+8）
 
 ## 1. 文件目的
 
@@ -44,6 +44,18 @@
 
 曝光控制的 widget 狀態統一由 `main_window_devices.py::_update_exposure_control_state()` 決定。`ExposureMode` 與影像亮度目標驗證位於 `camera_exposure.py`；目前影像亮度的 0–255 preview 計算位於 `image_brightness.py`。`CameraController` 負責 SDK capability/status query 與 300 ms refresh，GUI 只呈現狀態並 routing 使用者命令。共用的相機連線／中斷函式不可直接覆寫 Exposure、Gain、影像亮度目標或套用按鈕的個別狀態，避免連線狀態與自動／手動模式互相衝突。
 
+Camera Temperature Monitoring 的依賴與資料流固定為：
+
+`Nncam.get_Temperature() → CameraController.read_temperature_c() → CameraTemperatureMonitor → GUI / Chart / CSV / image metadata`
+
+- Bundled SDK 回傳 signed 0.1 °C；`CameraController` 在相機 owner Qt thread 內除以 10 轉為 °C，其他模組不得直接 query SDK handle。
+- 相機成功連線後以固定 1 秒 `QTimer` polling。`camera_closing` direct signal 必須先停止 timer、flush/close CSV、清除 latest sample，再關閉 SDK handle。
+- Chart 只保留最近 30 分鐘（1800 samples）的顯示資料，但 session CSV 保存全部有效 samples。關閉 Chart 只隱藏 presentation，不停止 monitoring 或 logging。
+- CSV 位於 AppData `logs/camera_temperature_YYYYMMDD_HHMMSS.csv`，欄位為 `timestamp,temperature_c`，timestamp 使用含 milliseconds 與 timezone 的 ISO 8601。
+- 寫圖時只消費 `CameraTemperatureMonitor.metadata_fields()`。最近有效 sample 超過 3 秒即視為 stale；unavailable/stale 時省略 `CameraTemperature_C` 與 `CameraTemperatureTimestamp`，不寫 0 或 `None`。
+- 一般 TIFF／PNG／JPEG／BMP 沿用既有同名 JSON sidecar；HDR raw EL／Dark、Master Dark、float32 TIFF 與 preview PNG 也使用各自同名 sidecar。metadata I/O 不改變 image pixels 或 bit depth。
+- 暫時 SDK error、invalid value 或 unavailable 為 non-fatal，當次 sample 跳過並在下一 interval 重試；缺少 `NNCAM_FLAG_GETTEMPERATURE` 時記錄一次 unsupported、顯示 N/A 並停止無意義查詢。
+
 類別內不需要 instance 狀態的格式化 helper 必須明確使用 `@staticmethod`；其餘方法必須保留 `self`／`cls` 參數。`_format_exposure()` 由相機開啟、手動套用與自動曝光訊號共同呼叫，測試需驗證其 descriptor 綁定方式，不能只檢查函式內容。
 
 ### 4.2 Recipe
@@ -76,7 +88,9 @@
 
 | 模組 | 單一責任 |
 | --- | --- |
-| `camera_controller.py` | RisingCam SDK 包裝、相機事件、曝光／Gain 與影像串流 |
+| `camera_controller.py` | RisingCam SDK 包裝、相機事件、曝光／Gain、溫度安全存取與影像串流 |
+| `camera_temperature_monitor.py` | 1 秒溫度 polling、latest snapshot、30 分鐘 rolling history、CSV session 與 non-fatal 錯誤處理 |
+| `camera_temperature_chart.py` | Camera Temperature vs Time 呈現、目前值與 session min/max；不控制 monitor 生命週期 |
 | `smu_base.py` | SMU 裝置與驅動抽象 |
 | `keysight_b2900.py` | Keysight B2900 系列識別與連線驅動 |
 | `smu_manager.py` | 背景 VISA 掃描、連線、狀態與安全中斷 |
@@ -86,7 +100,7 @@
 | `smu_manual_panel.py` | CV/CC、setpoint、compliance、輸出按鈕與 readback 顯示；不匯入 driver／VISA |
 | `measurement_control_bar.py` | 底部 context/actions 的單一 widget set 與 WIDE／STANDARD／COMPACT 重排 |
 | `responsive_layout.py` | logical width、available geometry、font metrics 與 DPI context 的 breakpoint 判定 |
-| `image_io.py` | 一般影像與同名 JSON metadata 儲存 |
+| `image_io.py` | 一般影像與同名 JSON metadata 儲存；metadata 不修改 image pixels |
 | `widgets.py` | 可重用的影像顯示與可收合區塊 |
 
 原廠 `sdk/nncam.py` 與 DLL 視為 vendor code，不進行一般格式化或重構。

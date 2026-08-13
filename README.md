@@ -1,4 +1,13 @@
-# EL 量測設備控制程式 V1.6.0
+# EL 量測設備控制程式 V1.7.0
+
+## V1.7.0 Camera Temperature Monitoring
+
+- 相機連線後使用 bundled RisingCam `Nncam.get_Temperature()` 每秒讀取一次感測器溫度；SDK 的 0.1 °C 整數會轉為 °C。
+- 左側「相機溫度」與狀態列即時顯示目前溫度；「相機 → 相機溫度趨勢圖…」顯示最近 30 分鐘、目前值與本次 session 最低／最高值。
+- 每次相機連線在 AppData `logs` 建立 `camera_temperature_YYYYMMDD_HHMMSS.csv`，有效 sample 逐筆 flush；關閉圖表不影響 monitoring 或 logging。
+- 一般 TIFF／PNG／JPEG／BMP 與 HDR raw EL、Dark、Master Dark、linear TIFF、preview PNG 皆可透過同名 JSON sidecar 保存 `CameraTemperature_C` 與 `CameraTemperatureTimestamp`，不改變 pixel data 或 bit depth。
+- 影像寫檔只取用 monitor 的最近有效 snapshot，不另查 SDK；超過 3 秒的 stale sample 或 unavailable 值會省略欄位，不偽造 0 °C。
+- 暫時讀取失敗為 non-fatal，下一秒繼續嘗試；未宣告 `NNCAM_FLAG_GETTEMPERATURE` 的相機顯示 N/A 並停止重複查詢。
 
 ## V1.6.0 Camera Exposure Control
 
@@ -267,6 +276,7 @@ Dark I–V／EL scan summary CSV、JSON metadata 與 Recipe snapshot 為可啟�
 ## 既有功能
 
 - RisingCam USB 3.0 相機偵測、連線與 RGB24 即時影像
+- RisingCam 感測器溫度即時顯示、30 分鐘趨勢圖、完整 session CSV 與影像 metadata snapshot
 - 手動曝光、Gain、持續自動曝光及單次自動曝光後拍攝
 - TIFF、PNG、JPEG、BMP 與同名 JSON 設定紀錄
 - VISA 儀器背景掃描、選擇、連線、中斷及身分顯示
@@ -327,6 +337,8 @@ Emergency latch 能阻止 Emergency request 之後尚未送出的 `OUTPUT ON`；
 - `gui/measurement_snapshot.py`：不可變的完整量測有效設定與執行快照
 - `gui/device_panel.py`：相機、SMU、Recipe 左側清單
 - `gui/camera_controller.py`：RisingCam SDK 控制
+- `gui/camera_temperature_monitor.py`：1 秒 polling、latest snapshot、rolling history 與 dedicated CSV
+- `gui/camera_temperature_chart.py`：Camera Temperature vs Time presentation-only 趨勢圖
 - `docs/PROGRAM_ARCHITECTURE.md`：架構、依賴方向與擴充規則
 - `docs/REQUIREMENTS_LOG.md`：使用者需求、狀態、驗收條件及變更紀錄
 - `gui/smu_manager.py`：VISA 掃描與連線生命週期

@@ -1,7 +1,7 @@
 # EL 量測設備控制程式需求紀錄
 
-文件版本：1.2
-最後更新：2026-08-11（UTC+8）
+文件版本：1.3
+最後更新：2026-08-13（UTC+8）
 
 ## 1. 強制維護規則
 
@@ -138,6 +138,22 @@
 - 要求：Dark I–V 與 EL scan summary CSV 維持必要；全解析度 Raw／Dark-corrected／DN/s CSV 預設關閉。
 - UI：勾選時先顯示可能達數百 MB／點的容量警告，使用者可取消。
 - 可回溯性：關閉時仍可由保留像素值的 TIFF、Master Dark 與 metadata 日後產生。
+
+### CAMERA-TEMP-001－Camera Temperature Monitoring V1
+
+- 狀態：已完成（V1.7.0）。
+- 提出日期：2026-08-13（UTC+8）。
+- 使用者原意：可靠讀取 RisingCam 感測器溫度，提供 GUI 即時顯示、單純趨勢圖、完整 dedicated CSV，並把 capture 當下最近有效溫度 snapshot 寫入所有正式影像 metadata；telemetry failure 不得影響相機、EL 或 HDR。
+- SDK 契約：只使用 repository bundled `gui/sdk/nncam.py` 的 `Nncam.get_Temperature()` 與 `NNCAM_FLAG_GETTEMPERATURE`；原始 signed integer 單位為 0.1 °C，controller 除以 10。
+- 生命週期：camera connect 後固定 1 秒 polling；disconnect/shutdown 必須先 stop timer、flush/close CSV、清除 latest sample，才可關閉 SDK handle；disconnect 後不推算 cooling curve。
+- GUI／Chart：繁體中文顯示 `xx.x °C` 或 N/A；QtCharts 顯示時間、溫度、目前值與 session min/max，rolling buffer 30 分鐘；關閉 chart 不停止 monitor/log。
+- Log：AppData `logs/camera_temperature_YYYYMMDD_HHMMSS.csv`，欄位 `timestamp,temperature_c`，ISO 8601 timestamp 含 milliseconds/timezone；disk 保存全 session 有效資料。
+- Metadata：使用 `CameraTemperature_C`、`CameraTemperatureTimestamp`；只消費 monitor latest snapshot，不同步 query SDK；sample age 超過 3 秒視為 stale，unavailable/stale 時省略欄位，不偽造 0 °C 或 `None`。
+- 輸出：一般 TIFF／PNG／JPEG／BMP 使用既有同名 JSON sidecar；HDR raw EL、Dark、Master Dark、linear float32 TIFF 與 preview PNG 各自使用 sidecar，pixel data/bit depth 不變。
+- Non-fatal：temporary error/invalid/unavailable 跳過當次 sample 並繼續 polling；unsupported 相機顯示 N/A、停止重複 query/error spam，其他相機功能保持正常。
+- 明確排除：Camera state machine、event marker、TEC/PID/fan、warning/alarm、over-temperature shutdown、自動停止量測與可調 sampling interval。
+- 影響模組：`camera_controller.py`、`camera_temperature_monitor.py`、`camera_temperature_chart.py`、`main_window*`、`image_io.py`、`hdr_output.py`。
+- 驗證：`tests/test_camera_temperature.py` 25 項專門測試與完整 suite 239 項全部通過；`python -m compileall .`、`git diff --check` 通過。
 
 ### UI-001－工具列一致性
 

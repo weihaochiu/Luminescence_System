@@ -11,6 +11,8 @@ from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMessageBox
 
 from . import __version__
 from .camera_controller import CameraController
+from .camera_temperature_chart import CameraTemperatureChart
+from .camera_temperature_monitor import CameraTemperatureMonitor
 from .emergency_manager import EmergencyManager
 from .hdr_settings import HDRSettingsStore
 from .hdr_settings_dialog import HDRSettingsDialog
@@ -41,23 +43,31 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.setMinimumSize(800, 600)
 
         self.controller = CameraController(self)
+        app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+        application_directory = Path(app_data) if app_data else Path.cwd()
+        self.temperature_monitor = CameraTemperatureMonitor(
+            self.controller.read_temperature_c,
+            lambda: self.controller.is_open,
+            application_directory / "logs",
+            parent=self,
+        )
+        self.temperature_chart = CameraTemperatureChart(self)
         self.smu_manager = SMUManager(self)
         self.instrument_state_manager = InstrumentStateManager(
             self.smu_manager.control, parent=self
         )
         self.smu_monitor = SMUMonitor(self.smu_manager.control, parent=self)
         self.settings = QSettings()
-        app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
-        recipe_path = (Path(app_data) if app_data else Path.cwd()) / "recipes.json"
+        recipe_path = application_directory / "recipes.json"
         self.recipe_store = RecipeStore(recipe_path)
-        hdr_settings_path = (Path(app_data) if app_data else Path.cwd()) / "hdr_settings.json"
+        hdr_settings_path = application_directory / "hdr_settings.json"
         self.hdr_settings_store = HDRSettingsStore(
             hdr_settings_path, self.recipe_store.legacy_hdr_settings_candidate
         )
-        relay_settings_path = (Path(app_data) if app_data else Path.cwd()) / "relay_settings.json"
+        relay_settings_path = application_directory / "relay_settings.json"
         self.relay_settings_store = RelaySettingsStore(relay_settings_path)
         polarity_settings_path = (
-            Path(app_data) if app_data else Path.cwd()
+            application_directory
         ) / "polarity_settings.json"
         self.polarity_settings_store = PolaritySettingsStore(polarity_settings_path)
         self.relay_controller = RelayController()
