@@ -225,7 +225,7 @@ class ManualSMUSequenceTests(unittest.TestCase):
             and not self.control.is_busy
         )
         self.assertFalse(self.driver.output)
-        self.assertEqual(PolarityState.FAILED, self.control.manual_polarity.state)
+        self.assertEqual(PolarityState.INVALID, self.control.manual_polarity.state)
         self.assertTrue(any("polarity" in message.lower() for message in errors))
 
     def test_white_light_failure_never_enables_output(self) -> None:

@@ -51,6 +51,7 @@ class SMUOutputState(str, Enum):
 
 class PolarityState(str, Enum):
     UNKNOWN = "UNKNOWN"
+    INVALID = "INVALID"
     NORMAL = "NORMAL"
     REVERSED = "REVERSED"
     FAILED = "FAILED"
@@ -727,7 +728,11 @@ class SMUControlManager(QObject):
                 )
                 if result.factor is None:
                     raise SMUInterlockError(
-                        "Jsc/Voc signs do not identify a safe output polarity"
+                        "Invalid polarity measurement: "
+                        + (
+                            measured.failure_reason
+                            or "Jsc/Voc measurements do not identify a safe output polarity"
+                        )
                     )
 
                 self._check_manual_generation(generation)
@@ -798,10 +803,11 @@ class SMUControlManager(QObject):
                 raise
             except Exception as exc:
                 with self._lock:
-                    self._manual_polarity = ManualPolarityResult(
-                        PolarityState.FAILED,
-                        None,
-                    )
+                    if self._manual_polarity.state is not PolarityState.INVALID:
+                        self._manual_polarity = ManualPolarityResult(
+                            PolarityState.FAILED,
+                            None,
+                        )
                     failed_result = self._manual_polarity
                     if self._last_manual_polarity_snapshot is None:
                         self._last_manual_polarity_snapshot = {
@@ -1168,7 +1174,8 @@ class SMUControlManager(QObject):
                     previous is SMUOwnership.EMERGENCY
                     or (
                         previous is SMUOwnership.MANUAL
-                        and self._manual_polarity.state is not PolarityState.FAILED
+                        and self._manual_polarity.state
+                        not in {PolarityState.FAILED, PolarityState.INVALID}
                     )
                 ):
                     self._manual_polarity = ManualPolarityResult(

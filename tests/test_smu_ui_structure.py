@@ -186,6 +186,32 @@ class SMUUIStructureTests(unittest.TestCase):
         panel.update_command("CC", 0.002, 0.002, 2.0, 1)
         self.assertEqual("反向", panel.factor_value.text())
 
+    def test_polarity_result_wires_measured_jsc_and_voc_to_readback(self) -> None:
+        if self.app is None:
+            self.skipTest("A non-GUI Qt application already exists")
+        panel = ManualSMUPanel()
+        panel.area_spin.setValue(2.0)
+        panel.update_polarity(
+            ManualPolarityResult(
+                PolarityState.NORMAL,
+                1,
+                jsc_current_a=-0.004,
+                voc_v=0.218376,
+            )
+        )
+        self.assertEqual("0.2184 V", panel.voltage_value.text())
+        self.assertEqual("-2.00 mA/cm²", panel.current_density_value.text())
+
+        panel.update_polarity(
+            ManualPolarityResult(
+                PolarityState.INVALID,
+                None,
+                jsc_current_a=-0.004,
+                voc_v=1.6e-6,
+            )
+        )
+        self.assertEqual("無效／未判定", panel.factor_value.text())
+
     def test_density_and_current_compliance_are_converted_with_area(self) -> None:
         if self.app is None:
             self.skipTest("A non-GUI Qt application already exists")

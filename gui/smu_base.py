@@ -139,7 +139,12 @@ class SMUDriver:
                     self.set_measurement_nplc_auto(mode, previous_auto)
 
     def safe_stop(self) -> list[str]:
-        """Best effort, OFF-first neutralization with explicit OFF confirmation."""
+        """Best effort OUTPUT OFF with explicit confirmation.
+
+        Source level is intentionally left untouched here because the generic
+        driver cannot know which source parameter is active. Hardware-specific
+        drivers may zero only their verified active source mode afterwards.
+        """
 
         failures: list[str] = []
         try:
@@ -152,11 +157,6 @@ class SMUDriver:
             state = "UNKNOWN" if observed is None else "ON"
             failures.append(f":OUTP? did not confirm OFF (observed {state})")
 
-        for command in (":SOUR:VOLT 0", ":SOUR:CURR 0"):
-            try:
-                self.resource.write(command)
-            except Exception as exc:  # noqa: BLE001 - collect every cleanup failure
-                failures.append(f"{command}: {exc}")
         return failures
 
     def close(self, safe_stop: bool = True) -> None:

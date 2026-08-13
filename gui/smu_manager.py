@@ -328,8 +328,6 @@ class SMUManager(QObject):
                     raise RuntimeError(
                         "無法確認 Keysight B2900 auto-output 已停用"
                     )
-                driver.set_voltage(0.0)
-                driver.set_current(0.0)
                 if driver.query_output_enabled() is not False:
                     raise RuntimeError("無法確認 SMU 安全初始化後 OUTPUT 為 OFF")
             return manager, resource, verified, driver

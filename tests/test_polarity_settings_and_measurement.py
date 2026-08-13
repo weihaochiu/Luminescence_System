@@ -66,17 +66,30 @@ class SamplingDriver:
 class Resource:
     def __init__(self) -> None:
         self.writes: list[str] = []
+        self.transactions: list[str] = []
+        self.source_mode = "VOLT"
+        self.source_mode_readback: str | None = None
         self.responses = {
+            ":OUTP?": "0",
             ":SENS:CURR:NPLC?": "0.2",
             ":SENS:VOLT:NPLC?": "0.5",
             ":SENS:CURR:NPLC:AUTO?": "1",
             ":SENS:VOLT:NPLC:AUTO?": "0",
+            ":SOUR:VOLT?": "0",
+            ":SOUR:CURR?": "0",
+            ":SYST:ERR?": '+0,"No error"',
         }
 
     def write(self, command: str) -> None:
         self.writes.append(command)
+        self.transactions.append(command)
+        if command.startswith(":SOUR:FUNC:MODE "):
+            self.source_mode = command.rsplit(" ", 1)[-1]
 
     def query(self, command: str) -> str:
+        self.transactions.append(command)
+        if command == ":SOUR:FUNC:MODE?":
+            return self.source_mode_readback or self.source_mode
         return self.responses[command]
 
 
@@ -93,7 +106,7 @@ class PolaritySettingsTests(unittest.TestCase):
             self.assertEqual(2.0, loaded.settings.integration_nplc)
             loaded.reset_defaults()
             self.assertEqual(5, loaded.settings.jsc_sample_count)
-            self.assertEqual(1.0, loaded.settings.integration_nplc)
+            self.assertEqual(5.0, loaded.settings.integration_nplc)
 
     def test_recipe_contains_no_duplicate_polarity_parameters(self) -> None:
         self.assertEqual({"enabled": True}, Recipe().to_dict()["polarity"])
@@ -230,6 +243,26 @@ class PolarityMeasurementTests(unittest.TestCase):
         result = self.measure(driver, self.settings())
         self.assertEqual("NORMAL", result.state)
 
+    def test_microvolt_voc_is_invalid_and_never_produces_a_factor(self) -> None:
+        driver = SamplingDriver([-0.002] * 5, [1.6e-6] * 5)
+        result = self.measure(driver, self.settings(voc_minimum_valid_v=0.20))
+        self.assertEqual("INVALID", result.state)
+        self.assertIsNone(result.factor)
+        self.assertIn("Voc representative is below", result.failure_reason)
+        self.assertFalse(driver.output)
+
+    def test_valid_normal_and_reversed_polarity(self) -> None:
+        normal = self.measure(
+            SamplingDriver([-0.002] * 5, [0.218] * 5),
+            self.settings(voc_minimum_valid_v=0.20),
+        )
+        reversed_result = self.measure(
+            SamplingDriver([0.002] * 5, [-0.218] * 5),
+            self.settings(voc_minimum_valid_v=0.20),
+        )
+        self.assertEqual(("NORMAL", 1), (normal.state, normal.factor))
+        self.assertEqual(("REVERSED", -1), (reversed_result.state, reversed_result.factor))
+
     def test_cancellation_is_checked_between_individual_samples(self) -> None:
         driver = SamplingDriver([-0.002] * 5, [0.8] * 5)
         checks = 0
@@ -275,6 +308,74 @@ class PolarityMeasurementTests(unittest.TestCase):
             ],
             resource.writes,
         )
+
+    def test_b2900_source_mode_uses_full_command_and_verifies_readback(self) -> None:
+        resource = Resource()
+        driver = KeysightB2900Driver(resource, SMUDevice("USB", supported=True))
+        driver.configure_voltage_source(0.0, 0.01)
+        driver.configure_current_source(0.0, 2.0)
+        self.assertIn(":SOUR:FUNC:MODE VOLT", resource.writes)
+        self.assertIn(":SOUR:FUNC:MODE CURR", resource.writes)
+        self.assertNotIn(":SOUR:FUNC VOLT", resource.writes)
+        self.assertNotIn(":SOUR:FUNC CURR", resource.writes)
+        self.assertEqual(2, resource.transactions.count(":SOUR:FUNC:MODE?"))
+
+    def test_b2900_source_mode_mismatch_fails_before_output_on(self) -> None:
+        resource = Resource()
+        resource.source_mode_readback = "VOLT"
+        driver = KeysightB2900Driver(resource, SMUDevice("USB", supported=True))
+        with self.assertRaisesRegex(RuntimeError, "requested CURR"):
+            driver.configure_current_source(0.0, 2.0)
+        self.assertNotIn(":OUTP ON", resource.writes)
+        self.assertNotIn(":SOUR:CURR 0", resource.writes)
+
+    def test_b2900_jsc_and_voc_configuration_use_auto_range_and_fixed_nplc_5(self) -> None:
+        resource = Resource()
+        driver = KeysightB2900Driver(resource, SMUDevice("USB", supported=True))
+        driver.configure_zero_level_measurement("VOLT", "CURR", 0.02, 5.0)
+        self.assertEqual(
+            [
+                ":OUTP OFF",
+                ":OUTP?",
+                ":SOUR:FUNC:MODE VOLT",
+                ":SOUR:FUNC:MODE?",
+                ':SENS:FUNC "CURR"',
+                ":SENS:CURR:RANG:AUTO ON",
+                ":SENS:CURR:NPLC:AUTO OFF",
+                ":SENS:CURR:NPLC 5",
+                ":SENS:CURR:PROT 0.02",
+                ":SOUR:VOLT 0",
+                ":SOUR:VOLT?",
+            ],
+            resource.transactions,
+        )
+        driver.configure_zero_level_measurement("CURR", "VOLT", 2.0, 5.0)
+        self.assertIn(':SENS:FUNC "CURR"', resource.writes)
+        self.assertIn(":SENS:CURR:RANG:AUTO ON", resource.writes)
+        self.assertIn(":SENS:CURR:NPLC:AUTO OFF", resource.writes)
+        self.assertIn(":SENS:CURR:NPLC 5", resource.writes)
+        self.assertIn(":SOUR:VOLT 0", resource.writes)
+        self.assertIn(':SENS:FUNC "VOLT"', resource.writes)
+        self.assertIn(":SENS:VOLT:RANG:AUTO ON", resource.writes)
+        self.assertIn(":SENS:VOLT:NPLC:AUTO OFF", resource.writes)
+        self.assertIn(":SENS:VOLT:NPLC 5", resource.writes)
+        self.assertIn(":SOUR:CURR 0", resource.writes)
+
+    def test_b2900_safe_stop_zeros_only_verified_active_source_mode(self) -> None:
+        for mode, expected, forbidden in (
+            ("VOLT", ":SOUR:VOLT 0", ":SOUR:CURR 0"),
+            ("CURR", ":SOUR:CURR 0", ":SOUR:VOLT 0"),
+        ):
+            resource = Resource()
+            driver = KeysightB2900Driver(resource, SMUDevice("USB", supported=True))
+            if mode == "VOLT":
+                driver.configure_voltage_source(0.0, 0.01)
+            else:
+                driver.configure_current_source(0.0, 2.0)
+            resource.writes.clear()
+            driver.safe_stop()
+            self.assertEqual([":OUTP OFF", expected], resource.writes)
+            self.assertNotIn(forbidden, resource.writes)
 
 
 if __name__ == "__main__":

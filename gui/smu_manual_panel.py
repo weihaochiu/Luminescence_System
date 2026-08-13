@@ -159,11 +159,20 @@ class ManualSMUPanel(QWidget):
             return
         labels = {
             PolarityState.UNKNOWN: "待輸出確認",
+            PolarityState.INVALID: "無效／未判定",
             PolarityState.NORMAL: "正常",
             PolarityState.REVERSED: "反向",
             PolarityState.FAILED: "確認失敗",
         }
         self.factor_value.setText(labels[result.state])
+        self.voltage_value.setText(
+            "— V" if result.voc_v is None else f"{result.voc_v:.4f} V"
+        )
+        if result.jsc_current_a is None or self.area_cm2 <= 0.0:
+            self.current_density_value.setText("— mA/cm²")
+        else:
+            density = result.jsc_current_a * 1000.0 / self.area_cm2
+            self.current_density_value.setText(f"{density:.2f} mA/cm²")
 
     def update_command(
         self,

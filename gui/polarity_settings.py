@@ -19,7 +19,7 @@ class PolarityMeasurementSettings:
     white_light_stabilization_ms: int = 500
     anti_flicker_enabled: bool = True
     mains_frequency_hz: float = 60.0
-    integration_nplc: float = 1.0
+    integration_nplc: float = 5.0
     jsc_settle_ms: int = 100
     jsc_sample_count: int = 5
     jsc_aggregation: str = "median"

@@ -40,6 +40,7 @@ class PolarityMeasurementResult:
             "Voc": asdict(self.voc_v),
             "polarity_result": self.state,
             "polarity_factor": self.factor,
+            "validity_result": "VALID" if self.factor is not None else "INVALID",
             "failure_reason": self.failure_reason,
             "settings_snapshot": self.settings_snapshot,
         }
@@ -91,8 +92,13 @@ class PolarityMeasurementService:
 
             status("量測 Jsc…")
             current_compliance_a = settings.jsc_compliance_ma_cm2 * area_cm2 / 1000.0
-            driver.configure_voltage_source(0.0, current_compliance_a)
-            with self._integration_context(driver, "CURR", settings):
+            with self._measurement_configuration(
+                driver,
+                source_mode="VOLT",
+                measurement_mode="CURR",
+                compliance=current_compliance_a,
+                settings=settings,
+            ):
                 jsc_a = self._sample_output(
                     driver,
                     settings.jsc_sample_count,
@@ -108,12 +114,26 @@ class PolarityMeasurementService:
                 settings.jsc_minimum_valid_ma_cm2,
                 settings.jsc_max_variation_percent,
                 "Jsc",
+                enforce_minimum=False,
             )
             partial_results["Jsc"] = asdict(jsc)
+            LOG.info(
+                "POLARITY_JSC raw_current_a=%s sample_area_cm2=%g "
+                "current_density_ma_cm2=%+.9g compliance_a=%g",
+                jsc_a,
+                area_cm2,
+                jsc.representative,
+                current_compliance_a,
+            )
 
             status("量測 Voc…")
-            driver.configure_current_source(0.0, settings.voc_compliance_v)
-            with self._integration_context(driver, "VOLT", settings):
+            with self._measurement_configuration(
+                driver,
+                source_mode="CURR",
+                measurement_mode="VOLT",
+                compliance=settings.voc_compliance_v,
+                settings=settings,
+            ):
                 voc_samples = self._sample_output(
                     driver,
                     settings.voc_sample_count,
@@ -128,25 +148,57 @@ class PolarityMeasurementService:
                 settings.voc_minimum_valid_v,
                 settings.voc_max_variation_percent,
                 "Voc",
+                enforce_minimum=False,
             )
             partial_results["Voc"] = asdict(voc)
+            LOG.info(
+                "POLARITY_VOC samples_v=%s representative_v=%+.9g compliance_v=%g",
+                voc_samples,
+                voc.representative,
+                settings.voc_compliance_v,
+            )
 
             status("判斷極性…")
-            if voc.representative > 0 and jsc.representative < 0:
+            invalid_reasons: list[str] = []
+            if abs(jsc.representative) < settings.jsc_minimum_valid_ma_cm2:
+                invalid_reasons.append(
+                    "Jsc representative is below the configured minimum "
+                    f"({abs(jsc.representative):g} < {settings.jsc_minimum_valid_ma_cm2:g} mA/cm²)"
+                )
+            if abs(voc.representative) < settings.voc_minimum_valid_v:
+                invalid_reasons.append(
+                    "Voc representative is below the configured minimum "
+                    f"({abs(voc.representative):g} < {settings.voc_minimum_valid_v:g} V)"
+                )
+            if invalid_reasons:
+                state, factor = "INVALID", None
+                failure_reason = "; ".join(invalid_reasons)
+            elif voc.representative > 0 and jsc.representative < 0:
                 state, factor = "NORMAL", 1
+                failure_reason = ""
             elif voc.representative < 0 and jsc.representative > 0:
                 state, factor = "REVERSED", -1
+                failure_reason = ""
             else:
-                raise PolarityMeasurementError(
-                    "Jsc/Voc signs do not identify a safe polarity",
-                    details={"Jsc": asdict(jsc), "Voc": asdict(voc)},
-                )
-            result = PolarityMeasurementResult(state, factor, jsc, voc, snapshot)
-            LOG.info("POLARITY_MEASUREMENT %s", result.to_dict())
+                state, factor = "INVALID", None
+                failure_reason = "Jsc/Voc signs do not identify a safe polarity"
+            result = PolarityMeasurementResult(
+                state,
+                factor,
+                jsc,
+                voc,
+                snapshot,
+                failure_reason,
+            )
+            log = LOG.info if factor is not None else LOG.warning
+            log("POLARITY_MEASUREMENT %s", result.to_dict())
             return result
         except PolarityMeasurementError as exc:
             exc.details = {**partial_results, **exc.details}
             LOG.warning("POLARITY_MEASUREMENT_FAILED reason=%s details=%s", exc, exc.details)
+            raise
+        except Exception:
+            LOG.exception("POLARITY_MEASUREMENT_EXCEPTION partial_results=%s", partial_results)
             raise
         finally:
             if light_shutdown_required:
@@ -167,6 +219,8 @@ class PolarityMeasurementService:
         minimum_absolute: float,
         maximum_variation_percent: float,
         label: str,
+        *,
+        enforce_minimum: bool = True,
     ) -> SampleStatistics:
         values = tuple(float(value) for value in samples)
         if not values or any(not math.isfinite(value) for value in values):
@@ -192,7 +246,7 @@ class PolarityMeasurementService:
             variation,
             aggregation,
         )
-        if abs(representative) < minimum_absolute:
+        if enforce_minimum and abs(representative) < minimum_absolute:
             raise PolarityMeasurementError(
                 f"{label} representative is below the configured minimum",
                 details={label: asdict(statistics)},
@@ -219,6 +273,39 @@ class PolarityMeasurementService:
             "SMU driver does not support temporary NPLC; polarity sampling continues without changing integration"
         )
         return nullcontext()
+
+    @classmethod
+    def _measurement_configuration(
+        cls,
+        driver: Any,
+        *,
+        source_mode: str,
+        measurement_mode: str,
+        compliance: float,
+        settings: PolarityMeasurementSettings,
+    ) -> ContextManager[Any]:
+        configure = getattr(driver, "configure_zero_level_measurement", None)
+        if callable(configure):
+            configure(
+                source_mode,
+                measurement_mode,
+                compliance,
+                settings.integration_nplc,
+            )
+            return nullcontext()
+
+        if source_mode == "VOLT":
+            driver.configure_voltage_source(0.0, compliance)
+        else:
+            driver.configure_current_source(0.0, compliance)
+        LOG.info(
+            "POLARITY_MEASUREMENT_CONFIG source_mode=%s measurement_mode=%s "
+            "nplc=%g nplc_auto=OFF range=AUTO driver_specific=false",
+            source_mode,
+            measurement_mode,
+            settings.integration_nplc,
+        )
+        return cls._integration_context(driver, measurement_mode, settings)
 
     @staticmethod
     def _sample_output(

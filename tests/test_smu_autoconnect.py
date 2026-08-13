@@ -97,8 +97,6 @@ class SMUAutoConnectTests(unittest.TestCase):
             [
                 ":OUTP OFF",
                 ":OUTP:ON:AUTO OFF",
-                ":SOUR:VOLT 0",
-                ":SOUR:CURR 0",
             ],
             resource.commands,
         )
@@ -109,8 +107,6 @@ class SMUAutoConnectTests(unittest.TestCase):
                 ":OUTP?",
                 ":OUTP:ON:AUTO OFF",
                 ":OUTP:ON:AUTO?",
-                ":SOUR:VOLT 0",
-                ":SOUR:CURR 0",
                 ":OUTP?",
             ],
             resource.transactions,
