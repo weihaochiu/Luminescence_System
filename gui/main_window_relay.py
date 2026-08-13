@@ -16,6 +16,7 @@ class MainWindowRelayMixin:
 
     def refresh_relay_connection(self) -> None:
         self._update_white_light_control(self.relay_service.refresh_connection())
+        self._update_measurement_controls()
 
     def toggle_white_light(self) -> None:
         try:

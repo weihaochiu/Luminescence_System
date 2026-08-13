@@ -42,6 +42,47 @@ class PolarityRecipe:
 
 
 @dataclass
+class ChannelRecipe:
+    """Logical substrate channel; physical relays remain hardware settings."""
+
+    channel: str = "CH1"
+    enabled: bool = False
+    sample_id: str = ""
+    area_cm2: float = 0.100
+
+
+def _default_channels() -> list[ChannelRecipe]:
+    return [
+        ChannelRecipe(f"CH{index}", index == 1, f"Sample_A{index}", 0.100)
+        for index in range(1, 5)
+    ]
+
+
+@dataclass
+class ELMatrixRecipe:
+    """One shared matrix executed for every enabled logical channel."""
+
+    current_density_ma_cm2: list[float] = field(
+        default_factory=lambda: [2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
+    )
+    gains_percent: list[int] = field(default_factory=lambda: [100, 200, 300, 400, 500])
+    exposures_ms: list[float] = field(
+        default_factory=lambda: [
+            0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0,
+            200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 15000.0,
+        ]
+    )
+    repeat: int = 1
+    voltage_compliance_v: float = 3.0
+    stabilization_ms: int = 0
+    shared_dark_enabled: bool = True
+    estimated_capture_overhead_s: float = 0.15
+    estimated_polarity_duration_s: float = 8.0
+    estimated_routing_transition_s: float = 0.5
+    estimated_shared_dark_overhead_s: float = 1.0
+
+
+@dataclass
 class DarkIVRecipe:
     enabled: bool = True
     dark_stabilization_s: float = 10.0
@@ -168,6 +209,8 @@ class Recipe:
     created_at: str = field(default_factory=_now)
     modified_at: str = field(default_factory=_now)
     geometry: GeometryRecipe = field(default_factory=GeometryRecipe)
+    channels: list[ChannelRecipe] = field(default_factory=_default_channels)
+    el_matrix: ELMatrixRecipe = field(default_factory=ELMatrixRecipe)
     polarity: PolarityRecipe = field(default_factory=PolarityRecipe)
     dark_iv: DarkIVRecipe = field(default_factory=DarkIVRecipe)
     camera: CameraRecipe = field(default_factory=CameraRecipe)
@@ -190,6 +233,18 @@ class Recipe:
 
     def enabled_points(self) -> list[ELPoint]:
         return [point for point in self.el_sweep.points if point.enabled]
+
+    def enabled_channels(self) -> list[ChannelRecipe]:
+        order = {f"CH{index}": index for index in range(1, 5)}
+        return sorted(
+            (channel for channel in self.channels if channel.enabled),
+            key=lambda channel: order.get(channel.channel, 99),
+        )
+
+    def matrix_source_current_ma(self, channel: ChannelRecipe, current_density: float) -> float:
+        return quantize_number(
+            decimal_from_number(current_density) * decimal_from_number(channel.area_cm2)
+        )
 
     def effective_camera(self, point: ELPoint) -> tuple[float, int, int, float]:
         return (
@@ -293,8 +348,44 @@ class Recipe:
             errors.append("Recipe 類型必須是四階段 EL 量測")
         if self.geometry.active_area_cm2 <= 0:
             errors.append("Active area 必須大於 0")
-        if not self.polarity.enabled:
-            errors.append("極性確認是 EL Recipe 的必做階段")
+        expected_channels = [f"CH{index}" for index in range(1, 5)]
+        if [channel.channel for channel in self.channels] != expected_channels:
+            errors.append("Channel 必須固定且依序為 CH1～CH4")
+        enabled_channels = self.enabled_channels()
+        if not enabled_channels:
+            errors.append("至少需要啟用一個 Channel")
+        for channel in enabled_channels:
+            if not channel.sample_id.strip():
+                errors.append(f"{channel.channel} 的 Sample / Device ID 不可空白")
+            if not math.isfinite(channel.area_cm2) or channel.area_cm2 <= 0:
+                errors.append(f"{channel.channel} 的 Device Area 必須大於 0")
+        matrix = self.el_matrix
+        if not matrix.current_density_ma_cm2:
+            errors.append("Current Density 至少需要一個值")
+        elif any(not math.isfinite(float(value)) or float(value) <= 0 for value in matrix.current_density_ma_cm2):
+            errors.append("所有 EL Current Density 必須是大於 0 的有限數值")
+        if not matrix.exposures_ms:
+            errors.append("Exposure 至少需要一個值")
+        elif any(not math.isfinite(float(value)) or float(value) <= 0 for value in matrix.exposures_ms):
+            errors.append("所有 Exposure 必須是大於 0 的有限數值")
+        if not matrix.gains_percent:
+            errors.append("Gain 至少需要一個值")
+        elif any(int(value) < 0 for value in matrix.gains_percent):
+            errors.append("所有 Gain 必須大於或等於 0")
+        if matrix.repeat < 1:
+            errors.append("每條件拍攝張數必須是大於或等於 1 的整數")
+        if matrix.stabilization_ms < 0:
+            errors.append("J Stabilization Time 不可小於 0")
+        if not math.isfinite(matrix.voltage_compliance_v) or not (
+            0 < matrix.voltage_compliance_v <= self.safety.max_voltage_v
+        ):
+            errors.append("EL Matrix Voltage Compliance 必須在安全電壓範圍內")
+        if any(
+            self.matrix_source_current_ma(channel, float(density)) > self.safety.max_current_ma
+            for channel in enabled_channels
+            for density in matrix.current_density_ma_cm2
+        ):
+            errors.append("EL Matrix 計算出的 Source Current 超過最大允許電流")
         if not self.dark_iv.enabled:
             errors.append("Dark I–V 是 EL Recipe 的必做階段")
         if self.dark_iv.step_v <= 0 or self.dark_iv.start_v == self.dark_iv.stop_v:
@@ -445,6 +536,20 @@ class Recipe:
             dark_time *= 2
         return polarity_time + dark_iv_time + dark_time + el_time + 2.0
 
+    def matrix_capture_counts(self) -> dict[str, int]:
+        matrix = self.el_matrix
+        channels = len(self.enabled_channels())
+        combination = len(matrix.gains_percent) * len(matrix.exposures_ms) * matrix.repeat
+        dark = combination if matrix.shared_dark_enabled else 0
+        per_channel = len(matrix.current_density_ma_cm2) * combination
+        total_el = channels * per_channel
+        return {
+            "shared_dark": dark,
+            "el_per_channel": per_channel,
+            "total_el": total_el,
+            "overall": dark + total_el,
+        }
+
     def is_available(self) -> bool:
         return self.state == "active" and not self.validate()
 
@@ -491,6 +596,16 @@ class Recipe:
         # Dark I-V / EL summary tables, not full-resolution pixel matrices.
         if "save_summary_csv" not in output_data and "save_csv" in output_data:
             output_data["save_summary_csv"] = bool(output_data["save_csv"])
+        raw_channels = data.get("channels")
+        if isinstance(raw_channels, list):
+            channels = [_dataclass_from_dict(ChannelRecipe, item) for item in raw_channels]
+        else:
+            # Legacy files cannot reliably supply four Sample IDs. Preserve the
+            # old area only for CH1 and force review by leaving its ID empty.
+            legacy_area = float((data.get("geometry") or {}).get("active_area_cm2", 0.100))
+            channels = _default_channels()
+            channels[0].sample_id = ""
+            channels[0].area_cm2 = legacy_area
         return cls(
             recipe_id=str(data.get("recipe_id") or uuid4()),
             name=str(data.get("name", "未命名 Recipe")),
@@ -501,6 +616,8 @@ class Recipe:
             created_at=str(data.get("created_at", _now())),
             modified_at=str(data.get("modified_at", _now())),
             geometry=_dataclass_from_dict(GeometryRecipe, data.get("geometry")),
+            channels=channels,
+            el_matrix=_dataclass_from_dict(ELMatrixRecipe, data.get("el_matrix")),
             polarity=_dataclass_from_dict(PolarityRecipe, data.get("polarity")),
             dark_iv=_dataclass_from_dict(DarkIVRecipe, data.get("dark_iv")),
             camera=old_camera,
@@ -516,7 +633,7 @@ class Recipe:
 class RecipeStore:
     """JSON-backed Recipe repository stored in the user's application-data folder."""
 
-    schema_version = 6
+    schema_version = 7
 
     def __init__(self, path: Path) -> None:
         self.path = path

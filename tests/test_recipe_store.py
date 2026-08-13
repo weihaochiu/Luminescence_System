@@ -104,8 +104,8 @@ class RecipeStoreTests(unittest.TestCase):
         })
         self.assertEqual(250, loaded.el_sweep.points[0].exposure_ms)
 
-    def test_recipe_store_uses_schema_v6(self) -> None:
-        self.assertEqual(6, RecipeStore.schema_version)
+    def test_recipe_store_uses_schema_v7(self) -> None:
+        self.assertEqual(7, RecipeStore.schema_version)
 
     def test_pixel_csv_is_optional_and_preserves_selected_products(self) -> None:
         recipe = Recipe()

@@ -64,5 +64,16 @@ class MeasurementWorker(QObject):
         if self.is_cancel_requested():
             raise MeasurementCancelled()
 
-    def report_progress(self, phase: str, current: int, total: int, message: str = "") -> None:
-        self.progress_changed.emit(MeasurementProgress(phase, current, total, message))
+    def report_progress(
+        self,
+        phase: str | object,
+        current: int | None = None,
+        total: int | None = None,
+        message: str = "",
+    ) -> None:
+        if current is None and total is None and not isinstance(phase, str):
+            self.progress_changed.emit(phase)
+            return
+        if current is None or total is None:
+            raise TypeError("current and total are required for text progress")
+        self.progress_changed.emit(MeasurementProgress(str(phase), current, total, message))

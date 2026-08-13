@@ -1,7 +1,7 @@
 # EL 量測設備控制程式需求紀錄
 
-文件版本：1.3
-最後更新：2026-08-13（UTC+8）
+文件版本：1.4
+最後更新：2026-08-14（UTC+8）
 
 ## 1. 強制維護規則
 
@@ -68,13 +68,37 @@
 
 ### FLOW-001－四階段 EL Recipe
 
-- 狀態：已完成介面與驗證；執行層暫緩。
+- 狀態：已由 FLOW-ELM-001 的 EL Matrix 執行模式部分取代；Legacy 設定保留相容讀取。
 - 流程：
   1. 白光下量測 Jsc／Voc 並確認極性。
   2. 關燈、等待暗態穩定、執行 Dark I–V。
   3. SMU 回零且 OUTPUT OFF 後，拍攝所有唯一相機條件的 Dark Frames。
   4. 依電流／電流密度或電壓點位拍攝 EL。
 - 執行層暫緩原因：尚未完成 SMU 安全狀態機、錯誤回零與相機同步。
+
+### FLOW-ELM-001－多 Channel EL Matrix 自動量測
+
+- 狀態：已完成（V1.8.0）。
+- 提出日期：2026-08-14（UTC+8）。
+- 使用者原意：將已驗證的 Camera Gain／Exposure Matrix 正式整合至 Recipe，依序量測固定 CH1～CH4 中已啟用者。
+- 詳細行為：Shared Dark 只在 run 最外層拍一次；每個 Channel 各自 route、polarity，之後固定執行 J → Gain → Exposure → Repeat。同一 J 內 SMU OUTPUT 保持 ON，stabilization 只執行一次。
+- 驗收條件：Logical Channel 不保存 physical relay；Area 逐 Channel 計算 Source Current；Channel transition 必須先 verified OUTPUT OFF 再使用既有專用 routing API；任何 stop/error 走共用安全關閉。
+- 影響模組：`recipe_store.py`、`recipe_dialog*`、`el_matrix_plan.py`、`el_matrix_runner.py`、`el_matrix_hardware.py`、`smu_control.py`。
+- 相容性／資料遷移：schema v7；舊 Recipe 無法可靠取得四組 Sample ID 時轉為需人工確認，不 silent guessing。
+- 測試與驗證：`tests/test_el_matrix.py` 與完整 unittest suite。
+
+### OUTPUT-ELM-001－RAW TIFF 與下方 Footer JPG
+
+- 狀態：已完成（V1.8.0）。
+- 詳細行為：同一次正式 capture 的 RAW frame 保存 TIFF、更新既有 Live View，並從 copy 建立原圖下方中性灰底／白字三行 Footer JPG；Sample ID 僅在 filename 使用 sanitized 版本。
+- 驗收條件：TIFF 尺寸與 pixel bytes 不變；Footer 不覆蓋相機有效畫面；Dark 不顯示 J=0／I／V；正式 metadata 與 manifest 持續保存高精度數值。
+- 影響模組：`camera_capture_bridge.py`、`measurement_output.py`、`el_matrix_runner.py`。
+
+### UI-ELM-001－Modeless Progress、Runtime ETA 與 Live View
+
+- 狀態：已完成（V1.8.0）。
+- 詳細行為：Summary 在任何 SMU/routing 操作前確認；runtime window modeless，由 worker progress single source of truth 更新 overall monotonic progress、剩餘張數、時間與 finish time。關閉 X 只隱藏視窗，不停止 worker。
+- 驗收條件：正式 frame 仍由既有 CameraController pull-mode signal 更新主畫面；bridge 不啟動第二 stream、不插入 preview exposure；Progress Stop 呼叫既有 safe stop。
 
 ### FLOW-002－Start／Stop 必須獨立
 
@@ -379,6 +403,13 @@
 ```
 
 ## 9. 版本變更摘要
+
+### V1.8.0－2026-08-14
+
+- Recipe schema v7 新增固定 CH1～CH4 與共用 EL Matrix，舊 Recipe 缺少 Sample ID 時要求人工確認。
+- 新增 Shared Dark 一次、多 Channel routing/per-channel polarity、J-level stabilization 與同 J OUTPUT persistence runner。
+- 新增 RAW TIFF／Footer JPG／metadata manifest、modeless Progress、pre-run/runtime ETA 與既有 Live View frame reuse。
+- 新增 EL Matrix ordering、capture counts、ETA、failure cleanup、RAW pixel integrity、Footer 與 filename tests；完整 suite 通過。
 
 ### V1.6.0－2026-08-12
 

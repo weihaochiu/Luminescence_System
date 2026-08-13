@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 import logging
 from threading import Event, RLock
@@ -102,6 +103,9 @@ class PolarityService:
         if factor not in (-1, 1):
             raise ValueError("Polarity factor must be +1 or -1")
         self._factor = int(factor)
+
+    def clear(self) -> None:
+        self._factor = None
 
     def to_physical(self, requested_value: float) -> float:
         if self._factor is None:
@@ -1069,6 +1073,133 @@ class SMUControlManager(QObject):
             physical,
         )
         return physical
+
+    def set_recipe_polarity_factor(self, factor: int | None) -> None:
+        """Replace the per-channel mapping while Recipe owns a confirmed-OFF SMU."""
+
+        with self._lock:
+            if self._ownership is not SMUOwnership.RECIPE:
+                raise SMUInterlockError("Recipe does not own the SMU")
+            if self._output_enabled or not self._output_confirmed_off:
+                raise SMUInterlockError("Polarity can change only while Recipe OUTPUT is confirmed OFF")
+            if factor is None:
+                self.polarity.clear()
+            else:
+                self.polarity.set_confirmed_factor(factor)
+        if factor is not None:
+            self.polarity_changed.emit(factor)
+
+    def recipe_output_off(self, reason: str = "recipe transition") -> None:
+        """Verified OUTPUT OFF that deliberately retains Recipe ownership."""
+
+        with self._lock:
+            if self._ownership is not SMUOwnership.RECIPE:
+                raise SMUInterlockError("Recipe does not own the SMU")
+            driver = self._required_driver()
+        failures: list[str] = []
+        observed: bool | None = None
+        with self._io_lock:
+            try:
+                failures.extend(driver.safe_stop())
+                observed = driver.query_output_enabled()
+            except Exception as exc:
+                failures.append(str(exc))
+        if observed is not False:
+            failures.append(
+                "OUTPUT OFF not confirmed (observed "
+                + ("UNKNOWN" if observed is None else "ON") + ")"
+            )
+        with self._lock:
+            if failures:
+                self._output_confirmed_off = False
+                self._output_state = SMUOutputState.UNKNOWN
+                self._output_unknown_latched = True
+                self._fault_latched = True
+                self._fault_reason = "; ".join(failures)
+                self._ownership = SMUOwnership.FAULT
+                self._operation_state = SMUOperationState.FAULT
+            else:
+                self._output_enabled = False
+                self._output_confirmed_off = True
+                self._output_state = SMUOutputState.OFF
+                self._operation_state = SMUOperationState.RECIPE_LOCKED
+        if failures:
+            self.output_state_changed.emit(SMUOutputState.UNKNOWN.value)
+            self.operation_state_changed.emit(SMUOperationState.FAULT.value)
+            raise SMUInterlockError("Recipe OUTPUT OFF failed: " + "; ".join(failures))
+        LOG.info("RECIPE_SMU OUTPUT OFF verified reason=%s", reason)
+        self.output_changed.emit(False)
+        self.output_state_changed.emit(SMUOutputState.OFF.value)
+        self.output_confirmation_changed.emit(True)
+        self.operation_state_changed.emit(SMUOperationState.RECIPE_LOCKED.value)
+
+    def recipe_readback(self) -> SMUReadback:
+        """Synchronous formal-image readback serialized with Recipe I/O."""
+
+        with self._lock:
+            if self._ownership is not SMUOwnership.RECIPE:
+                raise SMUInterlockError("Recipe does not own the SMU")
+            mode = self._mode
+        with self._io_lock:
+            driver = self._required_driver()
+            enabled = self._query_output_or_latch(driver, "Recipe formal image readback")
+            if enabled is not True:
+                raise SMUInterlockError("Recipe formal image readback requires confirmed OUTPUT ON")
+            voltage = float(driver.measure_voltage())
+            current = float(driver.measure_current())
+            compliance = driver.query_compliance_tripped(mode)
+        if compliance:
+            raise SMUInterlockError("SMU compliance tripped during EL Matrix capture")
+        return SMUReadback(voltage, current, voltage * current, True, compliance)
+
+    def recipe_polarity_measurement(
+        self,
+        settings: PolarityMeasurementSettings,
+        area_cm2: float,
+        *,
+        light_on: Callable[[], None],
+        light_off: Callable[[], None],
+        check_cancel: Callable[[], None],
+        wait_ms: Callable[[int], None],
+        status: Callable[[str], None],
+    ) -> dict[str, Any]:
+        """Run Jsc/Voc for one routed Recipe channel and replace its factor."""
+
+        with self._lock:
+            if self._ownership is not SMUOwnership.RECIPE:
+                raise SMUInterlockError("Recipe does not own the SMU")
+            if self._output_enabled or not self._output_confirmed_off:
+                raise SMUInterlockError("Recipe polarity requires confirmed OUTPUT OFF")
+            self.polarity.clear()
+        with self._io_lock:
+            result = self.polarity_measurement.measure(
+                self._required_driver(),
+                settings,
+                area_cm2,
+                light_on=light_on,
+                light_off=light_off,
+                check_cancel=check_cancel,
+                wait_ms=wait_ms,
+                status=status,
+            )
+        if result.factor is None:
+            raise SMUInterlockError(
+                "Invalid polarity measurement: "
+                + (result.failure_reason or "Jsc/Voc did not identify a safe polarity")
+            )
+        with self._lock:
+            self.polarity.set_confirmed_factor(result.factor)
+            self._output_enabled = False
+            self._output_confirmed_off = True
+            self._output_state = SMUOutputState.OFF
+            self._operation_state = SMUOperationState.RECIPE_LOCKED
+        self.polarity_changed.emit(result.factor)
+        payload = result.to_dict()
+        payload.update({
+            "polarity_check_status": "COMPLETED",
+            "polarity_timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+        })
+        return payload
 
     def safe_shutdown(
         self,

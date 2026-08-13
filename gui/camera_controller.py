@@ -259,6 +259,20 @@ class CameraController(QObject):
         current = self._read_current_exposure(self._camera)
         return current if current is not None else (0, 0)
 
+    def capture_metadata(self) -> dict[str, Any]:
+        """Stable identity/format fields for a frame already pulled by this controller."""
+
+        model = getattr(getattr(self._device, "model", None), "name", "")
+        return {
+            "CameraModel": str(model or self.device_name),
+            "CameraSerial": self._device_identifier(self._device) if self._device is not None else "",
+            "Resolution": f"{self._width}x{self._height}",
+            "ImageWidth": self._width,
+            "ImageHeight": self._height,
+            "PixelFormat": "RGB24",
+            "BitDepth": 8,
+        }
+
     def read_temperature_c(self) -> float | None:
         """Read sensor temperature via bundled SDK, returning degrees Celsius.
 

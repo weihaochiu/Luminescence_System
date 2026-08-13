@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -53,6 +54,7 @@ class RecipeDialogPagesMixin:
         self.description_edit = QTextEdit()
         self.description_edit.setMaximumHeight(100)
         self.area_spin = _double_spin(0.000001, 10000.0, 0.1, " cm²", 6)
+        self.apply_area_button = QPushButton("套用至全部 Channel")
         self.forward_polarity_combo = QComboBox()
         self.forward_polarity_combo.addItem("正電流／正電壓", "positive")
         self.forward_polarity_combo.addItem("負電流／負電壓", "negative")
@@ -62,20 +64,79 @@ class RecipeDialogPagesMixin:
         form.addRow("Recipe 名稱 *", self.name_edit)
         form.addRow("量測類型", self.type_value)
         form.addRow("狀態", self.state_combo)
-        form.addRow("Active area *", self.area_spin)
+        area_row = QHBoxLayout()
+        area_row.addWidget(self.area_spin)
+        area_row.addWidget(self.apply_area_button)
+        area_widget = QWidget()
+        area_widget.setLayout(area_row)
+        form.addRow("預設元件面積", area_widget)
         form.addRow("預期 EL 正向極性", self.forward_polarity_combo)
         form.addRow("樣品識別", self.device_id_required_check)
         form.addRow("用途／備註", self.description_edit)
         form.addRow("Recipe ID", self.id_value)
         form.addRow("版本", self.version_value)
+        self.channels_table = QTableWidget(4, 4)
+        self.channels_table.setHorizontalHeaderLabels(
+            ["啟用", "Channel", "Sample / Device ID", "Device Area (cm²)"]
+        )
+        self.channels_table.verticalHeader().setVisible(False)
+        self.channels_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        for row in range(4):
+            enabled = QTableWidgetItem()
+            enabled.setFlags(enabled.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            enabled.setCheckState(Qt.CheckState.Checked if row == 0 else Qt.CheckState.Unchecked)
+            channel = QTableWidgetItem(f"CH{row + 1}")
+            channel.setFlags(channel.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.channels_table.setItem(row, 0, enabled)
+            self.channels_table.setItem(row, 1, channel)
+            self.channels_table.setItem(row, 2, QTableWidgetItem(f"Sample_A{row + 1}"))
+            self.channels_table.setItem(row, 3, QTableWidgetItem("0.100"))
+        form.addRow("Logical Channels", self.channels_table)
+        self.apply_area_button.clicked.connect(self._apply_default_area_to_channels)
+        return page
+
+    def _apply_default_area_to_channels(self) -> None:
+        value = f"{self.area_spin.value():.6f}".rstrip("0").rstrip(".")
+        for row in range(self.channels_table.rowCount()):
+            self.channels_table.item(row, 3).setText(value)
+
+    def _build_el_matrix_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+        self.matrix_current_density_edit = QLineEdit("2, 4, 6, 8, 10, 12")
+        self.matrix_gain_edit = QLineEdit("100, 200, 300, 400, 500")
+        self.matrix_exposure_edit = QLineEdit(
+            "0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 15000"
+        )
+        self.matrix_repeat_spin = QSpinBox()
+        self.matrix_repeat_spin.setRange(1, 999)
+        self.matrix_voltage_compliance_spin = _double_spin(0.000001, 210, 3, " V", 6)
+        self.matrix_stabilization_spin = QSpinBox()
+        self.matrix_stabilization_spin.setRange(0, 3_600_000)
+        self.matrix_stabilization_spin.setSuffix(" ms")
+        self.shared_dark_enabled_check = QCheckBox("量測開始時拍攝一次 Shared Dark Matrix")
+        self.shared_dark_enabled_check.setChecked(True)
+        form.addRow("Current Density List (mA/cm²)", self.matrix_current_density_edit)
+        form.addRow("Gain List (%)", self.matrix_gain_edit)
+        form.addRow("Exposure List (ms)", self.matrix_exposure_edit)
+        form.addRow("每條件拍攝張數", self.matrix_repeat_spin)
+        form.addRow("Voltage Compliance", self.matrix_voltage_compliance_spin)
+        form.addRow("J 切換後等待時間", self.matrix_stabilization_spin)
+        form.addRow(self.shared_dark_enabled_check)
+        note = QLabel(
+            "固定順序：Shared Dark（一次）→ CH1～CH4（只執行啟用者）→ "
+            "Current Density → Gain → Exposure → Repeat。Exposure 依輸入順序執行。"
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("background:#edf5fa; border:1px solid #b6cedd; padding:8px;")
+        form.addRow(note)
         return page
 
     def _build_polarity_tab(self) -> QWidget:
         page = QWidget()
         form = QFormLayout(page)
-        self.polarity_required_check = QCheckBox("執行白光下 Jsc／Voc 極性確認（必做）")
+        self.polarity_required_check = QCheckBox("每個 Channel 量測前執行白光 Jsc／Voc 極性確認")
         self.polarity_required_check.setChecked(True)
-        self.polarity_required_check.setEnabled(False)
         form.addRow(self.polarity_required_check)
         note = QLabel(
             "Jsc / Voc 條件由「設定 → 極性確認…」統一管理。Recipe 執行時讀取同一份"

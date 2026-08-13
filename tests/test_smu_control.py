@@ -185,6 +185,39 @@ class SMUControlTests(unittest.TestCase):
         self.control.acquire_recipe()
         self.assertEqual(-0.010, self.control.recipe_output("CC", 0.010, 2.0))
 
+    def test_recipe_readback_and_output_off_retain_recipe_ownership(self) -> None:
+        self.control.acquire_recipe()
+        self.control.recipe_output("CC", 0.0008, 3.0)
+        self.driver.voltage = 1.24
+        self.driver.current = 0.00079
+        reading = self.control.recipe_readback()
+        self.assertAlmostEqual(1.24, reading.voltage_v)
+        self.assertAlmostEqual(0.00079, reading.current_a)
+        self.control.recipe_output_off("channel transition")
+        self.assertIs(self.control.ownership, SMUOwnership.RECIPE)
+        self.assertTrue(self.control.output_confirmed_off)
+        self.assertFalse(self.driver.output)
+
+    def test_recipe_channel_factor_is_replaced_only_while_output_off(self) -> None:
+        self.control.acquire_recipe()
+        self.control.set_recipe_polarity_factor(-1)
+        self.assertEqual(-1, self.control.polarity.factor)
+        self.control.recipe_output("CC", 0.0008, 3.0)
+        with self.assertRaises(SMUInterlockError):
+            self.control.set_recipe_polarity_factor(1)
+        self.control.recipe_output_off()
+        self.control.set_recipe_polarity_factor(None)
+        with self.assertRaises(SMUInterlockError):
+            self.control.recipe_output("CC", 0.0008, 3.0)
+
+    def test_recipe_output_off_readback_failure_latches_fault(self) -> None:
+        self.control.acquire_recipe()
+        self.control.recipe_output("CC", 0.0008, 3.0)
+        self.driver.query_returns_unknown = True
+        with self.assertRaises(SMUInterlockError):
+            self.control.recipe_output_off()
+        self.assertIs(self.control.ownership, SMUOwnership.FAULT)
+
     def test_manual_and_recipe_are_interlocked_below_gui(self) -> None:
         self.control.request_manual_output("CC", 0.001, 2.0)
         self.wait_until(lambda: self.control.output_enabled)

@@ -215,11 +215,11 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             self.hdr_session_button.setEnabled(False)
             reason = "請先從左側選擇已啟用且通過驗證的 Recipe。"
         else:
-            mode = "電流" if self.selected_recipe.el_sweep.drive_mode == "current" else "電壓"
+            counts = self.selected_recipe.matrix_capture_counts()
             self.selected_recipe_label.setText(
                 f"{self.selected_recipe.name} v{self.selected_recipe.version}\n"
-                f"{mode}模式｜{len(self.selected_recipe.enabled_points())} EL 點｜"
-                f"{len(self.selected_recipe.dark_profiles())} Dark Profiles"
+                f"{len(self.selected_recipe.enabled_channels())} Channels｜"
+                f"{counts['overall']} captures"
             )
             if self.selected_recipe.hdr.enabled:
                 self.hdr_session_button.setEnabled(True)
@@ -233,23 +233,17 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
                 self.hdr_session_button.setText("HDR：關閉")
                 self.hdr_session_button.setEnabled(False)
                 self.hdr_session_button.setToolTip("目前 Recipe 未啟用定量 HDR")
-            reason = (
-                "本版已完成極性確認、Dark I–V、Dark Frames 與電流／電壓 EL 的 Recipe "
-                "介面及驗證；手動 SMU 輸出已具集中式安全控制，但 Recipe 尚未加入完整的"
-                "四階段 SMU 與相機同步執行，"
-                "因此開始量測暫不開放。"
-            )
-        self.start_measurement_button.setEnabled(False)
+            blockers = []
+            if not self.controller.is_open: blockers.append("相機未連線")
+            if not self.smu_manager.is_connected: blockers.append("SMU 未連線")
+            if not self.relay_controller.connected: blockers.append("Relay 未連線")
+            if not self.measurement_path_edit.text().strip() and not self.selected_recipe.output.root_directory:
+                blockers.append("尚未設定輸出位置")
+            reason = "；".join(blockers) if blockers else "開始多 Channel EL Matrix 自動量測"
+        self.start_measurement_button.setEnabled(self.selected_recipe is not None and not blockers if self.selected_recipe else False)
         self.start_measurement_button.setToolTip(reason)
-        self.stop_measurement_button.setEnabled(False)
-        self.stop_measurement_button.setToolTip("量測執行功能完成後，停止按鈕會在量測期間啟用。")
-
-    def _measurement_not_implemented(self) -> None:
-        QMessageBox.information(
-            self,
-            "量測執行尚未開放",
-            "本版已完成四階段 Recipe 建立、驗證與選擇。SMU 安全狀態機與同步拍攝將在下一階段加入。",
-        )
+        self.stop_measurement_button.setEnabled(self._measurement_worker is not None)
+        self.stop_measurement_button.setToolTip("執行既有 Measurement Safe Stop。")
 
     def _revalidate_locked_hdr_profile(self) -> None:
         state = self.hdr_session_state
@@ -284,8 +278,8 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             "單次自動曝光後拍攝、TIFF／PNG／JPEG 儲存，"
             "VISA SMU 掃描、選擇、安全連線、手動 CV／CC，以及 Recipe 建立、驗證與選擇。\n\n"
             "SMU 支援：Keysight B2900 系列（手動輸出需先進行實機安全驗證）\n"
-            "Recipe：極性確認 → Dark I–V → Dark Frames → 電流／電壓 EL\n"
-            "Recipe 自動執行仍安全停用\n"
+            "Recipe：Shared Dark → Channel → J → Gain → Exposure → Repeat\n"
+            "支援多 Channel EL Matrix 自動量測、即時進度與安全停止\n"
             "相機介面：RisingCam SDK 57.27250.20241216",
         )
 

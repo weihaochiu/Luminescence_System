@@ -1,4 +1,12 @@
-# EL 量測設備控制程式 V1.7.0
+# EL 量測設備控制程式 V1.8.0
+
+## V1.8.0 Multi-Channel EL Matrix Recipe
+
+- Recipe 新增固定 CH1～CH4 的 Logical Channel／Sample ID／Device Area，以及共用 J、Gain、Exposure、Repeat、Compliance 與 J stabilization。
+- 正式量測順序固定為 Shared Dark（一次）→ Channel → Current Density → Gain → Exposure → Repeat；Channel 轉換使用既有 verified break-before-make routing 與 SMU safe shutdown。
+- 每個啟用 Channel 可各自執行既有白光 Jsc／Voc polarity；略過時會先警告並逐 Channel 重設為標準接線 factor。
+- 量測沿用既有相機 pull-mode frame；每張正式 frame 同時更新主畫面 Live View、保存 RAW TIFF、建立下方灰底白字三行 Footer JPG 與 metadata/CSV。
+- 新增 modeless Progress Window、capture count、純曝光／總時間預估、runtime ETA 與預計完成時間。
 
 ## V1.7.0 Camera Temperature Monitoring
 

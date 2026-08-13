@@ -416,7 +416,7 @@ class MainWindowUIMixin:
         self.white_light_button.setEnabled(False)
         self.white_light_button.clicked.connect(self.toggle_white_light)
         self.sample_id_edit.textChanged.connect(self._on_sample_id_changed)
-        self.start_measurement_button.clicked.connect(self._measurement_not_implemented)
+        self.start_measurement_button.clicked.connect(self.begin_el_matrix_measurement)
         self.stop_measurement_button.clicked.connect(self.stop_background_measurement)
         return bar
 
@@ -476,8 +476,10 @@ class MainWindowUIMixin:
         self.smu_manager.scan_finished.connect(self.on_smu_scan_finished)
         self.smu_manager.connection_started.connect(self.on_smu_connection_started)
         self.smu_manager.connected.connect(self.on_smu_connected)
+        self.smu_manager.connected.connect(lambda _device: self._update_measurement_controls())
         self.smu_manager.connection_failed.connect(self.on_smu_connection_failed)
         self.smu_manager.disconnected.connect(self.on_smu_disconnected)
+        self.smu_manager.disconnected.connect(self._update_measurement_controls)
         self.smu_manager.error_occurred.connect(self.show_smu_error)
         self.smu_manager.control.error_occurred.connect(self.show_smu_error)
         self.instrument_state_manager.state_changed.connect(self.update_smu_ui_state)
@@ -505,8 +507,10 @@ class MainWindowUIMixin:
 
         self.controller.frame_ready.connect(self.on_frame_ready)
         self.controller.camera_opened.connect(self.on_camera_opened)
+        self.controller.camera_opened.connect(lambda _info: self._update_measurement_controls())
         self.controller.camera_closing.connect(self.temperature_monitor.stop)
         self.controller.camera_closed.connect(self.on_camera_closed)
+        self.controller.camera_closed.connect(self._update_measurement_controls)
         self.controller.exposure_changed.connect(self.on_exposure_changed)
         self.controller.exposure_status_changed.connect(self.on_exposure_status_changed)
         self.controller.auto_exposure_result.connect(self.on_auto_exposure_result)

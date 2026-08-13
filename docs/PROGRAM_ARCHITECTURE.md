@@ -1,8 +1,8 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.7.0
-對應程式版本：V1.7.0
-最後更新：2026-08-13（UTC+8）
+文件版本：1.8.0
+對應程式版本：V1.8.0
+最後更新：2026-08-14（UTC+8）
 
 ## 1. 文件目的
 
@@ -15,8 +15,8 @@
 1. `main.py` 呼叫 `gui.app.main()`。
 2. `app.py` 建立 Qt Application 與 `MainWindow`。
 3. `MainWindow` 建立相機控制器、SMU 連線／控制／監測服務、Recipe Store 與 HDR Settings Store。
-4. 主畫面從 Store 載入通過驗證的 Recipe，使用者選擇 Recipe、樣品 ID、輸出位置與 HDR T0／Aging 模式。
-5. 現階段只完成設備連線、一般拍攝、Recipe／HDR 設定與資料契約；量測執行狀態機仍安全停用。
+4. 主畫面從 Store 載入通過驗證的 Recipe；EL Matrix 的 Sample ID 與 Area 由各 Logical Channel 保存。
+5. 使用者確認無硬體動作的量測摘要後，worker 執行 Shared Dark 與多 Channel EL Matrix，主執行緒持續處理 Live View、Progress 與安全停止。
 
 ## 3. 分層與依賴方向
 
@@ -62,7 +62,7 @@ Camera Temperature Monitoring 的依賴與資料流固定為：
 
 | 模組 | 單一責任 |
 | --- | --- |
-| `recipe_store.py` | Recipe dataclass、schema v6、舊版遷移、驗證、警告、時間估算與 Store |
+| `recipe_store.py` | Recipe dataclass、schema v7、Channel／Matrix、舊版遷移、驗證、警告與 Store |
 | `recipe_dialog.py` | Recipe 管理對話框外殼、頁面導航與穩定公開入口 |
 | `recipe_dialog_pages.py` | 八個設定頁與 widget 建構 |
 | `recipe_dialog_points.py` | EL 點位產生、表格解析、HDR 欄位反灰、相機欄位保存 |
@@ -99,6 +99,12 @@ Camera Temperature Monitoring 的依賴與資料流固定為：
 | `smu_monitor.py` | 500 ms 非阻塞 readback 排程；Recipe ownership 時略過 polling |
 | `smu_manual_panel.py` | CV/CC、setpoint、compliance、輸出按鈕與 readback 顯示；不匯入 driver／VISA |
 | `measurement_control_bar.py` | 底部 context/actions 的單一 widget set 與 WIDE／STANDARD／COMPACT 重排 |
+| `el_matrix_plan.py` | 無硬體依賴的固定順序、capture count、純曝光與 pre-run ETA |
+| `el_matrix_runner.py` | Shared Dark 一次與 Channel → J → Gain → Exposure → Repeat 執行狀態 |
+| `el_matrix_hardware.py` | runner 到既有 SMU／Relay／Polarity／Camera authority 的安全轉接 |
+| `camera_capture_bridge.py` | worker 等待既有 pull-mode stream 的下一張正式 frame；不建立第二 camera stream |
+| `measurement_progress_dialog.py` | modeless progress presentation；不自行重算 measurement state |
+| `measurement_output.py` | RAW TIFF、下方 Footer JPG、metadata／CSV 與安全檔名 |
 | `responsive_layout.py` | logical width、available geometry、font metrics 與 DPI context 的 breakpoint 判定 |
 | `image_io.py` | 一般影像與同名 JSON metadata 儲存；metadata 不修改 image pixels |
 | `widgets.py` | 可重用的影像顯示與可收合區塊 |
@@ -157,14 +163,14 @@ Manual 與 Recipe 在 `SMUControlManager` 互鎖。所有高階 output transitio
 
 Emergency request 先設定 threading Event latch，再排入相同 single-worker queue 做 `safe_shutdown()`。Normal operation 會在 configure 前及真正送出 `OUTPUT ON` 前檢查 latch；最後一段 check／OUTPUT ON 與 Emergency latch transition 有明確同步邊界，因此 Emergency 之後尚未送出的 normal output 不會開啟。已在執行中的 blocking PyVISA call 不宣稱可被 preempt。Emergency shutdown 完整成功且 OUTPUT OFF 後才回到 IDLE 並清除 latch；failure 則保留 latch/錯誤並進入 FAULT。
 
-Manual → Recipe 交接必須先完成 verified shutdown，釋放至 IDLE 後才允許 Recipe acquire。Recipe → Manual 交接先設 cancel latch 封鎖新 Recipe output、通知 worker cancel、關閉白光，再等待目前 I/O safe point 執行 verified shutdown；只有 `OUTPUT OFF` 明確確認後才回到可手動狀態。安全交接支援已完成，但完整 Recipe 硬體執行仍維持停用。
+Manual → Recipe 交接必須先完成 verified shutdown，釋放至 IDLE 後才允許 Recipe acquire。Recipe → Manual 交接先設 cancel latch 封鎖新 Recipe output、通知 worker cancel、關閉白光，再等待目前 I/O safe point 執行 verified shutdown；只有 `OUTPUT OFF` 明確確認後才回到可手動狀態。EL Matrix 的 Channel transition 使用 `recipe_output_off()` 保留 Recipe ownership，但仍要求 OUTPUT OFF readback 後才允許 routing break-before-make。
 
 一般 disconnect 只有在 hardware query 明確回傳 OFF、ownership 為 IDLE 且 control 無 pending I/O 時才允許；True 或 `None` 均 fail-closed。`safe_shutdown()` 的固定順序為 `:OUTP OFF` → `:OUTP? == False` → source 歸零，並以 `output_confirmed_off`／`last_shutdown_ok` 區分完整成功與失敗；query 為 ON、UNKNOWN、exception 或任何 `safe_stop()` failure 都不得宣告安全，必須進入 FAULT。
 
 Readback 由 `SMUMonitor` 的 Qt timer 觸發，但實際 query 在控制層的單一 worker 執行；I/O lock 同時涵蓋 Manual、Recipe、readback 與 shutdown。Recipe ownership 或 busy 時不排入 readback，避免 critical command 中插入 query。B2901BL 實機已確認 OUTPUT OFF 時送出 `:MEAS:VOLT?` 會自動開啟 Source Output，因此 periodic readback 採 OUTP-first：先查 `:OUTP?`，OFF 時禁止 voltage/current/compliance measurement；只有 `MANUAL + OUTPUT_ON` 才量測。其他 OUTPUT ON 組合只發布 output 狀態，保留既有 `UNEXPECTED_OUTPUT_ON` 復歸流程。
 
 V1.5.2 修正 B2901BL readback auto-output：OUTP-first、OUTPUT OFF 禁止 `MEAS:*` polling、B2900 auto-output 明確停用並讀回確認；Recipe、Polarity 與 `UNEXPECTED_OUTPUT_ON` 安全狀態不變。
-V1.5.1 修正 Manual 實體座標、矛盾 readback 復歸、verified shutdown、雙向安全交接與單一 UI snapshot；完整 Recipe 硬體執行仍停用。未完成 Jsc／Voc determination、Dark I–V、Dark Frames、EL 點位與相機同步前，不得啟用主畫面「開始量測」。
+V1.5.1 修正 Manual 實體座標、矛盾 readback 復歸、verified shutdown、雙向安全交接與單一 UI snapshot；V1.8.0 在不改寫控制層的前提下啟用 EL Matrix Recipe runner。
 
 ## 6.1 Responsive GUI 邊界
 

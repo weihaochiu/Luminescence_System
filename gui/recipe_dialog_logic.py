@@ -20,7 +20,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .recipe_store import Recipe
+from .recipe_store import ChannelRecipe, Recipe
+
+
+def _parse_number_list(text: str, *, integers: bool = False) -> list[float] | list[int]:
+    tokens = text.replace("，", ",").replace("\n", ",").split(",")
+    values = [token.strip() for token in tokens if token.strip()]
+    if integers:
+        return [int(token) for token in values]
+    return [float(token) for token in values]
 
 
 class RecipeDialogLogicMixin:
@@ -68,6 +76,25 @@ class RecipeDialogLogicMixin:
         self.device_id_required_check.setChecked(recipe.geometry.device_id_required)
         self.id_value.setText(recipe.recipe_id)
         self.version_value.setText(f"v{recipe.version}")
+        with QSignalBlocker(self.channels_table):
+            for row, channel in enumerate(recipe.channels[:4]):
+                self.channels_table.item(row, 0).setCheckState(
+                    Qt.CheckState.Checked if channel.enabled else Qt.CheckState.Unchecked
+                )
+                self.channels_table.item(row, 1).setText(channel.channel)
+                self.channels_table.item(row, 2).setText(channel.sample_id)
+                self.channels_table.item(row, 3).setText(f"{channel.area_cm2:g}")
+        matrix = recipe.el_matrix
+        self.matrix_current_density_edit.setText(
+            ", ".join(f"{value:g}" for value in matrix.current_density_ma_cm2)
+        )
+        self.matrix_gain_edit.setText(", ".join(str(value) for value in matrix.gains_percent))
+        self.matrix_exposure_edit.setText(", ".join(f"{value:g}" for value in matrix.exposures_ms))
+        self.matrix_repeat_spin.setValue(matrix.repeat)
+        self.matrix_voltage_compliance_spin.setValue(matrix.voltage_compliance_v)
+        self.matrix_stabilization_spin.setValue(matrix.stabilization_ms)
+        self.shared_dark_enabled_check.setChecked(matrix.shared_dark_enabled)
+        self.polarity_required_check.setChecked(recipe.polarity.enabled)
 
 
         self.dark_stable_spin.setValue(recipe.dark_iv.dark_stabilization_s)
@@ -147,7 +174,43 @@ class RecipeDialogLogicMixin:
         recipe.geometry.forward_polarity = str(self.forward_polarity_combo.currentData())
         recipe.geometry.device_id_required = self.device_id_required_check.isChecked()
 
-        recipe.polarity.enabled = True
+        channels: list[ChannelRecipe] = []
+        for row in range(self.channels_table.rowCount()):
+            area_text = self.channels_table.item(row, 3).text().strip()
+            try:
+                area = float(area_text)
+            except ValueError:
+                area = float("nan")
+            channels.append(ChannelRecipe(
+                channel=f"CH{row + 1}",
+                enabled=self.channels_table.item(row, 0).checkState() == Qt.CheckState.Checked,
+                sample_id=self.channels_table.item(row, 2).text(),
+                area_cm2=area,
+            ))
+        recipe.channels = channels
+        recipe.polarity.enabled = self.polarity_required_check.isChecked()
+        try:
+            recipe.el_matrix.current_density_ma_cm2 = list(
+                _parse_number_list(self.matrix_current_density_edit.text())
+            )
+        except ValueError:
+            recipe.el_matrix.current_density_ma_cm2 = [float("nan")]
+        try:
+            recipe.el_matrix.gains_percent = list(
+                _parse_number_list(self.matrix_gain_edit.text(), integers=True)
+            )
+        except ValueError:
+            recipe.el_matrix.gains_percent = [-1]
+        try:
+            recipe.el_matrix.exposures_ms = list(
+                _parse_number_list(self.matrix_exposure_edit.text())
+            )
+        except ValueError:
+            recipe.el_matrix.exposures_ms = [float("nan")]
+        recipe.el_matrix.repeat = self.matrix_repeat_spin.value()
+        recipe.el_matrix.voltage_compliance_v = self.matrix_voltage_compliance_spin.value()
+        recipe.el_matrix.stabilization_ms = self.matrix_stabilization_spin.value()
+        recipe.el_matrix.shared_dark_enabled = self.shared_dark_enabled_check.isChecked()
 
         recipe.dark_iv.enabled = True
         recipe.dark_iv.dark_stabilization_s = self.dark_stable_spin.value()
@@ -306,6 +369,7 @@ class RecipeDialogLogicMixin:
             elif isinstance(widget, QCheckBox):
                 widget.toggled.connect(self._update_summary)
         self.points_table.itemChanged.connect(self._update_summary)
+        self.channels_table.itemChanged.connect(self._update_summary)
         self.drive_mode_combo.currentIndexChanged.connect(self._sync_drive_mode)
         self.device_match_combo.currentIndexChanged.connect(lambda: self.visa_edit.setEnabled(self.device_match_combo.currentData() == "specific"))
         self.export_pixel_csv_check.toggled.connect(self._on_pixel_csv_toggled)
@@ -317,6 +381,8 @@ class RecipeDialogLogicMixin:
         recipe = self._read_form_to_recipe()
         state = {"active": "啟用", "draft": "草稿", "disabled": "停用"}.get(recipe.state, recipe.state)
         points = recipe.enabled_points()
+        channels = recipe.enabled_channels()
+        counts = recipe.matrix_capture_counts()
         point_text = ", ".join(f"{point.setpoint:g}" for point in points[:12])
         if len(points) > 12:
             point_text += "…"
@@ -334,24 +400,24 @@ class RecipeDialogLogicMixin:
         drive = "定電流" if recipe.el_sweep.drive_mode == "current" else "定電壓"
         self.summary_label.setText(
             f"{recipe.name or '未命名 Recipe'}\n"
-            f"狀態：{state}｜Area {recipe.geometry.active_area_cm2:g} cm²\n\n"
+            f"狀態：{state}\n"
+            f"Channels：{' / '.join(channel.channel for channel in channels) or '尚未啟用'}\n"
+            f"Current Density：{', '.join(f'{value:g}' for value in recipe.el_matrix.current_density_ma_cm2)} mA/cm²\n"
+            f"Gain：{', '.join(str(value) for value in recipe.el_matrix.gains_percent)} %\n"
+            f"Exposure：{', '.join(f'{value:g}' for value in recipe.el_matrix.exposures_ms)} ms\n"
+            f"Repeat：{recipe.el_matrix.repeat}\n\n"
             "固定執行流程\n"
-            "[1/4] 白光極性確認\n"
-            "  使用「設定 → 極性確認…」的全域 Jsc / Voc 條件\n"
-            "[2/4] Dark I–V\n"
-            f"  {recipe.dark_iv.start_v:g} → {recipe.dark_iv.stop_v:g} V / Step {recipe.dark_iv.step_v:g} V\n"
-            f"  {recipe.dark_iv_point_count()} points；{recipe.dark_iv.current_compliance_ma:g} mA compliance\n"
-            "[3/4] Dark Frames\n"
-            f"  {len(profiles)} profiles × {recipe.dark_frames.frames_per_profile} frames\n"
-            "[4/4] EL Acquisition\n"
-            f"  {drive}／{len(points)} points／{recipe.setpoint_unit()}\n"
-            f"  {point_text or '尚無點位'}\n\n"
-            f"預估總時間：約 {recipe.estimated_time_s():.1f} s\n"
+            "Shared Dark（一次）→ Channel → J → Gain → Exposure → Repeat\n"
+            f"Shared Dark：{counts['shared_dark']} 張\n"
+            f"EL / Channel：{counts['el_per_channel']} 張\n"
+            f"EL Total：{counts['total_el']} 張\n"
+            f"Overall：{counts['overall']} 張\n"
+            f"每 Channel 極性確認：{'啟用' if recipe.polarity.enabled else '略過（執行前警告）'}\n"
             f"定量警告：{len(recipe.validation_warnings())} 項\n\n"
             f"全解析度像素 CSV：{'啟用' if recipe.output.export_pixel_csv else '關閉（可日後由 TIFF 產生）'}\n\n"
             f"定量 HDR：{'啟用－T0 建檔／Aging 鎖定 Profile' if recipe.hdr.enabled else '關閉'}\n"
             f"HDR 原始分曝光 EL／Dark：{'強制保存' if recipe.hdr.enabled else '不適用'}\n\n"
-            "本版完成 Recipe 設定與驗證；SMU 執行層尚未開放。"
+            "TIFF 永遠保存 RAW；JPG 由同一 frame 建立下方三行 Footer。"
         )
 
     def _import_recipe(self) -> None:
@@ -381,7 +447,7 @@ class RecipeDialogLogicMixin:
         filename, _ = QFileDialog.getSaveFileName(self, "匯出 Recipe JSON", f"{recipe.name}.json", "JSON (*.json)")
         if not filename:
             return
-        Path(filename).write_text(json.dumps({"schema_version": 6, "recipe": recipe.to_dict()}, ensure_ascii=False, indent=2), encoding="utf-8")
+        Path(filename).write_text(json.dumps({"schema_version": 7, "recipe": recipe.to_dict()}, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _choose_output_root(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "選擇量測資料儲存根目錄")
@@ -400,6 +466,7 @@ class RecipeDialogLogicMixin:
             self.summary_label.setText("請新增 Recipe。")
             self.validation_label.setText("尚未驗證")
 
+    @staticmethod
     def _set_combo_data(combo: QComboBox, value: str) -> None:
         index = combo.findData(value)
         combo.setCurrentIndex(index if index >= 0 else 0)
