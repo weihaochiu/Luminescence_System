@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-"""Recipe manager dialog shell.
-
-The shell owns navigation and layout.  Page construction, EL point behavior,
-and Recipe persistence are separated into three cohesive modules.
-"""
+"""Four-page Recipe manager with a persistent execution-plan preview."""
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -16,39 +12,47 @@ from PySide6.QtWidgets import (
     QListWidget,
     QPushButton,
     QTabWidget,
+    QTreeWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from .recipe_dialog_logic import RecipeDialogLogicMixin
 from .recipe_dialog_pages import RecipeDialogPagesMixin
-from .recipe_dialog_points import RecipeDialogPointsMixin
 from .recipe_store import Recipe, RecipeStore
 
 
 class RecipeManagerDialog(
     QDialog,
     RecipeDialogPagesMixin,
-    RecipeDialogPointsMixin,
     RecipeDialogLogicMixin,
 ):
     """Dialog shell and stable public entry point for Recipe management."""
 
     recipes_changed = Signal()
 
-    POINT_COLUMNS = ["啟用", "設定值", "Dwell (s)", "Exposure (ms) *", "Gain (%) *", "Frames *", "間隔 (s) *"]
-    CAMERA_COLUMNS = range(3, 7)
-    CAMERA_VALUE_ROLE = int(Qt.ItemDataRole.UserRole) + 1
-    HDR_CELL_TEXT = "啟用 HDR"
-
-    def __init__(self, store: RecipeStore, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        store: RecipeStore,
+        parent: QWidget | None = None,
+        *,
+        hdr_settings: object | None = None,
+        camera_resolutions: list[tuple[int, int]] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.store = store
+        self.hdr_settings = hdr_settings
         self.current_recipe: Recipe | None = None
         self.setWindowTitle("EL Recipe 管理－四階段流程")
         self.resize(1500, 850)
         self.setMinimumSize(1180, 700)
         self._build_ui()
+        if camera_resolutions:
+            self.resolution_combo.clear()
+            for index, (width, height) in enumerate(camera_resolutions):
+                self.resolution_combo.addItem(
+                    f"{width} × {height}", f"sdk:{index}"
+                )
         self._connect_summary_updates()
         self._reload_list()
 
@@ -80,21 +84,16 @@ class RecipeManagerDialog(
         left_layout.addLayout(transfer_buttons)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_basic_tab(), "1 基本／樣品")
-        self.tabs.addTab(self._build_el_matrix_tab(), "2 EL Matrix")
-        self.tabs.addTab(self._build_polarity_tab(), "3 極性確認")
-        self.tabs.addTab(self._build_dark_iv_tab(), "4 Legacy Dark I–V")
-        self.tabs.addTab(self._build_camera_tab(), "4 相機／非 HDR 預設")
-        self.tabs.addTab(self._build_el_tab(), "5 EL 點位")
-        self.tabs.addTab(self._build_dark_frame_tab(), "7 Legacy Dark Frames")
-        self.tabs.addTab(self._build_safety_tab(), "8 安全／SMU")
-        self.tabs.addTab(self._build_output_tab(), "9 輸出")
+        self.tabs.addTab(self._build_basic_tab(), "1 基本資料")
+        self.tabs.addTab(self._build_polarity_dark_iv_tab(), "2 極性確認 / Dark IV")
+        self.tabs.addTab(self._build_el_matrix_tab(), "3 EL Matrix")
+        self.tabs.addTab(self._build_output_tab(), "4 輸出")
 
-        self.summary_label = QLabel("請選擇或新增 Recipe")
-        self.summary_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.summary_label.setWordWrap(True)
-        self.summary_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.summary_label.setStyleSheet("background:#f6f7f8; border:1px solid #c9cdd0; padding:12px;")
+        self.execution_tree = QTreeWidget()
+        self.execution_tree.setHeaderHidden(True)
+        self.execution_tree.setStyleSheet(
+            "background:#f6f7f8; border:1px solid #c9cdd0; padding:6px;"
+        )
         self.validation_label = QLabel("尚未驗證")
         self.validation_label.setWordWrap(True)
         self.validation_label.setStyleSheet("color:#687078; padding:6px;")
@@ -103,8 +102,8 @@ class RecipeManagerDialog(
         right.setMaximumWidth(390)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.addWidget(QLabel("完整執行流程摘要"))
-        right_layout.addWidget(self.summary_label, 1)
+        right_layout.addWidget(QLabel("完整執行流程"))
+        right_layout.addWidget(self.execution_tree, 1)
         right_layout.addWidget(QLabel("驗證結果"))
         right_layout.addWidget(self.validation_label)
 
@@ -124,7 +123,7 @@ class RecipeManagerDialog(
         self.save_button.setDefault(True)
         self.close_button = QPushButton("關閉")
         footer = QHBoxLayout()
-        footer.addWidget(QLabel("EL Matrix 只使用啟用的 Logical Channel；只有啟用且通過驗證的 Recipe 會顯示在主畫面。"))
+        footer.addWidget(QLabel("Sample ID 與儲存目錄在主畫面設定；安全限制位於設定 → 安全 / SMU。"))
         footer.addStretch()
         footer.addWidget(self.validate_button)
         footer.addWidget(self.save_button)

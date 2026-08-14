@@ -155,7 +155,8 @@ class HDRProfile:
         current_signature, _conditions = recipe_scan_signature(recipe, algorithm)
         if self.scan_signature and current_signature != self.scan_signature:
             errors.append("EL 掃描點、驅動模式或關鍵量測條件與 T0 不一致")
-        if getattr(recipe.camera, "pixel_format", "") != self.pixel_format:
+        recipe_pixel_format = "RGB48"
+        if recipe_pixel_format != self.pixel_format:
             errors.append("Pixel format 與首次量測不同")
         if hdr_settings is not None and algorithm != self.hdr_algorithm:
             errors.append("目前「設定 → HDR」的演算法版本與 Profile 不相容")
@@ -166,7 +167,7 @@ class HDRProfile:
             )
         info = camera_info or {}
         current_model = str(info.get("model", ""))
-        current_serial = str(info.get("serial", ""))
+        current_serial = str(info.get("serial", info.get("identifier", "")))
         if self.camera_model and current_model and self.camera_model != current_model:
             errors.append(f"相機型號不一致：Profile={self.camera_model}，目前={current_model}")
         if self.camera_serial and current_serial and self.camera_serial != current_serial:
@@ -200,11 +201,11 @@ def create_t0_profile(
     )
     profile = HDRProfile(
         sample_id=sample_id.strip(),
-        camera_name=str(info.get("name", "")),
-        camera_model=str(info.get("model", "")),
-        camera_serial=str(info.get("serial", "")),
-        resolution=str(getattr(recipe.camera, "resolution", "current")),
-        pixel_format=str(getattr(recipe.camera, "pixel_format", "RGB24")),
+        camera_name=str(info.get("name", info.get("CameraModel", ""))),
+        camera_model=str(info.get("model", info.get("CameraModel", ""))),
+        camera_serial=str(info.get("serial", info.get("CameraSerial", ""))),
+        resolution=str(getattr(recipe.output, "resolution_id", "full")),
+        pixel_format="RGB48",
         gain_percent=int(gain_percent),
         exposure_times_ms=valid_exposures,
         planned_exposure_times_ms=tuple(float(value) for value in summary.get("planned_exposures_ms", exposure_times_ms)),
@@ -236,21 +237,25 @@ def recipe_scan_signature(
 ) -> tuple[str, dict[str, Any]]:
     conditions = {
         "active_area_cm2": float(recipe.geometry.active_area_cm2),
-        "drive_mode": str(recipe.el_sweep.drive_mode),
-        "setpoint_basis": str(recipe.el_sweep.setpoint_basis),
-        "scan_direction": str(recipe.el_sweep.scan_direction),
-        "repeat_count": int(recipe.el_sweep.repeat_count),
-        "points": [
-            {
-                "setpoint": float(point.setpoint),
-                "dwell_s": float(point.dwell_s),
-            }
-            for point in recipe.enabled_points()
+        "drive_mode": "current",
+        "setpoint_basis": "current_density",
+        "scan_direction": "matrix_order",
+        "current_density_ma_cm2": [
+            float(value) for value in recipe.el_matrix.current_density_ma_cm2
         ],
-        "resolution": str(recipe.camera.resolution),
-        "pixel_format": str(recipe.camera.pixel_format),
-        "trigger_mode": str(recipe.camera.trigger_mode),
-        "dark_combine_method": str(recipe.dark_frames.combine_method),
+        "channels": [
+            {
+                "channel": channel.channel,
+                "area_cm2": float(channel.area_cm2),
+            }
+            for channel in recipe.enabled_channels()
+        ],
+        "stabilization_ms": int(recipe.el_matrix.stabilization_ms),
+        "voltage_compliance_v": float(recipe.el_matrix.voltage_compliance_v),
+        "resolution": str(recipe.output.resolution_id),
+        "pixel_format": "RGB48",
+        "trigger_mode": "software",
+        "dark_combine_method": "median",
         "hdr_algorithm": str(hdr_algorithm),
     }
     canonical = json.dumps(conditions, sort_keys=True, separators=(",", ":"), ensure_ascii=True)

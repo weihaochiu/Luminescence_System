@@ -40,13 +40,18 @@ class CameraCaptureBridge(QObject):
         self._token = 0
         self._fallback_sequence = 0
         self.configure_requested.connect(self._configure)
-        sequenced = getattr(controller, "frame_ready_sequenced", None)
-        if sequenced is not None:
-            sequenced.connect(self._on_sequenced_frame)
+        scientific = getattr(controller, "scientific_frame_ready", None)
+        if scientific is not None:
+            scientific.connect(self._on_scientific_frame)
             self._uses_explicit_sequence = True
         else:
-            controller.frame_ready.connect(self._on_frame)
-            self._uses_explicit_sequence = False
+            sequenced = getattr(controller, "frame_ready_sequenced", None)
+            if sequenced is not None:
+                sequenced.connect(self._on_sequenced_frame)
+                self._uses_explicit_sequence = True
+            else:
+                controller.frame_ready.connect(self._on_frame)
+                self._uses_explicit_sequence = False
 
     def capture(
         self,
@@ -124,7 +129,15 @@ class CameraCaptureBridge(QObject):
     def _on_sequenced_frame(self, image: QImage, sequence: int) -> None:
         self._accept_frame(image, int(sequence))
 
-    def _accept_frame(self, image: QImage, sequence: int) -> None:
+    @Slot(object, QImage, int)
+    def _on_scientific_frame(
+        self, scientific_image: object, image: QImage, sequence: int
+    ) -> None:
+        self._accept_frame(image, int(sequence), scientific_image)
+
+    def _accept_frame(
+        self, image: QImage, sequence: int, scientific_image: object | None = None
+    ) -> None:
         with self._lock:
             pending = self._pending
         if (
@@ -140,8 +153,11 @@ class CameraCaptureBridge(QObject):
         metadata = {
             "ImageWidth": image.width(),
             "ImageHeight": image.height(),
-            "PixelFormat": "RGB24",
-            "BitDepth": 8,
+            "PixelFormat": "RGB48" if scientific_image is not None else "RGB24",
+            "BitDepth": (
+                int(self.controller.capture_metadata().get("BitDepth", 8))
+                if scientific_image is not None else 8
+            ),
             "CameraModel": self.controller.device_name,
             "FrameSequence": sequence,
             "ExposureReadbackUs": pending.actual_exposure_us,
@@ -155,5 +171,6 @@ class CameraCaptureBridge(QObject):
             datetime.now().astimezone(),
             temperature,
             metadata,
+            scientific_image,
         )
         pending.event.set()

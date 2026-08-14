@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
@@ -10,6 +11,9 @@ from typing import Any, TypeVar
 
 from .numeric import decimal_from_number, normalize_json_numbers, quantize_number
 from uuid import uuid4
+
+
+LOG = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -48,13 +52,12 @@ class ChannelRecipe:
 
     channel: str = "CH1"
     enabled: bool = False
-    sample_id: str = ""
     area_cm2: float = 0.100
 
 
 def _default_channels() -> list[ChannelRecipe]:
     return [
-        ChannelRecipe(f"CH{index}", index == 1, f"Sample_A{index}", 0.100)
+        ChannelRecipe(f"CH{index}", index == 1, 0.100)
         for index in range(1, 5)
     ]
 
@@ -76,12 +79,12 @@ class ELMatrixRecipe:
     repeat: int = 1
     voltage_compliance_v: float = 3.0
     stabilization_ms: int = 0
-    shared_dark_enabled: bool = True
+    dark_frame_enabled: bool = True
+    capture_timeout_s: float = 20.0
     estimated_capture_overhead_s: float = 0.15
     estimated_polarity_duration_s: float = 8.0
     estimated_routing_transition_s: float = 0.5
     estimated_shared_dark_overhead_s: float = 1.0
-
 
 @dataclass
 class DarkIVRecipe:
@@ -102,9 +105,8 @@ class DarkIVRecipe:
 
 
 @dataclass
-class CameraRecipe:
-    # These values are non-HDR table-entry defaults only. Acquisition always
-    # uses the explicit ELPoint values when HDR is disabled.
+class LegacyCameraRecipe:
+    """Migration DTO for Recipe schema versions that had a camera page."""
     exposure_ms: float = 500.0
     gain_percent: int = 10
     frame_count: int = 3
@@ -123,7 +125,7 @@ class HDRRecipe:
 
 
 @dataclass
-class ELPoint:
+class LegacyELPoint:
     enabled: bool = True
     setpoint: float = 1.0
     dwell_s: float = 0.50
@@ -134,7 +136,8 @@ class ELPoint:
 
 
 @dataclass
-class ELSweepRecipe:
+class LegacyELSweepRecipe:
+    """Migration DTO for the removed per-row EL point model."""
     drive_mode: str = "current"
     setpoint_basis: str = "current_density"
     scan_direction: str = "ascending"
@@ -144,51 +147,25 @@ class ELSweepRecipe:
     current_compliance_ma: float = 20.0
     return_to_zero: bool = True
     output_off_after: bool = True
-    points: list[ELPoint] = field(
+    points: list[LegacyELPoint] = field(
         default_factory=lambda: [
-            ELPoint(setpoint=0.1),
-            ELPoint(setpoint=0.3),
-            ELPoint(setpoint=1.0),
-            ELPoint(setpoint=3.0),
-            ELPoint(setpoint=10.0),
-            ELPoint(setpoint=20.0),
+            LegacyELPoint(setpoint=0.1),
+            LegacyELPoint(setpoint=0.3),
+            LegacyELPoint(setpoint=1.0),
+            LegacyELPoint(setpoint=3.0),
+            LegacyELPoint(setpoint=10.0),
+            LegacyELPoint(setpoint=20.0),
         ]
     )
 
 
 @dataclass
-class DarkFrameRecipe:
-    frames_per_profile: int = 5
-    frame_interval_s: float = 0.10
-    camera_switch_delay_s: float = 0.30
-    combine_method: str = "median"
-    save_raw_frames: bool = True
-    save_master_dark: bool = True
-    capture_after_el: bool = False
-
-
-@dataclass
-class SMURecipe:
-    device_match: str = "any_b2900"
-    visa_address: str = ""
-
-
-@dataclass
-class SafetyRecipe:
-    max_current_ma: float = 50.0
-    max_voltage_v: float = 5.0
-    max_power_mw: float = 150.0
-    max_output_time_s: float = 600.0
-    max_recipe_time_s: float = 1800.0
-    stop_on_camera_error: bool = True
-    stop_on_smu_error: bool = True
-
-
-@dataclass
 class OutputRecipe:
-    root_directory: str = ""
-    sample_id_required: bool = True
-    image_format: str = "TIFF"
+    resolution_id: str = "full"
+    format_tiff: bool = True
+    format_png: bool = False
+    format_jpg: bool = False
+    format_jpg_with_footer: bool = True
     save_raw_frames: bool = True
     save_summary_csv: bool = True
     save_json: bool = True
@@ -197,6 +174,18 @@ class OutputRecipe:
     pixel_csv_raw: bool = True
     pixel_csv_dark_corrected: bool = True
     pixel_csv_exposure_normalized: bool = False
+
+    def selected_formats(self) -> tuple[str, ...]:
+        return tuple(
+            label
+            for label, enabled in (
+                ("TIFF", self.format_tiff),
+                ("PNG", self.format_png),
+                ("JPG", self.format_jpg),
+                ("JPG with Footer", self.format_jpg_with_footer),
+            )
+            if enabled
+        )
 
 
 @dataclass
@@ -214,12 +203,7 @@ class Recipe:
     el_matrix: ELMatrixRecipe = field(default_factory=ELMatrixRecipe)
     polarity: PolarityRecipe = field(default_factory=PolarityRecipe)
     dark_iv: DarkIVRecipe = field(default_factory=DarkIVRecipe)
-    camera: CameraRecipe = field(default_factory=CameraRecipe)
     hdr: HDRRecipe = field(default_factory=HDRRecipe)
-    el_sweep: ELSweepRecipe = field(default_factory=ELSweepRecipe)
-    dark_frames: DarkFrameRecipe = field(default_factory=DarkFrameRecipe)
-    smu: SMURecipe = field(default_factory=SMURecipe)
-    safety: SafetyRecipe = field(default_factory=SafetyRecipe)
     output: OutputRecipe = field(default_factory=OutputRecipe)
     import_review_items: list[str] = field(default_factory=list)
 
@@ -233,9 +217,6 @@ class Recipe:
         copied.modified_at = copied.created_at
         return copied
 
-    def enabled_points(self) -> list[ELPoint]:
-        return [point for point in self.el_sweep.points if point.enabled]
-
     def enabled_channels(self) -> list[ChannelRecipe]:
         order = {f"CH{index}": index for index in range(1, 5)}
         return sorted(
@@ -248,76 +229,48 @@ class Recipe:
             decimal_from_number(current_density) * decimal_from_number(channel.area_cm2)
         )
 
-    def effective_camera(self, point: ELPoint) -> tuple[float, int, int, float]:
-        return (
-            point.exposure_ms,
-            point.gain_percent,
-            point.frame_count,
-            point.frame_interval_s,
-        )
-
     def hdr_upper_bound_exposures_ms(self, hdr_settings: Any | None = None) -> list[float]:
         if not self.hdr.enabled or hdr_settings is None:
             return []
         return list(hdr_settings.planned_exposures_ms())
 
     def dark_profiles(self, hdr_settings: Any | None = None) -> list[dict[str, Any]]:
+        """Compatibility API backed only by the formal Matrix capture axes."""
+
         if self.hdr.enabled:
             if hdr_settings is None:
                 return [{"profile_id": "HDR_RUNTIME_PROFILE", "provisional": True}]
-            gain: int | str = (
-                hdr_settings.locked_gain_percent
-                if hdr_settings.gain_mode == "manual_lock"
-                else "T0_AUTO_LOCK"
-            )
+            gain = int(hdr_settings.locked_gain_percent)
             return [
                 {
                     "profile_id": f"HDR_PROVISIONAL_{index + 1}",
                     "exposure_ms": exposure,
                     "gain_percent": gain,
-                    "resolution": self.camera.resolution,
-                    "pixel_format": self.camera.pixel_format,
-                    "trigger_mode": self.camera.trigger_mode,
+                    "resolution": self.output.resolution_id,
+                    "pixel_format": "RGB48",
+                    "trigger_mode": "software",
                     "provisional": True,
                 }
                 for index, exposure in enumerate(self.hdr_upper_bound_exposures_ms(hdr_settings))
             ]
         profiles: dict[tuple[Any, ...], dict[str, Any]] = {}
-        for point in self.enabled_points():
-            exposure, gain, _frames, _interval = self.effective_camera(point)
-            key = (
-                round(exposure, 6),
-                gain,
-                self.camera.resolution,
-                self.camera.pixel_format,
-                self.camera.trigger_mode,
-            )
-            profiles.setdefault(
-                key,
-                {
-                    "profile_id": f"DARK_EXP{exposure:g}_GAIN{gain}",
-                    "exposure_ms": exposure,
-                    "gain_percent": gain,
-                    "resolution": self.camera.resolution,
-                    "pixel_format": self.camera.pixel_format,
-                    "trigger_mode": self.camera.trigger_mode,
-                },
-            )
+        for gain in self.el_matrix.gains_percent:
+            for exposure in self.el_matrix.exposures_ms:
+                exposure = float(exposure)
+                gain = int(gain)
+                key = (round(exposure, 6), gain, self.output.resolution_id, "RGB48")
+                profiles.setdefault(
+                    key,
+                    {
+                        "profile_id": f"DARK_EXP{exposure:g}_GAIN{gain}",
+                        "exposure_ms": exposure,
+                        "gain_percent": gain,
+                        "resolution": self.output.resolution_id,
+                        "pixel_format": "RGB48",
+                        "trigger_mode": "software",
+                    },
+                )
         return list(profiles.values())
-
-    def setpoint_unit(self) -> str:
-        return {
-            "current": "mA",
-            "current_density": "mA/cm²",
-            "voltage": "V",
-        }.get(self.el_sweep.setpoint_basis, "")
-
-    def actual_current_ma(self, point: ELPoint) -> float:
-        if self.el_sweep.setpoint_basis == "current_density":
-            return quantize_number(decimal_from_number(point.setpoint) * decimal_from_number(self.geometry.active_area_cm2))
-        if self.el_sweep.setpoint_basis == "current":
-            return quantize_number(point.setpoint)
-        return 0.0
 
     def dark_iv_point_count(self) -> int:
         if self.dark_iv.step_v <= 0:
@@ -336,56 +289,17 @@ class Recipe:
             * self.dark_iv.inter_scan_delay_s
         )
 
-    def matrix_output_on_time_s(self) -> float:
-        """Worst continuous OUTPUT ON interval for one Channel/J."""
+    def matrix_output_on_time_s(self, hdr_settings: Any | None = None) -> float:
+        """Worst continuous OUTPUT ON interval from the formal runtime plan."""
 
-        matrix = self.el_matrix
-        captures_per_j = len(matrix.gains_percent) * len(matrix.exposures_ms) * matrix.repeat
-        exposure_s = (
-            sum(float(value) for value in matrix.exposures_ms)
-            * len(matrix.gains_percent)
-            * matrix.repeat
-            / 1000.0
-        )
-        return (
-            matrix.stabilization_ms / 1000.0
-            + exposure_s
-            + captures_per_j * matrix.estimated_capture_overhead_s
-        )
+        from .el_matrix_plan import ELMatrixPlan
 
-    def matrix_estimated_time_s(self) -> float:
-        matrix = self.el_matrix
-        channels = len(self.enabled_channels())
-        counts = self.matrix_capture_counts()
-        exposure_sum_s = sum(float(value) for value in matrix.exposures_ms) / 1000.0
-        shared_dark_s = (
-            exposure_sum_s * len(matrix.gains_percent) * matrix.repeat
-            if matrix.shared_dark_enabled else 0.0
-        )
-        el_s = (
-            channels
-            * len(matrix.current_density_ma_cm2)
-            * len(matrix.gains_percent)
-            * matrix.repeat
-            * exposure_sum_s
-        )
-        capture_overhead_s = counts["overall"] * matrix.estimated_capture_overhead_s
-        stabilization_s = (
-            channels * len(matrix.current_density_ma_cm2)
-            * matrix.stabilization_ms / 1000.0
-        )
-        polarity_s = channels * matrix.estimated_polarity_duration_s
-        # Every Channel is routed once for polarity and once for Dark I-V/EL.
-        routing_s = channels * 2 * matrix.estimated_routing_transition_s
-        dark_iv_s = channels * self.dark_iv_estimated_time_s()
-        shared_setup_s = (
-            matrix.estimated_shared_dark_overhead_s
-            if matrix.shared_dark_enabled else 0.0
-        )
-        return (
-            shared_dark_s + el_s + capture_overhead_s + stabilization_s
-            + polarity_s + routing_s + dark_iv_s + shared_setup_s
-        )
+        return ELMatrixPlan(self, hdr_settings=hdr_settings).estimate().output_on_per_j_s
+
+    def matrix_estimated_time_s(self, hdr_settings: Any | None = None) -> float:
+        from .el_matrix_plan import ELMatrixPlan
+
+        return ELMatrixPlan(self, hdr_settings=hdr_settings).estimate().total_time_s
 
     def matrix_worst_power_mw(self) -> float:
         currents = [
@@ -402,20 +316,25 @@ class Recipe:
                 "T0 必須建立樣品專屬 HDR Profile；Aging／重複量測必須匯入並鎖定該 Profile"
             )
             return warnings
-        cameras = {self.effective_camera(point)[:2] for point in self.enabled_points()}
-        if len(cameras) > 1:
-            if len({gain for _exposure, gain in cameras}) > 1:
+        if len(self.el_matrix.gains_percent) > 1 or len(self.el_matrix.exposures_ms) > 1:
+            if len(self.el_matrix.gains_percent) > 1:
                 warnings.append("不同 EL 點使用不同 Gain；未完成 Gain 校正前不可直接建立定量 EL–I 或 k mapping")
             else:
                 warnings.append("不同 EL 點使用不同曝光；跨曝光比較需扣除匹配 Dark 並做曝光正規化")
         return warnings
 
-    def validate(self, hdr_settings: Any | None = None) -> list[str]:
+    def validate(
+        self,
+        hdr_settings: Any | None = None,
+        global_safety: Any | None = None,
+    ) -> list[str]:
+        """Validate formal Recipe data against application-wide safety limits."""
+
         errors: list[str] = []
         if not self.name.strip():
             errors.append("Recipe 名稱不可空白")
         if self.measurement_type != "el_sequence":
-            errors.append("Recipe 類型必須是四階段 EL 量測")
+            errors.append("Recipe 類型必須是 EL Matrix 量測")
         if self.geometry.active_area_cm2 <= 0:
             errors.append("Active area 必須大於 0")
         expected_channels = [f"CH{index}" for index in range(1, 5)]
@@ -425,171 +344,109 @@ class Recipe:
         if not enabled_channels:
             errors.append("至少需要啟用一個 Channel")
         for channel in enabled_channels:
-            if not channel.sample_id.strip():
-                errors.append(f"{channel.channel} 的 Sample / Device ID 不可空白")
             if not math.isfinite(channel.area_cm2) or channel.area_cm2 <= 0:
                 errors.append(f"{channel.channel} 的 Device Area 必須大於 0")
+
         matrix = self.el_matrix
-        if not self.polarity.enabled:
-            errors.append("每個 Channel 都必須執行白光 Jsc/Voc 極性確認")
-        if not matrix.shared_dark_enabled:
-            errors.append("正式 EL Matrix 必須拍攝一次共用 Shared Dark Matrix")
-        if not matrix.current_density_ma_cm2:
-            errors.append("Current Density 至少需要一個值")
-        elif any(not math.isfinite(float(value)) or float(value) <= 0 for value in matrix.current_density_ma_cm2):
-            errors.append("所有 EL Current Density 必須是大於 0 的有限數值")
-        if not matrix.exposures_ms:
-            errors.append("Exposure 至少需要一個值")
-        elif any(not math.isfinite(float(value)) or float(value) <= 0 for value in matrix.exposures_ms):
-            errors.append("所有 Exposure 必須是大於 0 的有限數值")
-        if not matrix.gains_percent:
-            errors.append("Gain 至少需要一個值")
-        elif any(int(value) < 0 for value in matrix.gains_percent):
-            errors.append("所有 Gain 必須大於或等於 0")
+        if not matrix.current_density_ma_cm2 or any(
+            not math.isfinite(float(value)) or float(value) <= 0
+            for value in matrix.current_density_ma_cm2
+        ):
+            errors.append("Current Density 必須包含大於 0 的有限數值")
+        if not matrix.exposures_ms or any(
+            not math.isfinite(float(value)) or float(value) <= 0
+            for value in matrix.exposures_ms
+        ):
+            errors.append("Exposure 必須包含大於 0 的有限數值")
+        if not matrix.gains_percent or any(int(value) < 0 for value in matrix.gains_percent):
+            errors.append("Gain 必須包含大於或等於 0 的數值")
         if matrix.repeat < 1:
-            errors.append("每條件拍攝張數必須是大於或等於 1 的整數")
+            errors.append("每條件拍攝張數必須大於或等於 1")
         if matrix.stabilization_ms < 0:
             errors.append("J Stabilization Time 不可小於 0")
-        for label, value in (
-            ("Capture/readback/save overhead", matrix.estimated_capture_overhead_s),
-            ("Polarity duration", matrix.estimated_polarity_duration_s),
-            ("Routing transition", matrix.estimated_routing_transition_s),
-            ("Shared Dark overhead", matrix.estimated_shared_dark_overhead_s),
-        ):
-            if not math.isfinite(float(value)) or float(value) < 0:
-                errors.append(f"{label} 必須是大於或等於 0 的有限數值")
-        if self.safety.max_output_time_s <= 0 or self.safety.max_recipe_time_s <= 0:
-            errors.append("Recipe 與 OUTPUT 安全時間上限必須大於 0")
+        if matrix.capture_timeout_s <= 0:
+            errors.append("相機 timeout 必須大於 0")
+        effective_exposures = matrix.exposures_ms
+        if self.hdr.enabled and hdr_settings is not None:
+            effective_exposures = list(hdr_settings.planned_exposures_ms())
+        longest_exposure_s = max(
+            (float(value) / 1000.0 for value in effective_exposures), default=0.0
+        )
+        if matrix.capture_timeout_s < longest_exposure_s:
+            errors.append("相機 timeout 不可短於最大曝光時間")
+
+        maximum_current_ma = float(
+            getattr(global_safety, "maximum_current_a", 0.050)
+        ) * 1000.0
+        maximum_voltage_v = float(getattr(global_safety, "maximum_voltage_v", 5.0))
+        maximum_power_mw = float(
+            getattr(global_safety, "maximum_power_w", 0.150)
+        ) * 1000.0
+        maximum_voltage_compliance_v = float(
+            getattr(global_safety, "maximum_voltage_compliance_v", maximum_voltage_v)
+        )
+        maximum_current_compliance_ma = float(
+            getattr(global_safety, "maximum_current_compliance_a", 0.050)
+        ) * 1000.0
         if not math.isfinite(matrix.voltage_compliance_v) or not (
-            0 < matrix.voltage_compliance_v <= self.safety.max_voltage_v
+            0 < matrix.voltage_compliance_v <= maximum_voltage_compliance_v
         ):
-            errors.append("EL Matrix Voltage Compliance 必須在安全電壓範圍內")
+            errors.append("EL Matrix Voltage Compliance 超過全域安全設定")
         if any(
-            self.matrix_source_current_ma(channel, float(density)) > self.safety.max_current_ma
+            self.matrix_source_current_ma(channel, float(density)) > maximum_current_ma
             for channel in enabled_channels
             for density in matrix.current_density_ma_cm2
         ):
-            errors.append("EL Matrix 計算出的 Source Current 超過最大允許電流")
-        if not self.dark_iv.enabled:
-            errors.append("Dark I–V 是 EL Recipe 的必做階段")
-        if self.dark_iv.step_v <= 0 or self.dark_iv.start_v == self.dark_iv.stop_v:
-            errors.append("Dark I–V 必須設定非零範圍及大於 0 的 Step")
-        if max(abs(self.dark_iv.start_v), abs(self.dark_iv.stop_v)) > self.safety.max_voltage_v:
-            errors.append("Dark I–V 掃描電壓超過安全上限")
-        if self.dark_iv.current_compliance_ma <= 0:
-            errors.append("Dark I–V current compliance 必須大於 0")
-        if self.dark_iv.current_compliance_ma > self.safety.max_current_ma:
-            errors.append("Dark I–V current compliance 超過最大允許電流")
-        if self.smu.device_match == "specific" and not self.smu.visa_address.strip():
-            errors.append("指定 SMU 時必須填寫 VISA 位址")
-        if self.el_sweep.drive_mode == "current" and self.el_sweep.setpoint_basis not in {
-            "current", "current_density"
-        }:
-            errors.append("電流模式必須使用電流或電流密度點位")
-        if self.el_sweep.drive_mode == "voltage" and self.el_sweep.setpoint_basis != "voltage":
-            errors.append("電壓模式必須使用電壓點位")
-        points = self.enabled_points()
-        if not points:
-            errors.append("至少需要一個已啟用的 EL 點位")
-        for index, point in enumerate(points, start=1):
-            exposure, gain, frames, interval = self.effective_camera(point)
-            if point.setpoint <= 0:
-                errors.append(f"EL 點位 {index} 的設定值必須大於 0")
-            if point.dwell_s < 0:
-                errors.append(f"EL 點位 {index} 的等待時間無效")
-            if not self.hdr.enabled and (exposure <= 0 or frames < 1 or interval < 0 or gain < 0):
-                errors.append(
-                    f"EL 點位 {index} 未填妥 Exposure、Gain、Frames 與 Frame interval；"
-                    "關閉 HDR 時每列相機設定皆為必填"
-                )
-            if self.el_sweep.drive_mode == "current" and self.actual_current_ma(point) > self.safety.max_current_ma:
-                errors.append(f"EL 點位 {index} 的實際輸出電流超過安全上限")
-            if self.el_sweep.drive_mode == "voltage" and point.setpoint > self.safety.max_voltage_v:
-                errors.append(f"EL 點位 {index} 的輸出電壓超過安全上限")
-            hdr_point_limit = float(getattr(hdr_settings, "max_point_time_s", 0.0))
-            point_time = (
-                point.dwell_s + hdr_point_limit
-                if self.hdr.enabled and hdr_settings is not None
-                else point.dwell_s + frames * exposure / 1000.0 + max(0, frames - 1) * interval
-            )
-            # Legacy rows remain structurally validated, but Matrix safety time
-            # is authoritative for the formal execution path below.
-        if self.el_sweep.drive_mode == "current":
-            if self.el_sweep.voltage_compliance_v <= 0:
-                errors.append("Voltage compliance 必須大於 0")
-            if self.el_sweep.voltage_compliance_v > self.safety.max_voltage_v:
-                errors.append("Voltage compliance 超過最大允許電壓")
-        else:
-            if self.el_sweep.current_compliance_ma <= 0:
-                errors.append("Current compliance 必須大於 0")
-            if self.el_sweep.current_compliance_ma > self.safety.max_current_ma:
-                errors.append("Current compliance 超過最大允許電流")
-        if self.matrix_worst_power_mw() > self.safety.max_power_mw:
-            errors.append("EL Matrix 設定值與 Compliance 的最壞情況功率超過安全上限")
-        if self.dark_frames.frames_per_profile < 1:
-            errors.append("每個 Dark Profile 至少需要 1 frame")
-        longest_exposure_s = max(
-            (float(value) / 1000.0 for value in matrix.exposures_ms),
-            default=0.0,
-        )
-        if self.camera.capture_timeout_s < longest_exposure_s:
-            errors.append("相機 timeout 不可短於最大曝光時間")
+            errors.append("EL Matrix 計算出的 Source Current 超過全域安全設定")
+        if self.matrix_worst_power_mw() > maximum_power_mw:
+            errors.append("EL Matrix 最壞 Compliance 功率超過全域安全設定")
+
+        if self.dark_iv.enabled:
+            if self.dark_iv.step_v <= 0 or self.dark_iv.start_v == self.dark_iv.stop_v:
+                errors.append("Dark I–V 必須設定非零範圍及大於 0 的 Step")
+            if max(abs(self.dark_iv.start_v), abs(self.dark_iv.stop_v)) > maximum_voltage_v:
+                errors.append("Dark I–V 掃描電壓超過全域安全設定")
+            if not 0 < self.dark_iv.current_compliance_ma <= maximum_current_compliance_ma:
+                errors.append("Dark I–V current compliance 超過全域安全設定")
+
         if self.hdr.enabled:
             if hdr_settings is not None:
                 errors.extend(f"HDR 系統設定：{item}" for item in hdr_settings.validate())
-                bracket_time = (
-                    hdr_settings.frames_per_exposure
-                    * sum(hdr_settings.planned_exposures_ms())
-                    / 1000.0
-                )
-                if bracket_time > hdr_settings.max_point_time_s:
-                    errors.append("HDR 最壞曝光組合時間超過每個量測點的時間上限")
-            required_hdr_outputs = (
-                self.output.save_raw_frames,
-                self.dark_frames.save_raw_frames,
-                self.dark_frames.save_master_dark,
-            )
-            if not all(required_hdr_outputs):
-                errors.append("HDR Recipe 必須允許保存各曝光原始 EL、原始 Dark 與 Master Dark")
-            if self.output.image_format.upper() != "TIFF":
-                errors.append("定量 HDR 的原始與分析影像格式必須使用 TIFF")
-        output_on_s = self.matrix_output_on_time_s()
-        if output_on_s > self.safety.max_output_time_s:
-            errors.append(
-                "同一 Channel、同一 Current Density 的預估連續 OUTPUT ON "
-                f"時間 {output_on_s:.3f} s 超過安全上限 "
-                f"{self.safety.max_output_time_s:.3f} s"
-            )
-        estimated = self.matrix_estimated_time_s()
-        if self.safety.max_recipe_time_s < estimated:
-            errors.append(
-                f"EL Matrix 預估完整流程 {estimated:.3f} s 超過 Recipe 安全上限 "
-                f"{self.safety.max_recipe_time_s:.3f} s"
-            )
+            if not matrix.dark_frame_enabled:
+                errors.append("HDR 必須啟用 Dark Frame 以取得各曝光的匹配暗場")
+            if not self.output.format_tiff:
+                errors.append("定量 HDR 必須選擇 TIFF 科學影像輸出")
+        if not self.output.selected_formats():
+            errors.append("至少必須選擇一種影像輸出格式")
         if not self.output.save_summary_csv:
             errors.append("Dark I–V 與 EL scan summary CSV 是必要輸出")
         if not self.output.save_json:
             errors.append("EL 量測必須保存 JSON metadata")
         if not self.output.save_recipe_snapshot:
             errors.append("EL 量測必須保存 Recipe 快照")
-        if self.output.export_pixel_csv and not any(
-            (
-                self.output.pixel_csv_raw,
-                self.output.pixel_csv_dark_corrected,
-                self.output.pixel_csv_exposure_normalized,
-            )
-        ):
+        if self.output.export_pixel_csv and not any((
+            self.output.pixel_csv_raw,
+            self.output.pixel_csv_dark_corrected,
+            self.output.pixel_csv_exposure_normalized,
+        )):
             errors.append("啟用全解析度像素 CSV 時，至少要選擇一種輸出內容")
+        if self.output.export_pixel_csv and not self.output.format_tiff:
+            errors.append("Pixel CSV 後處理需要 TIFF 科學影像來源")
         return errors
 
     def estimated_time_s(self, hdr_settings: Any | None = None) -> float:
-        return self.matrix_estimated_time_s()
+        return self.matrix_estimated_time_s(hdr_settings)
 
-    def matrix_capture_counts(self) -> dict[str, int]:
+    def matrix_capture_counts(self, hdr_settings: Any | None = None) -> dict[str, int]:
+        from .measurement_execution_plan import effective_matrix_capture_axes
+
         matrix = self.el_matrix
+        axes = effective_matrix_capture_axes(self, hdr_settings)
         channels = len(self.enabled_channels())
-        combination = len(matrix.gains_percent) * len(matrix.exposures_ms) * matrix.repeat
-        dark = combination if matrix.shared_dark_enabled else 0
+        combination = (
+            len(axes.gains_percent) * len(axes.exposures_ms) * axes.repeat
+        )
+        dark = combination if matrix.dark_frame_enabled else 0
         per_channel = len(matrix.current_density_ma_cm2) * combination
         total_el = channels * per_channel
         return {
@@ -609,13 +466,18 @@ class Recipe:
     def from_dict(cls, data: dict[str, Any]) -> "Recipe":
         if not isinstance(data, dict):
             raise ValueError("Recipe must be a JSON object")
+        if "safety" in data or "smu" in data:
+            LOG.warning(
+                "Legacy Recipe safety/SMU values were detected and ignored; they did "
+                "not override application-wide safety settings"
+            )
         # V1 single-current Recipes are migrated into a one-point four-stage draft.
-        old_camera = _dataclass_from_dict(CameraRecipe, data.get("camera"))
+        old_camera = _dataclass_from_dict(LegacyCameraRecipe, data.get("camera"))
         el_data = data.get("el_sweep", {})
         if el_data:
             points = []
             for item in el_data.get("points", []):
-                point = _dataclass_from_dict(ELPoint, item)
+                point = _dataclass_from_dict(LegacyELPoint, item)
                 # Pre-V1.3.1 rows explicitly disabling the override inherited
                 # the camera-page defaults. Missing flags belong to the new
                 # explicit-per-row schema and must preserve the row values.
@@ -625,11 +487,11 @@ class Recipe:
                     point.frame_count = old_camera.frame_count
                     point.frame_interval_s = old_camera.frame_interval_s
                 points.append(point)
-            sweep = _dataclass_from_dict(ELSweepRecipe, el_data)
+            sweep = _dataclass_from_dict(LegacyELSweepRecipe, el_data)
             sweep.points = points
         else:
             old_smu = data.get("smu", {})
-            point = ELPoint(
+            point = LegacyELPoint(
                 setpoint=float(old_smu.get("source_value", 10.0)),
                 dwell_s=float(old_smu.get("settle_time_s", 1.0)),
                 exposure_ms=old_camera.exposure_ms,
@@ -637,7 +499,7 @@ class Recipe:
                 frame_count=old_camera.frame_count,
                 frame_interval_s=old_camera.frame_interval_s,
             )
-            sweep = ELSweepRecipe(setpoint_basis="current", points=[point])
+            sweep = LegacyELSweepRecipe(setpoint_basis="current", points=[point])
         original_measurement_type = str(data.get("measurement_type", "el_sequence"))
         measurement_type = original_measurement_type
         if original_measurement_type == "el_single_current":
@@ -647,15 +509,98 @@ class Recipe:
         # Dark I-V / EL summary tables, not full-resolution pixel matrices.
         if "save_summary_csv" not in output_data and "save_csv" in output_data:
             output_data["save_summary_csv"] = bool(output_data["save_csv"])
+        legacy_format = str(output_data.get("image_format", "")).upper()
+        if legacy_format and not any(
+            key in output_data
+            for key in (
+                "format_tiff", "format_png", "format_jpg", "format_jpg_with_footer"
+            )
+        ):
+            output_data.update({
+                "format_tiff": legacy_format in {"TIF", "TIFF"},
+                "format_png": legacy_format == "PNG",
+                "format_jpg": legacy_format in {"JPG", "JPEG"},
+                "format_jpg_with_footer": legacy_format in {
+                    "TIF", "TIFF", "JPG", "JPEG"
+                },
+            })
+        matrix_data = dict(data.get("el_matrix") or {})
+        if "dark_frame_enabled" not in matrix_data and "shared_dark_enabled" in matrix_data:
+            matrix_data["dark_frame_enabled"] = bool(matrix_data["shared_dark_enabled"])
+        migration_ambiguous = False
+        if (
+            not any(
+                key in matrix_data
+                for key in (
+                    "current_density_ma_cm2", "gains_percent", "exposures_ms"
+                )
+            )
+            and (el_data or original_measurement_type == "el_single_current")
+        ):
+            legacy_points = [point for point in sweep.points if point.enabled]
+            area = float((data.get("geometry") or {}).get("active_area_cm2", 0.100))
+            basis = str(sweep.setpoint_basis)
+            if basis in {"current", "current_density"} and legacy_points:
+                densities = [
+                    float(point.setpoint)
+                    if basis == "current_density"
+                    else float(point.setpoint) / max(area, 1e-12)
+                    for point in legacy_points
+                ]
+                matrix_data["current_density_ma_cm2"] = list(dict.fromkeys(densities))
+            else:
+                migration_ambiguous = True
+                LOG.warning(
+                    "Legacy voltage-driven EL points cannot be represented exactly by "
+                    "the current-density Matrix; default Matrix points were retained"
+                )
+            if legacy_points:
+                matrix_data["gains_percent"] = list(dict.fromkeys(
+                    int(point.gain_percent) for point in legacy_points
+                ))
+                matrix_data["exposures_ms"] = list(dict.fromkeys(
+                    float(point.exposure_ms) for point in legacy_points
+                ))
+                matrix_data["repeat"] = max(
+                    1, max(int(point.frame_count) for point in legacy_points)
+                )
+                matrix_data["stabilization_ms"] = max(
+                    0, round(max(float(point.dwell_s) for point in legacy_points) * 1000)
+                )
+                matrix_data["voltage_compliance_v"] = float(
+                    sweep.voltage_compliance_v
+                )
+                combinations = (
+                    len(matrix_data.get("current_density_ma_cm2", []))
+                    * len(matrix_data["gains_percent"])
+                    * len(matrix_data["exposures_ms"])
+                )
+                if combinations != len(legacy_points):
+                    migration_ambiguous = True
+                    LOG.warning(
+                        "Legacy per-row EL points expanded into Matrix axes; Recipe was "
+                        "migrated as draft for operator review"
+                    )
+        legacy_dark = data.get("dark_frames")
+        if (
+            isinstance(legacy_dark, dict)
+            and "dark_frame_enabled" not in matrix_data
+        ):
+            matrix_data["dark_frame_enabled"] = bool(
+                legacy_dark.get("save_master_dark", True)
+            )
         raw_channels = data.get("channels")
         if isinstance(raw_channels, list):
             channels = [_dataclass_from_dict(ChannelRecipe, item) for item in raw_channels]
+            if any(str(item.get("sample_id", "")).strip() for item in raw_channels):
+                LOG.warning(
+                    "Legacy Recipe Sample IDs were ignored; enter them in the Main Window"
+                )
         else:
             # Legacy files cannot reliably supply four Sample IDs. Preserve the
             # old area only for CH1 and force review by leaving its ID empty.
             legacy_area = float((data.get("geometry") or {}).get("active_area_cm2", 0.100))
             channels = _default_channels()
-            channels[0].sample_id = ""
             channels[0].area_cm2 = legacy_area
         return cls(
             recipe_id=str(data.get("recipe_id") or uuid4()),
@@ -663,20 +608,19 @@ class Recipe:
             description=str(data.get("description", "")),
             measurement_type=measurement_type,
             version=max(1, int(data.get("version", 1))),
-            state="draft" if original_measurement_type == "el_single_current" else str(data.get("state", "draft")),
+            state=(
+                "draft"
+                if original_measurement_type == "el_single_current" or migration_ambiguous
+                else str(data.get("state", "draft"))
+            ),
             created_at=str(data.get("created_at", _now())),
             modified_at=str(data.get("modified_at", _now())),
             geometry=_dataclass_from_dict(GeometryRecipe, data.get("geometry")),
             channels=channels,
-            el_matrix=_dataclass_from_dict(ELMatrixRecipe, data.get("el_matrix")),
+            el_matrix=_dataclass_from_dict(ELMatrixRecipe, matrix_data),
             polarity=_dataclass_from_dict(PolarityRecipe, data.get("polarity")),
             dark_iv=_dataclass_from_dict(DarkIVRecipe, data.get("dark_iv")),
-            camera=old_camera,
             hdr=_dataclass_from_dict(HDRRecipe, data.get("hdr")),
-            el_sweep=sweep,
-            dark_frames=_dataclass_from_dict(DarkFrameRecipe, data.get("dark_frames")),
-            smu=_dataclass_from_dict(SMURecipe, data.get("smu")),
-            safety=_dataclass_from_dict(SafetyRecipe, data.get("safety")),
             output=_dataclass_from_dict(OutputRecipe, output_data),
             import_review_items=[str(item) for item in data.get("import_review_items", [])]
             if isinstance(data.get("import_review_items", []), list) else [],
@@ -686,7 +630,7 @@ class Recipe:
 class RecipeStore:
     """JSON-backed Recipe repository stored in the user's application-data folder."""
 
-    schema_version = 8
+    schema_version = 9
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -739,17 +683,25 @@ class RecipeStore:
         data = payload.get("recipe")
         if not isinstance(data, dict):
             raise ValueError("匯入檔案必須包含 recipe JSON object")
-        allowed = {item.name for item in fields(Recipe)}
+        allowed = {item.name for item in fields(Recipe)} | {
+            "camera", "el_sweep", "dark_frames", "smu", "safety"
+        }
         unknown = sorted(set(data) - allowed)
         if unknown:
             raise ValueError("Recipe 含有不支援欄位：" + ", ".join(unknown))
         if schema == self.schema_version:
+            deprecated_sections = sorted(
+                {"camera", "el_sweep", "dark_frames", "smu", "safety"} & set(data)
+            )
+            if deprecated_sections:
+                raise ValueError(
+                    "Recipe schema v9 不可包含已移除欄位："
+                    + ", ".join(deprecated_sections)
+                )
             sections: tuple[tuple[str, type[Any]], ...] = (
                 ("geometry", GeometryRecipe), ("el_matrix", ELMatrixRecipe),
                 ("polarity", PolarityRecipe), ("dark_iv", DarkIVRecipe),
-                ("camera", CameraRecipe), ("hdr", HDRRecipe),
-                ("dark_frames", DarkFrameRecipe), ("smu", SMURecipe),
-                ("safety", SafetyRecipe), ("output", OutputRecipe),
+                ("hdr", HDRRecipe), ("output", OutputRecipe),
             )
             for section, model in sections:
                 raw = data.get(section)
@@ -775,30 +727,9 @@ class RecipeStore:
                         raise ValueError(
                             f"Recipe.channels[{index}] 含有不支援欄位：" + ", ".join(extra)
                         )
-            raw_sweep = data.get("el_sweep")
-            if raw_sweep is not None:
-                if not isinstance(raw_sweep, dict):
-                    raise ValueError("Recipe.el_sweep 必須是 JSON object")
-                sweep_fields = {item.name for item in fields(ELSweepRecipe)}
-                extra = sorted(set(raw_sweep) - sweep_fields)
-                if extra:
-                    raise ValueError("Recipe.el_sweep 含有不支援欄位：" + ", ".join(extra))
-                point_fields = {item.name for item in fields(ELPoint)}
-                points = raw_sweep.get("points", [])
-                if not isinstance(points, list):
-                    raise ValueError("Recipe.el_sweep.points 必須是 JSON array")
-                for index, raw in enumerate(points):
-                    if not isinstance(raw, dict):
-                        raise ValueError(f"Recipe.el_sweep.points[{index}] 必須是 JSON object")
-                    extra = sorted(set(raw) - point_fields)
-                    if extra:
-                        raise ValueError(
-                            f"Recipe.el_sweep.points[{index}] 含有不支援欄位："
-                            + ", ".join(extra)
-                        )
         important = {
             "name", "channels", "el_matrix", "polarity", "dark_iv",
-            "camera", "smu", "safety", "output",
+            "hdr", "output",
         }
         review = [f"缺少重要欄位：{key}" for key in sorted(important - set(data))]
         recipe = Recipe.from_dict(data)

@@ -65,22 +65,20 @@ def build_measurement_snapshot(
             ),
             "result": dict(polarity_result or {}),
         },
-        "smu_scan": {
-            "drive_mode": recipe.el_sweep.drive_mode,
-            "setpoint_basis": recipe.el_sweep.setpoint_basis,
-            "scan_direction": recipe.el_sweep.scan_direction,
-            "repeat_count": recipe.el_sweep.repeat_count,
-            "points": [
-                {
-                    "setpoint": point.setpoint,
-                    "dwell_s": point.dwell_s,
-                    "exposure_ms": None if recipe.hdr.enabled else point.exposure_ms,
-                    "gain_percent": None if recipe.hdr.enabled else point.gain_percent,
-                    "frames": None if recipe.hdr.enabled else point.frame_count,
-                    "frame_interval_s": None if recipe.hdr.enabled else point.frame_interval_s,
-                }
-                for point in recipe.enabled_points()
-            ],
+        "el_matrix": {
+            "current_density_ma_cm2": list(
+                recipe.el_matrix.current_density_ma_cm2
+            ),
+            "gains_percent": (
+                None if recipe.hdr.enabled else list(recipe.el_matrix.gains_percent)
+            ),
+            "exposures_ms": (
+                None if recipe.hdr.enabled else list(recipe.el_matrix.exposures_ms)
+            ),
+            "repeat": (
+                None if recipe.hdr.enabled else int(recipe.el_matrix.repeat)
+            ),
+            "dark_frame_enabled": bool(recipe.el_matrix.dark_frame_enabled),
         },
         "output_records": list(output_records or []),
     }
@@ -139,11 +137,17 @@ def build_el_matrix_snapshot(
     relay_mapping: Mapping[str, int],
     polarity_settings: Any,
     started_at: str | None = None,
+    sample_ids: Mapping[str, str] | None = None,
+    global_safety: Any | None = None,
+    hdr_settings: Any | None = None,
+    hdr_session: Any | None = None,
+    output_directory: str = "",
 ) -> Mapping[str, Any]:
     """Create a recursively immutable, content-addressed Matrix snapshot."""
 
     from .recipe_store import RecipeStore
 
+    sample_mapping = dict(sample_ids or {})
     payload: dict[str, Any] = {
         "schema": "el_matrix_measurement_snapshot",
         "snapshot_version": 1,
@@ -158,13 +162,13 @@ def build_el_matrix_snapshot(
         "channels": [
             {
                 "channel": channel.channel,
-                "sample_id": channel.sample_id,
+                "sample_id": sample_mapping.get(channel.channel, ""),
                 "area_cm2": channel.area_cm2,
             }
             for channel in recipe.enabled_channels()
         ],
         "polarity": {
-            "required_per_channel": True,
+            "required_per_channel": bool(recipe.polarity.enabled),
             "system_settings": polarity_settings.snapshot()
             if hasattr(polarity_settings, "snapshot") else _plain(polarity_settings),
         },
@@ -172,8 +176,31 @@ def build_el_matrix_snapshot(
         "camera": _plain(camera),
         "smu": _plain(smu),
         "relay": {"logical_to_physical": dict(relay_mapping)},
-        "safety": _plain(recipe.safety),
+        "global_safety": _plain(global_safety),
+        "hdr": {
+            "enabled": bool(recipe.hdr.enabled),
+            "system_settings": (
+                hdr_settings.snapshot()
+                if recipe.hdr.enabled and hasattr(hdr_settings, "snapshot")
+                else _plain(hdr_settings) if recipe.hdr.enabled else None
+            ),
+            "session": (
+                {
+                    "mode": str(hdr_session.mode),
+                    "sample_id": str(hdr_session.sample_id),
+                    "profile_path": str(hdr_session.profile_path),
+                    "profile": (
+                        hdr_session.profile.to_dict()
+                        if getattr(hdr_session, "profile", None) is not None
+                        else None
+                    ),
+                }
+                if recipe.hdr.enabled and hdr_session is not None
+                else None
+            ),
+        },
         "output": _plain(recipe.output),
+        "output_directory": str(output_directory),
     }
     payload["snapshot_sha256"] = calculate_snapshot_hash(payload)
     return _freeze(payload)

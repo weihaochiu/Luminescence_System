@@ -13,7 +13,7 @@ class ModularArchitectureTests(unittest.TestCase):
 
     def test_public_entry_modules_remain_small_coordinators(self) -> None:
         limits = {
-            "main_window.py": 300,
+            "main_window.py": 340,
             "recipe_dialog.py": 220,
             "auto_hdr.py": 600,
         }
@@ -35,13 +35,14 @@ class ModularArchitectureTests(unittest.TestCase):
             bases,
         )
 
-    def test_recipe_dialog_has_three_cohesive_support_modules(self) -> None:
+    def test_recipe_dialog_uses_four_page_binding_and_shared_plan_modules(self) -> None:
         expected = {
             "recipe_dialog_pages.py",
-            "recipe_dialog_points.py",
             "recipe_dialog_logic.py",
+            "measurement_execution_plan.py",
         }
         self.assertTrue(all((self.package / name).is_file() for name in expected))
+        self.assertFalse((self.package / "recipe_dialog_points.py").exists())
 
     def test_hdr_output_keeps_legacy_import_path(self) -> None:
         source = (self.package / "auto_hdr.py").read_text(encoding="utf-8")

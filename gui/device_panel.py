@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from .smu_base import SMUDevice
 from .instrument_state_manager import SMUInstrumentState, SMUUIState
 from .recipe_store import Recipe
+from .el_matrix_plan import ELMatrixPlan
 
 
 class DevicePanel(QWidget):
@@ -118,20 +119,33 @@ class DevicePanel(QWidget):
                 self.smu_list.setCurrentRow(row)
                 return
 
-    def set_recipes(self, recipes: list[Recipe], preferred_id: str = "") -> None:
+    def set_recipes(
+        self,
+        recipes: list[Recipe],
+        preferred_id: str = "",
+        *,
+        hdr_settings: object | None = None,
+        global_safety: object | None = None,
+    ) -> None:
         self.recipes = list(recipes)
         self.recipe_list.clear()
         preferred_row = -1
         for row, recipe in enumerate(self.recipes):
-            mode = "I" if recipe.el_sweep.drive_mode == "current" else "V"
-            profiles = len(recipe.dark_profiles())
+            try:
+                counts = ELMatrixPlan(
+                    recipe,
+                    hdr_settings=hdr_settings,
+                    global_safety=global_safety,
+                ).capture_counts()
+            except ValueError:
+                counts = recipe.matrix_capture_counts()
             self.recipe_list.addItem(
-                f"{recipe.name}\nv{recipe.version}｜{mode} mode｜"
-                f"{len(recipe.enabled_points())} 點｜{profiles} Dark"
+                f"{recipe.name}\nv{recipe.version}｜"
+                f"{len(recipe.enabled_channels())} Channels｜{counts['overall']} captures"
             )
             self.recipe_list.item(row).setToolTip(
                 (recipe.description + "\n" if recipe.description else "")
-                + "流程：極性確認 → Dark I–V → Dark Frames → EL"
+                + "實際流程請於 Recipe 管理右側的完整執行流程預覽確認"
             )
             if recipe.recipe_id == preferred_id:
                 preferred_row = row

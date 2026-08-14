@@ -16,6 +16,10 @@ from .el_matrix_preflight import collect_preflight_errors
 from .el_matrix_runner import ELMatrixRunner, MatrixRuntimeProgress
 from .measurement_snapshot import build_el_matrix_snapshot, snapshot_payload
 from .measurement_progress_dialog import MeasurementProgressDialog
+from .measurement_execution_plan import (
+    build_measurement_execution_plan,
+    effective_matrix_capture_axes,
+)
 from .measurement_worker import MeasurementProgress, MeasurementWorker
 from .pixel_csv_postprocessor import (
     PixelCSVPostprocessError,
@@ -34,6 +38,31 @@ def _best_effort_routing_off(self: Any, source: str) -> bool:
     except Exception as exc:
         self.status_message.setText(f"Routing Safe OFF failed: {exc}")
         return False
+
+
+def _effective_capture_counts(self: Any, recipe: Recipe) -> dict[str, int]:
+    try:
+        return ELMatrixPlan(
+            recipe,
+            hdr_settings=self.hdr_settings_store.settings,
+            hdr_profile=getattr(self.hdr_session_state, "profile", None),
+            global_safety=self.smu_manager.control.safety.limits,
+        ).capture_counts()
+    except ValueError:
+        return recipe.matrix_capture_counts()
+
+
+def _hdr_session_blocker(self: Any, recipe: Recipe) -> str:
+    if not recipe.hdr.enabled:
+        return ""
+    if self.hdr_session_state is None:
+        return "尚未選擇 HDR T0 / Stability 量測模式"
+    if (
+        self.hdr_session_state.mode == "stability_locked"
+        and len(recipe.enabled_channels()) > 1
+    ):
+        return "Stability HDR Profile 僅能對應單一 Sample / Channel"
+    return ""
 
 
 def start_background_measurement(
@@ -101,6 +130,13 @@ def _set_measurement_controls_locked(self: Any, locked: bool) -> None:
             if control is not None and hasattr(control, "setEnabled"):
                 states.append((control, bool(control.isEnabled())))
                 control.setEnabled(False)
+        for control in getattr(
+            getattr(self, "measurement_control_bar", None),
+            "sample_id_edits",
+            {},
+        ).values():
+            states.append((control, bool(control.isEnabled())))
+            control.setEnabled(False)
         self._measurement_locked_controls = states
         self._cancel_auto_capture()
         if self.controller.is_open:
@@ -249,39 +285,54 @@ def _validate_camera_matrix(self: Any) -> list[str]:
     recipe = self.selected_recipe
     if recipe is None:
         return ["尚未選擇 Recipe"]
-    errors = recipe.validate()
+    errors = recipe.validate(
+        self.hdr_settings_store.settings,
+        self.smu_manager.control.safety.limits,
+    )
     exposure_range = self.camera_info.get("exposure_range_us")
     gain_range = self.camera_info.get("gain_range")
+    profile = getattr(self.hdr_session_state, "profile", None)
+    axes = effective_matrix_capture_axes(
+        recipe, self.hdr_settings_store.settings, hdr_profile=profile
+    )
+    if not axes.exposures_ms or not axes.gains_percent or axes.repeat < 1:
+        errors.append("有效的相機拍攝條件不可為空")
+    elif max(axes.exposures_ms) / 1000.0 > recipe.el_matrix.capture_timeout_s:
+        errors.append("相機 timeout 不可短於有效曝光序列的最大曝光時間")
     if exposure_range:
         low, high = float(exposure_range[0]), float(exposure_range[1])
-        if any(not low <= value * 1000.0 <= high for value in recipe.el_matrix.exposures_ms):
+        if any(not low <= value * 1000.0 <= high for value in axes.exposures_ms):
             errors.append(f"Exposure 超出相機支援範圍 {low / 1000:g}～{high / 1000:g} ms")
     else:
         errors.append("相機未提供 Exposure capability，禁止開始 Matrix")
     if gain_range:
         low, high = int(gain_range[0]), int(gain_range[1])
-        if any(not low <= value <= high for value in recipe.el_matrix.gains_percent):
+        if any(not low <= value <= high for value in axes.gains_percent):
             errors.append(f"Gain 超出相機支援範圍 {low}～{high}%")
     else:
         errors.append("相機未提供 Gain capability，禁止開始 Matrix")
-    if recipe.hdr.enabled:
-        errors.append("EL Matrix 第一版不執行 HDR；請先在 Recipe 關閉 HDR")
     return errors
 
 
 def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
     recipe = plan.recipe
     estimate = plan.estimate()
+    execution = build_measurement_execution_plan(
+        recipe,
+        self.smu_manager.control.safety.limits,
+        hdr_settings=self.hdr_settings_store.settings,
+        hdr_profile=getattr(self.hdr_session_state, "profile", None),
+    )
+    order = " → ".join(step.title for step in execution.steps)
     return (
         "量測摘要\n\n"
-        "正式順序：全 Channel 極性確認 → Verified All OFF → Shared Dark（一次）\n"
-        "→ 每 Channel：Routing → Dark I–V → Verified OFF → J → Gain → Exposure → Repeat\n\n"
+        f"正式順序：{order}\n\n"
         f"Channels：{' / '.join(channel.channel for channel in plan.channels)}\n"
         f"Channel 數量：{len(plan.channels)}\n\n"
         f"Current Density：{', '.join(f'{value:g}' for value in recipe.el_matrix.current_density_ma_cm2)} mA/cm²\n"
-        f"Gain：{', '.join(str(value) for value in recipe.el_matrix.gains_percent)} %\n"
-        f"Exposure：{', '.join(f'{value:g}' for value in recipe.el_matrix.exposures_ms)} ms\n"
-        f"每條件：{recipe.el_matrix.repeat} 張\n\n"
+        f"Gain：{', '.join(str(value) for value in plan.gains_percent)} %\n"
+        f"Exposure：{', '.join(f'{value:g}' for value in plan.exposures_ms)} ms\n"
+        f"每條件：{plan.repeat} 張\n\n"
         f"Shared Dark：{estimate.shared_dark_captures} 張\n"
         f"EL / Channel：{estimate.el_per_channel} 張\n"
         f"EL Total：{estimate.total_el_captures} 張\n"
@@ -294,6 +345,35 @@ def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
 
 
 def begin_el_matrix_measurement(self: Any) -> None:
+    if self.selected_recipe is not None:
+        missing = self.measurement_control_bar.missing_sample_channels()
+        if missing:
+            channel = missing[0]
+            QMessageBox.warning(
+                self,
+                "無法開始量測",
+                f"無法開始量測：{channel} 尚未設定樣品 ID。",
+            )
+            return
+        if self.selected_recipe.hdr.enabled and self.hdr_session_state is None:
+            QMessageBox.warning(
+                self,
+                "無法開始量測",
+                "HDR 已啟用；請先選擇首次量測（T0）或 Aging／重複量測 Profile。",
+            )
+            return
+        if (
+            self.selected_recipe.hdr.enabled
+            and self.hdr_session_state is not None
+            and self.hdr_session_state.mode == "stability_locked"
+            and len(self.selected_recipe.enabled_channels()) > 1
+        ):
+            QMessageBox.warning(
+                self,
+                "無法開始量測",
+                "Aging／重複量測的 HDR Profile 僅對應一個 Sample；請使用單一 Channel Recipe。",
+            )
+            return
     errors = _validate_camera_matrix(self)
     if errors:
         QMessageBox.warning(self, "EL Matrix 無法開始", "• " + "\n• ".join(errors))
@@ -301,11 +381,23 @@ def begin_el_matrix_measurement(self: Any) -> None:
     recipe = self.selected_recipe
     if recipe is None:
         return
-    output_root = self.measurement_path_edit.text().strip() or recipe.output.root_directory
+    output_root = self.measurement_path_edit.text().strip()
     if not output_root:
         QMessageBox.warning(self, "尚未設定輸出位置", "請先選擇量測資料儲存位置。")
         return
-    plan = ELMatrixPlan(recipe)
+    resolution_id = recipe.output.resolution_id
+    if resolution_id.startswith("sdk:"):
+        self.controller.set_resolution(int(resolution_id.split(":", 1)[1]))
+    elif resolution_id == "full":
+        self.controller.set_resolution(0)
+    sample_ids = self.measurement_control_bar.sample_ids()
+    plan = ELMatrixPlan(
+        recipe,
+        sample_ids=sample_ids,
+        hdr_settings=self.hdr_settings_store.settings,
+        hdr_profile=getattr(self.hdr_session_state, "profile", None),
+        global_safety=self.smu_manager.control.safety.limits,
+    )
     answer = QMessageBox.question(
         self,
         "確認 EL Matrix 量測",
@@ -329,19 +421,24 @@ def begin_el_matrix_measurement(self: Any) -> None:
     )
     relay_mapping = self.relay_service.smu_output_mapping()
     snapshot_recipe = Recipe.from_dict(recipe.to_dict())
-    snapshot_recipe.output.root_directory = str(output_root)
+    execution_plan = build_measurement_execution_plan(
+        snapshot_recipe,
+        self.smu_manager.control.safety.limits,
+        hdr_settings=self.hdr_settings_store.settings,
+        hdr_profile=getattr(self.hdr_session_state, "profile", None),
+    )
     snapshot = build_el_matrix_snapshot(
         snapshot_recipe,
-        execution_order=[
-            {"phase": "polarity", "channels": [c.channel for c in plan.channels]},
-            {"phase": "verified_all_off"}, {"phase": "shared_dark"},
-            {"phase": "per_channel_dark_iv_and_matrix",
-             "channels": [c.channel for c in plan.channels]},
-        ],
+        execution_order=execution_plan.to_dict()["steps"],
         camera=camera_snapshot,
         smu=smu_metadata,
         relay_mapping=relay_mapping,
         polarity_settings=self.polarity_settings_store.settings,
+        sample_ids=sample_ids,
+        global_safety=self.smu_manager.control.safety.limits,
+        hdr_settings=self.hdr_settings_store.settings,
+        hdr_session=self.hdr_session_state,
+        output_directory=output_root,
     )
     frozen_recipe = Recipe.from_dict(
         snapshot_payload(snapshot)["recipe"]["complete_snapshot"]
@@ -361,6 +458,9 @@ def begin_el_matrix_measurement(self: Any) -> None:
         camera_snapshot=camera_snapshot,
         current_camera=current_camera,
         output_root=output_root,
+        hdr_settings=self.hdr_settings_store.settings,
+        hdr_profile=getattr(self.hdr_session_state, "profile", None),
+        global_safety=self.smu_manager.control.safety.limits,
     )
     if preflight:
         QMessageBox.warning(self, "EL Matrix Preflight 阻擋", "• " + "\n• ".join(preflight))
@@ -381,6 +481,7 @@ def begin_el_matrix_measurement(self: Any) -> None:
     dialog.retry_pixel_csv_requested.connect(self.retry_pixel_csv_postprocess)
     self._measurement_progress_dialog = dialog
     dialog.show()
+    hdr_session = self.hdr_session_state
 
     def run(progress: Any, cancelled: Any) -> object:
         runner = ELMatrixRunner(
@@ -390,6 +491,12 @@ def begin_el_matrix_measurement(self: Any) -> None:
             report_progress=progress,
             is_cancel_requested=cancelled,
             measurement_snapshot=snapshot,
+            sample_ids=sample_ids,
+            hdr_settings=self.hdr_settings_store.settings,
+            hdr_session=hdr_session,
+            global_safety=self.smu_manager.control.safety.limits,
+            max_recipe_time_s=self.max_recipe_time_s,
+            max_output_time_s=self.max_output_time_s,
         )
         result = runner.run()
         if not verified_safe_shutdown(result.get("safe_shutdown")):
@@ -478,6 +585,8 @@ def attach_measurement_handlers(cls: type[Any]) -> None:
         start_background_measurement,
         _set_measurement_controls_locked,
         _best_effort_routing_off,
+        _effective_capture_counts,
+        _hdr_session_blocker,
         stop_background_measurement,
         emergency_stop_measurement,
         _cancel_measurement_for_emergency,

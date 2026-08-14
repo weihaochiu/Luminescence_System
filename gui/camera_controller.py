@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import numpy as np
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage
 
@@ -20,6 +21,7 @@ class CameraController(QObject):
 
     frame_ready = Signal(QImage)
     frame_ready_sequenced = Signal(QImage, int)
+    scientific_frame_ready = Signal(object, QImage, int)
     camera_opened = Signal(object)
     camera_closing = Signal()
     camera_closed = Signal()
@@ -43,6 +45,7 @@ class CameraController(QObject):
         self._latest_image: QImage | None = None
         self._status_query_failed = False
         self._frame_sequence = 0
+        self._sensor_bit_depth = 16
 
         self._sdk_event.connect(self._handle_sdk_event)
         self._fps_timer = QTimer(self)
@@ -98,6 +101,10 @@ class CameraController(QObject):
 
             # Match QImage's RGB byte order. Preview and saved basic captures use RGB24.
             camera.put_Option(nncam.NNCAM_OPTION_BYTEORDER, 0)
+            # Formal acquisition stays in the sensor's high-bit-depth mode.
+            # Live View is derived as a separate 8-bit display branch below.
+            camera.put_Option(nncam.NNCAM_OPTION_BITDEPTH, 1)
+            self._sensor_bit_depth = self._native_sensor_bit_depth(device.model.flag)
             camera.put_AutoExpoEnable(1)
             self._auto_mode = 1
             self._start_stream()
@@ -121,6 +128,8 @@ class CameraController(QObject):
                     device.model.flag & nncam.NNCAM_FLAG_GETTEMPERATURE
                 ),
                 "sdk_version": self.sdk_version(),
+                "scientific_bit_depth": self._sensor_bit_depth,
+                "scientific_container": "uint16",
             }
             self._log_camera_capabilities(info)
             self.camera_opened.emit(info)
@@ -155,6 +164,7 @@ class CameraController(QObject):
         self._latest_image = None
         self._status_query_failed = False
         self._frame_sequence = 0
+        self._sensor_bit_depth = 16
         if was_open:
             self.camera_closed.emit()
             self.status_changed.emit("相機已中斷連線")
@@ -274,10 +284,12 @@ class CameraController(QObject):
             "CameraModel": str(model or self.device_name),
             "CameraSerial": self._device_identifier(self._device) if self._device is not None else "",
             "Resolution": f"{self._width}x{self._height}",
+            "ResolutionId": f"sdk:{self._camera.get_eSize()}" if self._camera else "",
             "ImageWidth": self._width,
             "ImageHeight": self._height,
-            "PixelFormat": "RGB24",
-            "BitDepth": 8,
+            "PixelFormat": "RGB48",
+            "BitDepth": self._sensor_bit_depth,
+            "ContainerDtype": "uint16",
         }
 
     def read_temperature_c(self) -> float | None:
@@ -381,10 +393,23 @@ class CameraController(QObject):
         except Exception:
             return "unknown"
 
+    @staticmethod
+    def _native_sensor_bit_depth(flags: int) -> int:
+        for flag, bits in (
+            (nncam.NNCAM_FLAG_RAW16, 16),
+            (nncam.NNCAM_FLAG_RAW14, 14),
+            (nncam.NNCAM_FLAG_RAW12, 12),
+            (getattr(nncam, "NNCAM_FLAG_RAW11", 0), 11),
+            (nncam.NNCAM_FLAG_RAW10, 10),
+        ):
+            if flag and flags & flag:
+                return bits
+        return 16
+
     def _start_stream(self) -> None:
         if self._camera is None:
             return
-        self._pitch = nncam.TDIBWIDTHBYTES(self._width * 24)
+        self._pitch = nncam.TDIBWIDTHBYTES(self._width * 48)
         self._buffer = bytes(self._pitch * self._height)
         self._camera.StartPullModeWithCallback(self._camera_callback, self)
         self._fps_timer.start()
@@ -420,18 +445,31 @@ class CameraController(QObject):
         if self._camera is None or self._buffer is None:
             return
         try:
-            self._camera.PullImageV4(self._buffer, 0, 24, 0, None)
+            self._camera.PullImageV4(self._buffer, 0, 48, 0, None)
+            row_words = self._pitch // 2
+            scientific = np.frombuffer(self._buffer, dtype="<u2").reshape(
+                self._height, row_words
+            )[:, : self._width * 3].reshape(self._height, self._width, 3).copy()
+            maximum_dn = float((1 << self._sensor_bit_depth) - 1)
+            if int(scientific.max(initial=0)) > maximum_dn:
+                maximum_dn = 65535.0
+            display = np.clip(
+                np.rint(scientific.astype(np.float64) * (255.0 / maximum_dn)),
+                0,
+                255,
+            ).astype(np.uint8)
             image = QImage(
-                self._buffer,
+                display.data,
                 self._width,
                 self._height,
-                self._pitch,
+                self._width * 3,
                 QImage.Format.Format_RGB888,
             ).copy()
             self._latest_image = image
             self._frame_sequence += 1
             self.frame_ready.emit(image)
             self.frame_ready_sequenced.emit(image, self._frame_sequence)
+            self.scientific_frame_ready.emit(scientific, image, self._frame_sequence)
         except Exception as exc:
             self.error_occurred.emit(self._format_error("讀取影像失敗", exc))
 

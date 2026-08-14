@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+import cv2
+import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 from PySide6.QtGui import QImage
 
@@ -95,8 +97,10 @@ def annotated_jpeg_image(raw: Image.Image, lines: Iterable[str]) -> Image.Image:
 
 @dataclass(frozen=True)
 class SavedCapture:
-    tiff_path: Path
-    jpeg_path: Path
+    tiff_path: Path | None
+    png_path: Path | None
+    jpeg_path: Path | None
+    footer_jpeg_path: Path | None
     metadata_path: Path
     file_hashes: dict[str, str]
 
@@ -167,45 +171,112 @@ def save_pixel_csv_products(
     return paths
 
 
+def scientific_to_visualization(scientific_image: np.ndarray) -> Image.Image:
+    """Create an 8-bit display copy without mutating the scientific source."""
+
+    source = np.asarray(scientific_image)
+    if source.dtype != np.uint16:
+        raise TypeError("Scientific camera source must use a uint16 container")
+    working = source.astype(np.float64, copy=True)
+    maximum = float(np.max(working, initial=0.0))
+    scale_max = 4095.0 if maximum <= 4095.0 else 65535.0
+    mapped = np.clip(np.rint(working * (255.0 / scale_max)), 0, 255).astype(np.uint8)
+    if mapped.ndim == 2:
+        return Image.fromarray(mapped, mode="L")
+    if mapped.ndim == 3 and mapped.shape[2] == 3:
+        return Image.fromarray(mapped, mode="RGB")
+    raise ValueError("Scientific image must be H×W or H×W×3")
+
+
+def save_scientific_tiff(path: Path, scientific_image: np.ndarray) -> None:
+    source = np.asarray(scientific_image)
+    if source.dtype != np.uint16:
+        raise TypeError("TIFF scientific master requires uint16 source data")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = source if source.ndim == 2 else cv2.cvtColor(source, cv2.COLOR_RGB2BGR)
+    if not cv2.imwrite(str(path), encoded):
+        raise OSError(f"Unable to write scientific TIFF: {path}")
+
+
 def save_matrix_capture(
-    raw_image: QImage | Image.Image,
+    scientific_image: np.ndarray | None,
+    preview_image: QImage | Image.Image,
     output_stem: Path,
     metadata: dict[str, Any],
+    output_options: Any,
 ) -> SavedCapture:
     output_stem.parent.mkdir(parents=True, exist_ok=True)
-    raw = qimage_to_pillow(raw_image) if isinstance(raw_image, QImage) else raw_image.copy()
-    raw_pixels = raw.tobytes()
-    raw_size = raw.size
-    tiff_path = output_stem.with_suffix(".tiff")
-    jpeg_path = output_stem.with_suffix(".jpg")
+    if scientific_image is None:
+        raise RuntimeError(
+            "Scientific frame is unavailable; refusing to create TIFF from Live View"
+        )
+    scientific = np.asarray(scientific_image)
+    if scientific.dtype != np.uint16:
+        raise TypeError("Camera acquisition must provide a uint16 scientific frame")
+    scientific_before = scientific.copy()
+    # Derived formats branch from the same acquisition array; the QImage is
+    # accepted only for live-view reporting and is never used as save input.
+    del preview_image
+    preview = scientific_to_visualization(scientific)
+
+    tiff_path = output_stem.with_suffix(".tiff") if output_options.format_tiff else None
+    png_path = output_stem.with_suffix(".png") if output_options.format_png else None
+    jpeg_path = output_stem.with_suffix(".jpg") if output_options.format_jpg else None
+    footer_path = (
+        output_stem.with_name(output_stem.name + "_footer.jpg")
+        if output_options.format_jpg_with_footer else None
+    )
     metadata_path = output_stem.with_suffix(".json")
-    raw.save(tiff_path, compression="tiff_lzw")
-    lines = format_dark_footer(metadata) if metadata["MeasurementType"] == "DARK" else format_el_footer(metadata)
-    annotated = annotated_jpeg_image(raw, lines)
-    annotated.save(jpeg_path, quality=95, subsampling=0)
-    if raw.size != raw_size or raw.tobytes() != raw_pixels:
-        raise RuntimeError("Footer generation modified the RAW image buffer")
+    if tiff_path is not None:
+        save_scientific_tiff(tiff_path, scientific)
+    if png_path is not None:
+        preview.save(png_path, format="PNG")
+    if jpeg_path is not None:
+        preview.convert("RGB").save(jpeg_path, quality=95, subsampling=0)
+    annotated: Image.Image | None = None
+    if footer_path is not None:
+        lines = (
+            format_dark_footer(metadata)
+            if metadata["MeasurementType"] == "DARK"
+            else format_el_footer(metadata)
+        )
+        annotated = annotated_jpeg_image(preview.convert("RGB"), lines)
+        annotated.save(footer_path, quality=95, subsampling=0)
+    if not np.array_equal(scientific, scientific_before):
+        raise RuntimeError("Derived output generation modified the scientific source buffer")
     metadata.update({
-        "RawTiffPath": str(tiff_path),
-        "AnnotatedJpegPath": str(jpeg_path),
+        "ScientificTiffPath": str(tiff_path) if tiff_path else None,
+        "RawTiffPath": str(tiff_path) if tiff_path else None,
+        "PngPath": str(png_path) if png_path else None,
+        "JpegPath": str(jpeg_path) if jpeg_path else None,
+        "FooterJpegPath": str(footer_path) if footer_path else None,
+        "AnnotatedJpegPath": str(footer_path) if footer_path else None,
         "MetadataJsonPath": str(metadata_path),
+        "ScientificDtype": str(scientific.dtype),
+        "ScientificShape": list(scientific.shape),
     })
     payload = dict(metadata)
     payload.update({
-        "RawImageWidth": raw.width,
-        "RawImageHeight": raw.height,
-        "AnnotatedJpegWidth": annotated.width,
-        "AnnotatedJpegHeight": annotated.height,
+        "RawImageWidth": int(scientific.shape[1]),
+        "RawImageHeight": int(scientific.shape[0]),
+        "AnnotatedJpegWidth": annotated.width if annotated else None,
+        "AnnotatedJpegHeight": annotated.height if annotated else None,
     })
     metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    hashes = {
-        "RawTiffSha256": sha256_file(tiff_path),
-        "AnnotatedJpegSha256": sha256_file(jpeg_path),
-        "MetadataJsonSha256": sha256_file(metadata_path),
-    }
+    hashes = {"MetadataJsonSha256": sha256_file(metadata_path)}
+    for key, path in (
+        ("ScientificTiffSha256", tiff_path),
+        ("PngSha256", png_path),
+        ("JpegSha256", jpeg_path),
+        ("FooterJpegSha256", footer_path),
+    ):
+        if path is not None:
+            hashes[key] = sha256_file(path)
     for name, path in dict(metadata.get("PixelCsvPaths", {})).items():
         hashes[f"PixelCsv{name}Sha256"] = sha256_file(path)
-    return SavedCapture(tiff_path, jpeg_path, metadata_path, hashes)
+    return SavedCapture(
+        tiff_path, png_path, jpeg_path, footer_path, metadata_path, hashes
+    )
 
 
 def append_manifest(path: Path, metadata: dict[str, Any]) -> None:

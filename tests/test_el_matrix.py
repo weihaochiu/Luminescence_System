@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import cv2
+import numpy as np
 from PIL import Image
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QImage
@@ -19,6 +21,8 @@ from gui.el_matrix_plan import ELMatrixPlan
 from gui.el_matrix_preflight import collect_preflight_errors
 from gui.camera_capture_bridge import CameraCaptureBridge
 from gui.el_matrix_runner import CapturedFrame, ELMatrixRunner
+from gui.hdr_settings import HDRSystemSettings
+from gui.hdr_workflow import HDRSessionState
 from gui.measurement_snapshot import (
     build_el_matrix_snapshot,
     snapshot_payload,
@@ -102,7 +106,8 @@ class _FakeHardware:
             image,
             datetime(2026, 8, 14, 6, 44, 12).astimezone(),
             39.8,
-            {"CameraModel": "Fake", "CameraSerial": "SN1", "PixelFormat": "RGB24", "BitDepth": 8},
+            {"CameraModel": "Fake", "CameraSerial": "SN1", "PixelFormat": "RGB48", "BitDepth": 12},
+            np.full((3, 4, 3), 1024, dtype=np.uint16),
         )
 
     def output_off(self):
@@ -127,7 +132,6 @@ def _small_recipe(channel_count: int = 2) -> Recipe:
     recipe = Recipe()
     for index, channel in enumerate(recipe.channels):
         channel.enabled = index < channel_count
-        channel.sample_id = f"Sample/{index + 1}"
         channel.area_cm2 = 0.1 + index * 0.1
     recipe.el_matrix.current_density_ma_cm2 = [2.0, 4.0]
     recipe.el_matrix.gains_percent = [100, 200]
@@ -161,7 +165,8 @@ class ELMatrixRecipeAndPlanTests(unittest.TestCase):
             self.assertEqual(4, dialog.channels_table.rowCount())
             self.assertEqual("CH1", dialog.channels_table.item(0, 1).text())
             self.assertTrue(dialog.matrix_current_density_edit.text())
-            self.assertTrue(dialog.shared_dark_enabled_check.isChecked())
+            self.assertTrue(dialog.dark_frame_enabled_check.isChecked())
+            self.assertEqual(4, dialog.tabs.count())
             dialog.close()
     def test_enabled_channels_are_fixed_order_and_disabled_are_skipped(self) -> None:
         recipe = _small_recipe(3)
@@ -219,6 +224,44 @@ class ELMatrixRecipeAndPlanTests(unittest.TestCase):
 
 
 class ELMatrixRunnerTests(unittest.TestCase):
+    def test_hdr_t0_runner_uses_formal_axes_and_writes_sample_profile(self) -> None:
+        recipe = _small_recipe(1)
+        recipe.polarity.enabled = False
+        recipe.dark_iv.enabled = False
+        recipe.hdr.enabled = True
+        recipe.el_matrix.current_density_ma_cm2 = [2.0]
+        settings = HDRSystemSettings(
+            max_exposure_segments=2,
+            frames_per_exposure=1,
+            min_exposure_ms=1.0,
+            max_exposure_ms=2.0,
+        )
+        session = HDRSessionState(mode="t0_auto", sample_id="HDR/A")
+        hardware = _FakeHardware()
+        with tempfile.TemporaryDirectory() as directory:
+            result = ELMatrixRunner(
+                recipe,
+                hardware,
+                directory,
+                report_progress=lambda _item: None,
+                is_cancel_requested=lambda: False,
+                sample_ids={"CH1": "HDR/A"},
+                hdr_settings=settings,
+                hdr_session=session,
+            ).run()
+            run_directory = Path(result["output_directory"])
+            profile_paths = list(run_directory.glob("CH1_HDR_A/*_HDR_Profile.json"))
+            self.assertEqual(1, len(profile_paths))
+            profile_payload = json.loads(profile_paths[0].read_text(encoding="utf-8"))
+            self.assertEqual(
+                [1.0, 2.0],
+                profile_payload["hdr_profile"]["exposure_times_ms"],
+            )
+            snapshot = json.loads(
+                (run_directory / "measurement_snapshot.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("t0_auto", snapshot["hdr"]["session"]["mode"])
+
     def test_runner_dark_once_stabilizes_once_per_j_and_keeps_output_during_inner_matrix(self) -> None:
         recipe = _small_recipe(2)
         hardware = _FakeHardware()
@@ -228,11 +271,20 @@ class ELMatrixRunnerTests(unittest.TestCase):
                 recipe, hardware, directory,
                 report_progress=progress.append,
                 is_cancel_requested=lambda: False,
+                sample_ids={"CH1": "Sample/A", "CH2": "Sample B"},
                 now=lambda: datetime(2026, 8, 14, 6, 0, 0).astimezone(),
             ).run()
-            self.assertTrue(Path(result["output_directory"]).is_dir())
-            self.assertTrue((Path(result["output_directory"]) / "measurement_snapshot.json").is_file())
+            run_directory = Path(result["output_directory"])
+            self.assertTrue(run_directory.is_dir())
+            self.assertTrue((run_directory / "measurement_snapshot.json").is_file())
             self.assertTrue(Path(result["final_manifest"]).is_file())
+            self.assertTrue((run_directory / "CH1_Sample_A").is_dir())
+            self.assertTrue((run_directory / "CH2_Sample B").is_dir())
+            manifest = (run_directory / "measurement_manifest.csv").read_text(
+                encoding="utf-8-sig"
+            )
+            self.assertIn("Sample/A", manifest)
+            self.assertIn("Sample B", manifest)
         self.assertEqual(1, hardware.events.count("prepare_dark"))
         self.assertEqual(2, hardware.polarity_calls)
         self.assertEqual(2, hardware.events.count("dark_iv"))
@@ -251,12 +303,11 @@ class ELMatrixRunnerTests(unittest.TestCase):
                 self.assertIn("output_off", hardware.events[:index])
                 self.assertEqual("clear_routing", hardware.events[index - 1])
 
-    def test_polarity_is_mandatory_and_skip_recipe_is_rejected(self) -> None:
+    def test_polarity_can_be_disabled_and_is_removed_from_execution(self) -> None:
         recipe = _small_recipe(3)
         recipe.polarity.enabled = False
-        self.assertTrue(any("極性" in item for item in recipe.validate()))
-        with self.assertRaisesRegex(ValueError, "極性"):
-            ELMatrixPlan(recipe)
+        self.assertEqual([], recipe.validate())
+        self.assertEqual(3, len(ELMatrixPlan(recipe).channels))
 
     def test_all_polarities_precede_shared_dark_and_channel_dark_iv(self) -> None:
         recipe = _small_recipe(2)
@@ -274,21 +325,16 @@ class ELMatrixRunnerTests(unittest.TestCase):
             if event == "dark_iv":
                 self.assertIn("output_off", hardware.events[position + 1:])
 
-    def test_matrix_safety_time_blocks_default_four_channels_and_repeat_ten(self) -> None:
+    def test_matrix_time_estimates_remain_available_for_global_watchdogs(self) -> None:
         four = Recipe()
         for channel in four.channels:
             channel.enabled = True
-        four.safety.max_recipe_time_s = 1800
         self.assertGreater(four.matrix_estimated_time_s(), 4500)
-        self.assertTrue(any("完整流程" in item for item in four.validate()))
 
         repeat = Recipe()
         repeat.el_matrix.current_density_ma_cm2 = [2]
         repeat.el_matrix.repeat = 10
-        repeat.safety.max_recipe_time_s = 10000
-        repeat.safety.max_output_time_s = 600
         self.assertAlmostEqual(1806.925, repeat.matrix_output_on_time_s(), places=3)
-        self.assertTrue(any("OUTPUT ON" in item for item in repeat.validate()))
 
     def test_runtime_error_always_reaches_shared_safe_shutdown(self) -> None:
         recipe = _small_recipe(1)
@@ -365,22 +411,24 @@ class MatrixImageOutputTests(unittest.TestCase):
         }
 
     def test_raw_tiff_keeps_dimensions_and_pixels_while_jpeg_footer_is_below(self) -> None:
-        raw = Image.new("RGB", (8, 6))
-        raw.putdata([(index, index + 1, index + 2) for index in range(48)])
-        before = raw.tobytes()
+        raw = np.arange(8 * 6, dtype=np.uint16).reshape(6, 8)
+        before = raw.copy()
+        output = Recipe().output
         with tempfile.TemporaryDirectory() as directory:
-            saved = save_matrix_capture(raw, Path(directory) / "capture", self._metadata())
+            saved = save_matrix_capture(
+                raw, Image.new("L", (8, 6)), Path(directory) / "capture",
+                self._metadata(), output,
+            )
             payload = json.loads(saved.metadata_path.read_text(encoding="utf-8"))
             self.assertEqual(str(saved.tiff_path), payload["RawTiffPath"])
-            self.assertEqual(str(saved.jpeg_path), payload["AnnotatedJpegPath"])
+            self.assertEqual(str(saved.footer_jpeg_path), payload["AnnotatedJpegPath"])
             self.assertEqual(str(saved.metadata_path), payload["MetadataJsonPath"])
-            with Image.open(saved.tiff_path) as tiff:
-                self.assertEqual((8, 6), tiff.size)
-                self.assertEqual(before, tiff.convert("RGB").tobytes())
-            with Image.open(saved.jpeg_path) as jpeg:
+            tiff = cv2.imread(str(saved.tiff_path), cv2.IMREAD_UNCHANGED)
+            np.testing.assert_array_equal(before, tiff)
+            with Image.open(saved.footer_jpeg_path) as jpeg:
                 self.assertEqual(8, jpeg.width)
                 self.assertGreater(jpeg.height, 6)
-        self.assertEqual(before, raw.tobytes())
+        np.testing.assert_array_equal(before, raw)
 
     def test_uncompressed_annotated_buffer_preserves_the_complete_source_region(self) -> None:
         raw = Image.new("RGB", (200, 60), (12, 34, 56))
@@ -421,20 +469,17 @@ class MeasurementSnapshotAndPreflightTests(unittest.TestCase):
                     "Resolution": "4x3", "PixelFormat": "RGB24", "BitDepth": 8},
             smu={"model": "B2901BL"}, relay_mapping={"Ch1": 5},
             polarity_settings=PolarityMeasurementSettings(),
+            sample_ids={"CH1": "ORIGINAL"},
         )
-        recipe.channels[0].sample_id = "MUTATED"
-        self.assertNotEqual(
-            "MUTATED",
-            snapshot["recipe"]["complete_snapshot"]["channels"][0]["sample_id"],
-        )
+        recipe.channels[0].area_cm2 = 999
+        self.assertNotIn("sample_id", snapshot["recipe"]["complete_snapshot"]["channels"][0])
+        self.assertEqual("ORIGINAL", snapshot["channels"][0]["sample_id"])
         self.assertTrue(verify_snapshot_hash(snapshot))
         with self.assertRaises(TypeError):
             snapshot["camera"]["CameraModel"] = "changed"
 
     def test_preflight_aggregates_visa_and_relay_mapping_mismatch(self) -> None:
         recipe = _small_recipe(1)
-        recipe.smu.device_match = "specific"
-        recipe.smu.visa_address = "USB::EXPECTED"
         relay = RelaySettings.defaults()
         relay.smu_output_channels["Ch2"] = relay.smu_output_channels["Ch1"]
         camera = {"Resolution": "4x3", "PixelFormat": "RGB24", "BitDepth": 8,
@@ -451,7 +496,7 @@ class MeasurementSnapshotAndPreflightTests(unittest.TestCase):
                 relay_settings=relay, camera_connected=True,
                 camera_snapshot=camera, current_camera=current, output_root=directory,
             )
-        self.assertTrue(any("VISA" in item for item in errors))
+        self.assertFalse(any("VISA" in item for item in errors))
         self.assertTrue(any("不可重複" in item or "不完整或不唯一" in item for item in errors))
 
 

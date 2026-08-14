@@ -31,6 +31,7 @@ from .main_window_relay import attach_relay_handlers
 from .relay_settings import RelaySettingsStore
 from .smu_manager import SMUManager
 from .smu_monitor import SMUMonitor
+from .smu_safety_dialog import SMUSafetyDialog, load_global_safety
 
 
 class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
@@ -58,6 +59,10 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         )
         self.smu_monitor = SMUMonitor(self.smu_manager.control, parent=self)
         self.settings = QSettings()
+        limits, self.max_recipe_time_s, self.max_output_time_s = load_global_safety(
+            self.settings
+        )
+        self.smu_manager.control.safety.limits = limits
         recipe_path = application_directory / "recipes.json"
         self.recipe_store = RecipeStore(recipe_path)
         hdr_settings_path = application_directory / "hdr_settings.json"
@@ -129,9 +134,16 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             QMessageBox.warning(self, "Recipe 讀取錯誤", str(exc))
             return
         preferred = str(self.settings.value("recipe/last_selected_id", ""))
-        self.device_panel.set_recipes(self.recipe_store.available(), preferred)
+        self.device_panel.set_recipes(
+            self.recipe_store.available(),
+            preferred,
+            hdr_settings=self.hdr_settings_store.settings,
+            global_safety=self.smu_manager.control.safety.limits,
+        )
         if self.device_panel.selected_recipe() is None:
             self.selected_recipe = None
+            if hasattr(self, "measurement_control_bar"):
+                self.measurement_control_bar.set_active_channels([])
             self._update_measurement_controls()
 
     def on_recipe_selected(self, recipe_id: str) -> None:
@@ -140,15 +152,23 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.hdr_session_state = None
         if self.selected_recipe is not None:
             self.settings.setValue("recipe/last_selected_id", self.selected_recipe.recipe_id)
-            if self.selected_recipe.output.root_directory:
-                self.measurement_path_edit.setText(self.selected_recipe.output.root_directory)
+            self.measurement_control_bar.set_active_channels(
+                [channel.channel for channel in self.selected_recipe.enabled_channels()]
+            )
             self.status_message.setText(
                 f"已選擇 Recipe：{self.selected_recipe.name} v{self.selected_recipe.version}"
             )
+        else:
+            self.measurement_control_bar.set_active_channels([])
         self._update_measurement_controls()
 
     def open_recipe_manager(self) -> None:
-        dialog = RecipeManagerDialog(self.recipe_store, self)
+        dialog = RecipeManagerDialog(
+            self.recipe_store,
+            self,
+            hdr_settings=self.hdr_settings_store.settings,
+            camera_resolutions=list(self.camera_info.get("resolutions", [])),
+        )
         dialog.recipes_changed.connect(self.refresh_recipes)
         dialog.exec()
         self.refresh_recipes()
@@ -169,6 +189,17 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
                 "極性確認共用設定已更新；後續手動輸出與 Recipe 將使用新設定"
             )
 
+    def open_smu_safety_settings(self) -> None:
+        dialog = SMUSafetyDialog(
+            self.smu_manager.control.safety, self.settings, self
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            _limits, self.max_recipe_time_s, self.max_output_time_s = load_global_safety(
+                self.settings
+            )
+            self.refresh_recipes()
+            self.status_message.setText("全域安全 / SMU 設定已更新")
+
     def choose_measurement_output_root(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "選擇量測資料儲存位置")
         if selected:
@@ -186,7 +217,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         )
         state = choose_hdr_session(
             self,
-            self.sample_id_edit.text(),
+            self._primary_sample_id(),
             self.selected_recipe,
             self.camera_info,
             initial_directory,
@@ -201,8 +232,15 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             )
         self._update_measurement_controls()
 
-    def _on_sample_id_changed(self, text: str) -> None:
-        if self.hdr_session_state is not None and text.strip() != self.hdr_session_state.sample_id:
+    def _primary_sample_id(self) -> str:
+        values = self.measurement_control_bar.sample_ids()
+        return next(iter(values.values()), "")
+
+    def _on_sample_ids_changed(self) -> None:
+        if (
+            self.hdr_session_state is not None
+            and self._primary_sample_id() != self.hdr_session_state.sample_id
+        ):
             self.hdr_session_state = None
         self._update_measurement_controls()
 
@@ -215,7 +253,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             self.hdr_session_button.setEnabled(False)
             reason = "請先從左側選擇已啟用且通過驗證的 Recipe。"
         else:
-            counts = self.selected_recipe.matrix_capture_counts()
+            counts = self._effective_capture_counts(self.selected_recipe)
             self.selected_recipe_label.setText(
                 f"{self.selected_recipe.name} v{self.selected_recipe.version}\n"
                 f"{len(self.selected_recipe.enabled_channels())} Channels｜"
@@ -237,8 +275,14 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             if not self.controller.is_open: blockers.append("相機未連線")
             if not self.smu_manager.is_connected: blockers.append("SMU 未連線")
             if not self.relay_controller.connected: blockers.append("Relay 未連線")
-            if not self.measurement_path_edit.text().strip() and not self.selected_recipe.output.root_directory:
+            if not self.measurement_path_edit.text().strip():
                 blockers.append("尚未設定輸出位置")
+            missing_samples = self.measurement_control_bar.missing_sample_channels()
+            if missing_samples:
+                blockers.append("尚未設定樣品 ID：" + "、".join(missing_samples))
+            hdr_blocker = self._hdr_session_blocker(self.selected_recipe)
+            if hdr_blocker:
+                blockers.append(hdr_blocker)
             reason = "；".join(blockers) if blockers else "開始多 Channel EL Matrix 自動量測"
         running = self._measurement_worker is not None
         if running:
@@ -262,7 +306,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         ):
             return
         errors, _warnings = state.profile.compatibility_issues(
-            self.sample_id_edit.text(),
+            self._primary_sample_id(),
             self.selected_recipe,
             self.camera_info,
             self.hdr_settings_store.settings,

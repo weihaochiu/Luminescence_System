@@ -80,6 +80,10 @@ class MainWindowUIMixin:
         self.polarity_settings_action = QAction("極性確認…", self)
         self.polarity_settings_action.setToolTip("設定手動輸出與 Recipe 共用的 Jsc / Voc 極性確認條件")
         self.relay_settings_action = QAction("Relay 設定…", self)
+        self.smu_safety_settings_action = QAction("安全 / SMU…", self)
+        self.smu_safety_settings_action.setToolTip(
+            "設定手動輸出、Recipe 與自動化共用的全域 SMU 安全限制"
+        )
         self.relay_settings_action.setToolTip("設定 USBRelay8 Channel、群組與手動測試")
         self.sidebar_settings_action = QAction("左側工具列…", self)
         self.sidebar_settings_action.setToolTip("調整左側功能面板的順序與顯示狀態")
@@ -104,6 +108,7 @@ class MainWindowUIMixin:
         self.recipe_manager_action.triggered.connect(self.open_recipe_manager)
         self.hdr_settings_action.triggered.connect(self.open_hdr_settings)
         self.polarity_settings_action.triggered.connect(self.open_polarity_settings)
+        self.smu_safety_settings_action.triggered.connect(self.open_smu_safety_settings)
         self.relay_settings_action.triggered.connect(self.open_relay_settings)
         self.sidebar_settings_action.triggered.connect(self.open_sidebar_settings)
         self.smu_auto_connect_action.toggled.connect(
@@ -134,6 +139,7 @@ class MainWindowUIMixin:
         settings_menu.addAction(self.recipe_manager_action)
         settings_menu.addAction(self.polarity_settings_action)
         settings_menu.addAction(self.hdr_settings_action)
+        settings_menu.addAction(self.smu_safety_settings_action)
         settings_menu.addAction(self.relay_settings_action)
         settings_menu.addSeparator()
         settings_menu.addAction(self.smu_auto_connect_action)
@@ -400,6 +406,7 @@ class MainWindowUIMixin:
         self.measurement_control_bar = bar
         for name in (
             "sample_id_edit",
+            "sample_id_edits",
             "measurement_path_edit",
             "measurement_path_button",
             "selected_recipe_label",
@@ -415,7 +422,7 @@ class MainWindowUIMixin:
         self.hdr_session_button.clicked.connect(self.configure_hdr_session)
         self.white_light_button.setEnabled(False)
         self.white_light_button.clicked.connect(self.toggle_white_light)
-        self.sample_id_edit.textChanged.connect(self._on_sample_id_changed)
+        bar.sample_ids_changed.connect(self._on_sample_ids_changed)
         self.start_measurement_button.clicked.connect(self.begin_el_matrix_measurement)
         self.stop_measurement_button.clicked.connect(self.stop_background_measurement)
         return bar

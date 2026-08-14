@@ -7,12 +7,27 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
+from .el_matrix_plan import ELMatrixPlan
+from .measurement_execution_plan import effective_matrix_capture_axes
 from .recipe_store import Recipe
 
 
-def estimate_required_bytes(recipe: Recipe, width: int, height: int) -> int:
+def estimate_required_bytes(
+    recipe: Recipe,
+    width: int,
+    height: int,
+    *,
+    hdr_settings: Any | None = None,
+    hdr_profile: Any | None = None,
+    global_safety: Any | None = None,
+) -> int:
     pixels = max(1, int(width)) * max(1, int(height))
-    captures = recipe.matrix_capture_counts()["overall"]
+    captures = ELMatrixPlan(
+        recipe,
+        hdr_settings=hdr_settings,
+        hdr_profile=hdr_profile,
+        global_safety=global_safety,
+    ).capture_counts()["overall"]
     # RAW TIFF + annotated JPEG + metadata and manifest allowance.
     per_capture = pixels * 6 + 16_384
     if recipe.output.export_pixel_csv:
@@ -36,8 +51,11 @@ def collect_preflight_errors(
     camera_snapshot: Mapping[str, Any],
     current_camera: Mapping[str, Any],
     output_root: str | Path,
+    hdr_settings: Any | None = None,
+    hdr_profile: Any | None = None,
+    global_safety: Any | None = None,
 ) -> list[str]:
-    errors = list(recipe.validate())
+    errors = list(recipe.validate(hdr_settings, global_safety))
     if not smu_metadata.get("connected"):
         errors.append("SMU 未連線")
     if not smu_metadata.get("supported"):
@@ -46,12 +64,6 @@ def collect_preflight_errors(
     model = str(smu_metadata.get("model", "")).casefold()
     if "keysight" not in manufacturer or not model.startswith("b29"):
         errors.append("SMU identity 與 Keysight B2900 要求不符")
-    expected_visa = recipe.smu.visa_address.strip()
-    actual_visa = str(smu_metadata.get("visa_address", "")).strip()
-    if expected_visa and expected_visa != actual_visa:
-        errors.append(
-            f"Recipe VISA address 不符：expected={expected_visa!r}, actual={actual_visa!r}"
-        )
     if not smu_output_confirmed_off:
         errors.append("SMU OUTPUT OFF 未經實際 readback 確認")
 
@@ -75,19 +87,22 @@ def collect_preflight_errors(
         errors.append("Camera 未連線")
     exposure_range = current_camera.get("exposure_range_us")
     gain_range = current_camera.get("gain_range")
+    axes = effective_matrix_capture_axes(
+        recipe, hdr_settings, hdr_profile=hdr_profile
+    )
     if not exposure_range:
         errors.append("Camera 未提供 Exposure SDK capability")
     else:
         low, high = float(exposure_range[0]), float(exposure_range[1])
-        if any(not low <= value * 1000.0 <= high for value in recipe.el_matrix.exposures_ms):
+        if any(not low <= value * 1000.0 <= high for value in axes.exposures_ms):
             errors.append(f"Exposure 超出 Camera SDK capability：{low:g}～{high:g} us")
     if not gain_range:
         errors.append("Camera 未提供 Gain SDK capability")
     else:
         low, high = int(gain_range[0]), int(gain_range[1])
-        if any(not low <= value <= high for value in recipe.el_matrix.gains_percent):
+        if any(not low <= value <= high for value in axes.gains_percent):
             errors.append(f"Gain 超出 Camera SDK capability：{low}～{high}")
-    for key in ("Resolution", "PixelFormat", "BitDepth"):
+    for key in ("ResolutionId", "Resolution", "PixelFormat", "BitDepth", "ContainerDtype"):
         if current_camera.get(key) != camera_snapshot.get(key):
             errors.append(
                 f"Camera {key} 與 Measurement Snapshot 不符："
@@ -104,6 +119,9 @@ def collect_preflight_errors(
             recipe,
             int(camera_snapshot.get("ImageWidth", 0)),
             int(camera_snapshot.get("ImageHeight", 0)),
+            hdr_settings=hdr_settings,
+            hdr_profile=hdr_profile,
+            global_safety=global_safety,
         )
         available = shutil.disk_usage(root).free
         if available < required:

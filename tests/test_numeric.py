@@ -4,7 +4,7 @@ import unittest
 
 from gui.keysight_b2900 import KeysightB2900Driver
 from gui.numeric import format_scpi_number
-from gui.recipe_store import ELPoint, Recipe
+from gui.recipe_store import Recipe
 from gui.smu_base import SMUDevice
 
 
@@ -31,10 +31,15 @@ class NumericTests(unittest.TestCase):
     def test_recipe_json_and_current_density_are_normalized(self) -> None:
         recipe = Recipe()
         recipe.geometry.active_area_cm2 = 0.1
-        point = ELPoint(setpoint=0.1 + 0.2)
-        self.assertEqual(0.03, recipe.actual_current_ma(point))
-        recipe.el_sweep.points = [point]
-        self.assertEqual(0.3, recipe.to_dict()["el_sweep"]["points"][0]["setpoint"])
+        self.assertEqual(
+            0.03,
+            recipe.matrix_source_current_ma(recipe.channels[0], 0.1 + 0.2),
+        )
+        recipe.el_matrix.current_density_ma_cm2 = [0.1 + 0.2]
+        self.assertEqual(
+            0.3,
+            recipe.to_dict()["el_matrix"]["current_density_ma_cm2"][0],
+        )
 
 
 if __name__ == "__main__":

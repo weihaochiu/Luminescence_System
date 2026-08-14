@@ -50,7 +50,7 @@ class HDRProfileTests(unittest.TestCase):
         )
         self.assertTrue(any("Sample ID" in item for item in errors))
 
-        self.recipe.el_sweep.points[0].setpoint = 999
+        self.recipe.el_matrix.current_density_ma_cm2[0] = 999
         errors, _warnings = profile.compatibility_issues(
             "PSC-001", self.recipe, hdr_settings=self.settings
         )
