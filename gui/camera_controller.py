@@ -8,7 +8,7 @@ import numpy as np
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage
 
-from .camera_exposure import validate_auto_target
+from .camera_exposure import DEFAULT_AUTO_EXPOSURE_TARGET
 from .camera_temperature_monitor import CameraTemperatureUnsupportedError
 from .image_brightness import equivalent_brightness_8bit
 from .sdk import nncam
@@ -54,6 +54,7 @@ class CameraController(QObject):
         self._height = 0
         self._pitch = 0
         self._auto_mode = 0
+        self._auto_exposure_target_readback: int | None = None
         self._latest_image: QImage | None = None
         self._status_query_failed = False
         self._frame_sequence = 0
@@ -205,15 +206,13 @@ class CameraController(QObject):
                 lambda: camera.get_Option(nncam.NNCAM_OPTION_ISP),
             )
             self._scientific_isp_bypassed = raw_mode == 1 or isp_mode == -1
-            self._apply_camera_startup_setting(
-                "put_AutoExpoEnable(1)", lambda: camera.put_AutoExpoEnable(1)
+            self._configure_auto_exposure_mode(
+                camera, 1, "Camera connection"
             )
-            self._auto_mode = 1
             self._start_stream()
 
             capabilities = self._query_camera_capabilities(camera)
             current = self._read_current_exposure(camera)
-            auto_target = self._query_optional(camera, "get_AutoExpoTarget", "Auto Exposure Target")
             info = {
                 "name": device.displayname,
                 "model": device.model.name,
@@ -224,7 +223,8 @@ class CameraController(QObject):
                 **capabilities,
                 "exposure_us": current[0] if current is not None else None,
                 "gain": current[1] if current is not None else None,
-                "auto_target": auto_target,
+                "auto_target": DEFAULT_AUTO_EXPOSURE_TARGET,
+                "auto_target_readback": self._auto_exposure_target_readback,
                 "mono": self._camera_is_mono,
                 "temperature_supported": bool(
                     device.model.flag & nncam.NNCAM_FLAG_GETTEMPERATURE
@@ -298,6 +298,7 @@ class CameraController(QObject):
         self._height = 0
         self._pitch = 0
         self._auto_mode = 0
+        self._auto_exposure_target_readback = None
         self._latest_image = None
         self._status_query_failed = False
         self._frame_sequence = 0
@@ -333,14 +334,21 @@ class CameraController(QObject):
             return
 
         try:
-            previous_auto_mode = self._camera.get_AutoExpoEnable()
+            previous_auto_mode = int(self._camera.get_AutoExpoEnable())
             self._camera.Stop()
             self._camera.put_eSize(index)
             resolution = self._device.model.res[index]
             self._width, self._height = resolution.width, resolution.height
             self._start_stream()
-            self._camera.put_AutoExpoEnable(previous_auto_mode)
-            self._auto_mode = previous_auto_mode
+            if previous_auto_mode in (1, 2):
+                self._configure_auto_exposure_mode(
+                    self._camera,
+                    previous_auto_mode,
+                    "Resolution restart",
+                )
+            else:
+                self._camera.put_AutoExpoEnable(0)
+                self._auto_mode = 0
             self.status_changed.emit(f"解析度：{self._width} × {self._height}")
         except Exception as exc:
             self.error_occurred.emit(self._format_error("切換解析度失敗", exc))
@@ -374,23 +382,23 @@ class CameraController(QObject):
             return True
         except Exception as exc:
             try:
-                self._camera.put_AutoExpoEnable(1)
-                self._auto_mode = 1
+                self._configure_auto_exposure_mode(
+                    self._camera, 1, "Manual mode rollback"
+                )
             except Exception as rollback_exc:
                 LOG.error("Failed to restore continuous AE after mode-switch error: %s", rollback_exc)
             self.error_occurred.emit(self._format_error("切換手動曝光失敗", exc))
             return False
 
-    def enable_continuous_auto_exposure(self, target: int) -> bool:
-        """Apply the retained target first, then enable continuous AE."""
+    def enable_continuous_auto_exposure(self) -> bool:
+        """Apply the fixed Live View target first, then enable continuous AE."""
 
         if self._camera is None:
             return False
         try:
-            target = validate_auto_target(target)
-            self._camera.put_AutoExpoTarget(target)
-            self._camera.put_AutoExpoEnable(1)
-            self._auto_mode = 1
+            self._configure_auto_exposure_mode(
+                self._camera, 1, "Continuous AE mode switch"
+            )
             self.status_changed.emit("持續自動曝光已開啟")
             return True
         except Exception as exc:
@@ -401,8 +409,9 @@ class CameraController(QObject):
         if self._camera is None:
             return
         try:
-            self._camera.put_AutoExpoEnable(2)
-            self._auto_mode = 2
+            self._configure_auto_exposure_mode(
+                self._camera, 2, "Auto Exposure Once"
+            )
             self.status_changed.emit("正在等待自動曝光收斂…")
         except Exception as exc:
             self.auto_exposure_result.emit(False, self._format_error("無法啟動單次自動曝光", exc))
@@ -417,16 +426,6 @@ class CameraController(QObject):
         except Exception as exc:
             self.error_occurred.emit(self._format_error("鎖定曝光失敗", exc))
 
-    def set_auto_exposure_target(self, target: int) -> bool:
-        if self._camera is None:
-            return False
-        try:
-            self._camera.put_AutoExpoTarget(validate_auto_target(target))
-            return True
-        except Exception as exc:
-            self.error_occurred.emit(self._format_error("設定影像亮度目標失敗", exc))
-            return False
-
     def current_exposure(self) -> tuple[int, int]:
         if self._camera is None:
             return 0, 0
@@ -437,6 +436,11 @@ class CameraController(QObject):
         """Stable identity/format fields for a frame already pulled by this controller."""
 
         model = getattr(getattr(self._device, "model", None), "name", "")
+        auto_mode = {
+            0: "manual",
+            1: "continuous",
+            2: "auto_once",
+        }.get(self._auto_mode, "unknown")
         return {
             "CameraModel": str(model or self.device_name),
             "CameraSerial": self._device_identifier(self._device) if self._device is not None else "",
@@ -477,6 +481,11 @@ class CameraController(QObject):
             "LINEARReadback": self._linear_readback,
             "CURVEReadback": self._curve_readback,
             "GammaReadback": self._gamma_readback,
+            "AutoExposureMode": auto_mode,
+            "AutoExposureTarget": (
+                DEFAULT_AUTO_EXPOSURE_TARGET if self._auto_mode in (1, 2) else None
+            ),
+            "AutoExposureTargetReadback": self._auto_exposure_target_readback,
         }
 
     def read_temperature_c(self) -> float | None:
@@ -519,6 +528,47 @@ class CameraController(QObject):
         except Exception as exc:
             LOG.warning("RisingCam SDK query failed for %s: %s", description, exc)
             return None
+
+    def _configure_auto_exposure_mode(
+        self, camera: Any, mode: int, context: str
+    ) -> None:
+        """Set the fixed SDK AE target before enabling Continuous or Once AE."""
+
+        target = DEFAULT_AUTO_EXPOSURE_TARGET
+        LOG.info("%s ContinuousAE Target requested: %s", context, target)
+        camera.put_AutoExpoTarget(target)
+        readback = self._query_optional(
+            camera,
+            "get_AutoExpoTarget",
+            f"{context} ContinuousAE Target readback",
+        )
+        try:
+            self._auto_exposure_target_readback = (
+                int(readback) if readback is not None else None
+            )
+        except (TypeError, ValueError):
+            LOG.warning(
+                "%s ContinuousAE Target readback is invalid: %r", context, readback
+            )
+            self._auto_exposure_target_readback = None
+        if self._auto_exposure_target_readback is None:
+            LOG.warning("%s ContinuousAE Target readback: unsupported", context)
+        elif self._auto_exposure_target_readback != target:
+            LOG.warning(
+                "%s ContinuousAE Target readback mismatch: requested=%s, readback=%s",
+                context,
+                target,
+                self._auto_exposure_target_readback,
+            )
+        else:
+            LOG.info(
+                "%s ContinuousAE Target readback: %s",
+                context,
+                self._auto_exposure_target_readback,
+            )
+        camera.put_AutoExpoEnable(mode)
+        self._auto_mode = int(mode)
+        LOG.info("%s ContinuousAE Enabled: %s", context, mode)
 
     @classmethod
     def _query_camera_capabilities(cls, camera: Any) -> dict[str, Any]:
@@ -1024,22 +1074,26 @@ class CameraController(QObject):
             return
         current = self._read_current_exposure(self._camera)
         try:
-            brightness = (
+            # PreviewBrightness8bit is calculated from the GUI visualization.
+            # It is not the SDK AutoExposureTarget or a ScientificDN value.
+            preview_brightness_8bit = (
                 equivalent_brightness_8bit(self._latest_image)
                 if self._latest_image is not None
                 else None
             )
         except Exception as exc:
             LOG.warning("Unable to calculate current image brightness: %s", exc)
-            brightness = None
+            preview_brightness_8bit = None
         if current is None:
             if not self._status_query_failed:
                 LOG.warning("RisingCam SDK failed to refresh current Exposure/Gain")
             self._status_query_failed = True
-            self.exposure_status_changed.emit(None, None, brightness)
+            self.exposure_status_changed.emit(None, None, preview_brightness_8bit)
             return
         self._status_query_failed = False
-        self.exposure_status_changed.emit(current[0], current[1], brightness)
+        self.exposure_status_changed.emit(
+            current[0], current[1], preview_brightness_8bit
+        )
 
     @Slot()
     def _poll_frame_rate(self) -> None:

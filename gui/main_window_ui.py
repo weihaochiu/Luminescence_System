@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -25,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .camera_exposure import AUTO_TARGET_MAX, AUTO_TARGET_MIN, ExposureMode
+from .camera_exposure import ExposureMode, PREVIEW_BRIGHTNESS_8BIT_MAX
 from .device_panel import DevicePanel
 from .measurement_control_bar import MeasurementControlBar
 from .responsive_layout import LayoutMode, ResponsiveLayoutManager
@@ -219,21 +218,6 @@ class MainWindowUIMixin:
         for mode in ExposureMode:
             self.exposure_mode_combo.addItem(mode.label, mode.value)
 
-        self.auto_target_edit = QLineEdit("120")
-        self.auto_target_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.auto_target_edit.setMaximumWidth(100)
-        self.auto_target_edit.setToolTip(
-            "自動曝光所使用的目標影像亮度。\n"
-            "RisingCam SDK 使用 0–255 等效亮度尺度，\n"
-            f"目前可設定範圍為 {AUTO_TARGET_MIN}–{AUTO_TARGET_MAX}。"
-        )
-        auto_target_row = QWidget()
-        auto_target_layout = QHBoxLayout(auto_target_row)
-        auto_target_layout.setContentsMargins(0, 0, 0, 0)
-        auto_target_layout.addWidget(self.auto_target_edit)
-        auto_target_layout.addWidget(QLabel("/255"))
-        auto_target_layout.addStretch(1)
-
         self.exposure_spin = QDoubleSpinBox()
         self.exposure_spin.setDecimals(3)
         self.exposure_spin.setSuffix(" ms")
@@ -249,7 +233,6 @@ class MainWindowUIMixin:
         auto_page = QWidget()
         auto_form = QFormLayout(auto_page)
         auto_form.setContentsMargins(0, 0, 0, 0)
-        auto_form.addRow("影像亮度目標", auto_target_row)
         auto_form.addRow("目前曝光時間", self.current_exposure_value)
         auto_form.addRow("目前 Gain", self.current_gain_value)
 
@@ -265,7 +248,13 @@ class MainWindowUIMixin:
         self.exposure_stack = QStackedWidget()
         self.exposure_stack.addWidget(auto_page)
         self.exposure_stack.addWidget(manual_page)
-        self.current_brightness_value = QLabel("-- /255")
+        self.preview_brightness_value = QLabel(
+            f"-- /{PREVIEW_BRIGHTNESS_8BIT_MAX}"
+        )
+        self.preview_brightness_value.setToolTip(
+            "由目前 Live View 8-bit 預覽影像計算的平均亮度，\n"
+            "僅供畫面觀察，不代表 RisingCam SDK 自動曝光演算法內部的亮度值。"
+        )
         self.camera_connection_hint = QLabel("請先連線相機")
         self.camera_connection_hint.setStyleSheet("color: #a66a00;")
 
@@ -280,7 +269,7 @@ class MainWindowUIMixin:
         exposure_separator.setFrameShape(QFrame.Shape.HLine)
         exposure_layout.addWidget(exposure_separator)
         brightness_form = QFormLayout()
-        brightness_form.addRow("目前影像亮度", self.current_brightness_value)
+        brightness_form.addRow("目前預覽亮度", self.preview_brightness_value)
         exposure_layout.addLayout(brightness_form)
         exposure_layout.addWidget(self.camera_connection_hint)
 
@@ -463,7 +452,6 @@ class MainWindowUIMixin:
         self.temperature_chart_button.clicked.connect(self.open_temperature_chart)
         self.apply_manual_button.clicked.connect(self.apply_manual_exposure)
         self.exposure_mode_combo.currentIndexChanged.connect(self.change_exposure_mode)
-        self.auto_target_edit.editingFinished.connect(self.apply_auto_exposure_target)
         self.resolution_combo.currentIndexChanged.connect(self.change_resolution)
         self.image_view.zoom_changed.connect(lambda value: self.zoom_status.setText(f"縮放 {value:.1f}%"))
 

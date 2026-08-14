@@ -51,6 +51,8 @@ class _FakeMonoCamera:
         self.start_error = start_error
         self.pull_error = pull_error
         self.pull_bits: list[int] = []
+        self.auto_exposure_calls: list[tuple[str, int] | tuple[str]] = []
+        self.auto_exposure_target = 99
 
     def get_eSize(self) -> int:
         return 0
@@ -72,8 +74,16 @@ class _FakeMonoCamera:
             raise self.max_bit_depth
         return self.max_bit_depth
 
-    def put_AutoExpoEnable(self, _enabled: int) -> None:
-        pass
+    def put_AutoExpoTarget(self, target: int) -> None:
+        self.auto_exposure_calls.append(("target", target))
+        self.auto_exposure_target = target
+
+    def get_AutoExpoTarget(self) -> int:
+        self.auto_exposure_calls.append(("target_readback",))
+        return self.auto_exposure_target
+
+    def put_AutoExpoEnable(self, enabled: int) -> None:
+        self.auto_exposure_calls.append(("enable", enabled))
 
     def put_Gamma(self, gamma: int) -> None:
         if self.gamma_unsupported:
@@ -144,6 +154,10 @@ class MonoScientificCameraTests(unittest.TestCase):
         controller, errors = _open(camera)
         try:
             self.assertTrue(controller.is_open, errors)
+            self.assertEqual(
+                [("target", 120), ("target_readback",), ("enable", 1)],
+                camera.auto_exposure_calls,
+            )
             self.assertNotIn((nncam.NNCAM_OPTION_BYTEORDER, 0), camera.options)
             metadata = controller.capture_metadata()
             self.assertEqual(1, metadata["ByteOrderReadback"])

@@ -5,10 +5,12 @@ from PySide6.QtGui import QImage
 
 
 def equivalent_brightness_8bit(image: QImage) -> int | None:
-    """Return whole-frame mean luminance on a 0–255 scale.
+    """Return PreviewBrightness8bit on a fixed 0–255 visualization scale.
 
     This deliberately lives outside the GUI so a future Sample ROI or AE ROI
     implementation can replace the sampling policy without changing widgets.
+    It is not the RisingCam AutoExposureTarget, SensorBitDepth,
+    ContainerBitDepth, or a ScientificDN measurement.
     """
 
     if image.isNull() or image.width() <= 0 or image.height() <= 0:

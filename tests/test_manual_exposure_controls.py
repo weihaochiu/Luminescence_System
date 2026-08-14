@@ -33,7 +33,7 @@ class ManualExposureControlStructureTests(unittest.TestCase):
     def test_connection_state_does_not_overwrite_manual_mode(self) -> None:
         source = self._source(self.methods["_set_camera_controls_enabled"])
         self.assertIn("self._update_exposure_control_state()", source)
-        for widget in ("auto_target_edit", "exposure_spin", "gain_spin", "apply_manual_button"):
+        for widget in ("exposure_spin", "gain_spin", "apply_manual_button"):
             self.assertNotIn(f"self.{widget}.setEnabled(", source)
 
     def test_mode_switch_routes_ordered_camera_operations(self) -> None:
@@ -41,11 +41,11 @@ class ManualExposureControlStructureTests(unittest.TestCase):
         self.assertIn("self.controller.switch_to_manual_exposure()", source)
         self.assertIn("self.controller.enable_continuous_auto_exposure", source)
 
-    def test_invalid_target_restores_last_valid_value(self) -> None:
-        source = self._source(self.methods["apply_auto_exposure_target"])
-        self.assertIn("validate_auto_target", source)
-        self.assertIn("self.auto_target_edit.setText(str(previous))", source)
-        self.assertIn("QMessageBox.warning", source)
+    def test_operator_auto_target_editing_was_removed(self) -> None:
+        self.assertNotIn("apply_auto_exposure_target", self.methods)
+        all_source = self.source_path.read_text(encoding="utf-8")
+        self.assertNotIn("auto_target_edit", all_source)
+        self.assertNotIn("_last_valid_auto_target", all_source)
 
     def test_manual_values_are_converted_to_sdk_units(self) -> None:
         source = self._source(self.methods["apply_manual_exposure"])

@@ -11,7 +11,11 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from . import __version__
-from .camera_exposure import ExposureMode, validate_auto_target
+from .camera_exposure import (
+    DEFAULT_AUTO_EXPOSURE_TARGET,
+    PREVIEW_BRIGHTNESS_8BIT_MAX,
+    ExposureMode,
+)
 from .camera_temperature_monitor import TemperatureSample, format_temperature_c
 from .image_io import save_image_and_metadata
 from .instrument_state_manager import SMUUIState
@@ -226,6 +230,7 @@ class MainWindowDeviceMixin:
 
     def on_camera_opened(self, info: dict[str, Any]) -> None:
         self.camera_info = info
+        self._preview_brightness_8bit = None
         self.connect_action.setText("中斷連線")
         self.view_title.setText(f"即時影像 [{info['name']}]")
         self.model_value.setText(str(info["model"]))
@@ -259,14 +264,6 @@ class MainWindowDeviceMixin:
         else:
             self.gain_spin.setToolTip("無法從相機 SDK 取得 Gain 硬體範圍")
 
-        target = info.get("auto_target")
-        try:
-            self._last_valid_auto_target = validate_auto_target(
-                int(target) if target is not None else 120
-            )
-        except (TypeError, ValueError):
-            self._last_valid_auto_target = 120
-        self.auto_target_edit.setText(str(self._last_valid_auto_target))
         if info.get("exposure_us") is not None and info.get("gain") is not None:
             self.on_exposure_changed(info["exposure_us"], info["gain"])
 
@@ -296,7 +293,10 @@ class MainWindowDeviceMixin:
         self.camera_status.setText("相機 —")
         self.current_exposure_value.setText("--")
         self.current_gain_value.setText("--")
-        self.current_brightness_value.setText("-- /255")
+        self._preview_brightness_8bit = None
+        self.preview_brightness_value.setText(
+            f"-- /{PREVIEW_BRIGHTNESS_8BIT_MAX}"
+        )
 
     def change_resolution(self, index: int) -> None:
         if index >= 0 and self.controller.is_open:
@@ -314,9 +314,7 @@ class MainWindowDeviceMixin:
         if mode is ExposureMode.MANUAL:
             changed = self.controller.switch_to_manual_exposure()
         else:
-            changed = self.controller.enable_continuous_auto_exposure(
-                getattr(self, "_last_valid_auto_target", 120)
-            )
+            changed = self.controller.enable_continuous_auto_exposure()
         if not changed:
             self._set_exposure_mode_ui(previous)
             return
@@ -333,24 +331,6 @@ class MainWindowDeviceMixin:
         value = self.exposure_mode_combo.currentData()
         return ExposureMode(value or ExposureMode.CONTINUOUS_AUTO.value)
 
-    def apply_auto_exposure_target(self) -> None:
-        previous = getattr(self, "_last_valid_auto_target", 120)
-        try:
-            target = validate_auto_target(int(self.auto_target_edit.text().strip()))
-        except (TypeError, ValueError) as exc:
-            self.auto_target_edit.setText(str(previous))
-            message = str(exc) if str(exc) else "影像亮度目標必須是整數。"
-            if "允許範圍" not in message:
-                message = "影像亮度目標必須是 16–220 範圍內的整數 /255。"
-            QMessageBox.warning(self, "影像亮度目標輸入錯誤", message)
-            return
-
-        if self.controller.is_open and not self.controller.set_auto_exposure_target(target):
-            self.auto_target_edit.setText(str(previous))
-            return
-        self._last_valid_auto_target = target
-        self.auto_target_edit.setText(str(target))
-
     def _update_exposure_control_state(self) -> None:
         connected = self.controller.is_open
         measurement_locked = getattr(self, "_measurement_worker", None) is not None
@@ -363,7 +343,6 @@ class MainWindowDeviceMixin:
         )
         self.exposure_mode_combo.setEnabled(connected)
         self.exposure_stack.setCurrentIndex(0 if mode is ExposureMode.CONTINUOUS_AUTO else 1)
-        self.auto_target_edit.setEnabled(connected and mode is ExposureMode.CONTINUOUS_AUTO)
         self.exposure_spin.setEnabled(manual and limits_available)
         self.gain_spin.setEnabled(manual and limits_available)
         self.apply_manual_button.setEnabled(manual and limits_available)
@@ -384,7 +363,10 @@ class MainWindowDeviceMixin:
         self.current_gain_value.setText(f"{gain} %")
 
     def on_exposure_status_changed(
-        self, exposure_us: int | None, gain: int | None, brightness: int | None
+        self,
+        exposure_us: int | None,
+        gain: int | None,
+        preview_brightness_8bit: int | None,
     ) -> None:
         if exposure_us is None or gain is None:
             self.current_exposure_value.setText("--")
@@ -396,8 +378,11 @@ class MainWindowDeviceMixin:
             self.current_gain_value.setText(f"{gain} %")
             self.exposure_status.setText(f"曝光 {self._format_exposure(exposure_us)}")
             self.gain_status.setText(f"Gain {gain}%")
-        self.current_brightness_value.setText(
-            f"{brightness} /255" if brightness is not None else "-- /255"
+        self._preview_brightness_8bit = preview_brightness_8bit
+        self.preview_brightness_value.setText(
+            f"{preview_brightness_8bit} /{PREVIEW_BRIGHTNESS_8BIT_MAX}"
+            if preview_brightness_8bit is not None
+            else f"-- /{PREVIEW_BRIGHTNESS_8BIT_MAX}"
         )
 
     def on_frame_ready(self, image: QImage) -> None:
@@ -506,6 +491,12 @@ class MainWindowDeviceMixin:
         if self.last_image is None:
             return
         exposure_us, gain = self.controller.current_exposure()
+        if capture_mode.startswith("auto_once"):
+            auto_exposure_mode = "auto_once"
+        elif capture_mode == "auto_continuous":
+            auto_exposure_mode = "continuous"
+        else:
+            auto_exposure_mode = "manual"
         metadata = {
             "captured_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "application": "EL Measurement Equipment Control",
@@ -520,7 +511,15 @@ class MainWindowDeviceMixin:
             "exposure_time_ms": exposure_us / 1000.0,
             "gain_percent": gain,
             "capture_mode": capture_mode,
-            "auto_exposure_target": getattr(self, "_last_valid_auto_target", 120),
+            "AutoExposureMode": auto_exposure_mode,
+            "AutoExposureTarget": (
+                DEFAULT_AUTO_EXPOSURE_TARGET
+                if auto_exposure_mode != "manual"
+                else None
+            ),
+            "PreviewBrightness8bit": getattr(
+                self, "_preview_brightness_8bit", None
+            ),
             "auto_converged": auto_converged,
             "selected_recipe": self.selected_recipe.to_dict() if self.selected_recipe else None,
             "smu": self.smu_manager.connection_metadata(

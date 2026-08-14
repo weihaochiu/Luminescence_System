@@ -3,8 +3,11 @@ from __future__ import annotations
 from enum import Enum
 
 
-AUTO_TARGET_MIN = 16
-AUTO_TARGET_MAX = 220
+# Fixed RisingCam SDK target for operator-facing Live View auto exposure.
+# This is not PreviewBrightness8bit, SensorBitDepth, ContainerBitDepth, or
+# ScientificDN, and it must not be used as a Recipe exposure/gain setting.
+DEFAULT_AUTO_EXPOSURE_TARGET = 120
+PREVIEW_BRIGHTNESS_8BIT_MAX = 255
 
 
 class ExposureMode(str, Enum):
@@ -19,14 +22,3 @@ class ExposureMode(str, Enum):
             ExposureMode.CONTINUOUS_AUTO: "持續自動曝光",
             ExposureMode.MANUAL: "手動曝光",
         }[self]
-
-
-def validate_auto_target(target: int) -> int:
-    """Return a valid SDK AE target without silently changing invalid input."""
-
-    value = int(target)
-    if not AUTO_TARGET_MIN <= value <= AUTO_TARGET_MAX:
-        raise ValueError(
-            f"影像亮度目標允許範圍為 {AUTO_TARGET_MIN}–{AUTO_TARGET_MAX} /255。"
-        )
-    return value
