@@ -14,7 +14,7 @@
 
 1. `main.py` 呼叫 `gui.app.main()`。
 2. `app.py` 建立 Qt Application 與 `MainWindow`。
-3. `MainWindow` 建立相機控制器、SMU 連線／控制／監測服務、Recipe Store 與 HDR Settings Store。
+3. `MainWindow` 建立相機控制器、SMU 連線／控制／監測服務與 Recipe Store。
 4. 主畫面從 Store 載入通過驗證的 Recipe；EL Matrix 的 Sample ID 與 Area 由各 Logical Channel 保存。
 5. 使用者確認無硬體動作的量測摘要後建立 immutable Measurement Snapshot，完整 preflight 在任何 OUTPUT ON／routing／capture 前彙整執行；worker 只讀 snapshot，主執行緒持續處理 Live View、Progress 與安全停止。
 6. worker 依序執行全 Channel polarity、verified all-off、一次 Shared Dark，再逐 Channel 執行 Dark I–V 與 EL Matrix；所有 exit path 共用 verified safe shutdown。
@@ -36,7 +36,7 @@
 | --- | --- | --- |
 | `main.py` | 最小啟動入口 | UI、硬體或資料邏輯 |
 | `app.py` | Qt Application 初始化 | 量測流程 |
-| `main_window.py` | 主狀態、Recipe/HDR 協調、應用生命週期 | 大量 widget 建構、相機 SDK 細節 |
+| `main_window.py` | 主狀態、Recipe 協調、應用生命週期 | 大量 widget 建構、相機 SDK 細節 |
 | `main_window_ui.py` | 主畫面、選單、工具列、狀態列、訊號連接 | Recipe JSON、相機 SDK 命令 |
 | `main_window_devices.py` | 相機／SMU 連線、UI request routing、Live View、曝光拍攝、一般影像存檔 | SCPI、ownership、safety、polarity |
 | `main_window_measurement.py` | Recipe worker 生命週期、Manual 啟動確認與 finally safety cleanup 接線 | SCPI、polarity calculation |
@@ -55,7 +55,7 @@ Camera Temperature Monitoring 的依賴與資料流固定為：
 - Chart 只保留最近 30 分鐘（1800 samples）的顯示資料，但 session CSV 保存全部有效 samples。關閉 Chart 只隱藏 presentation，不停止 monitoring 或 logging。
 - CSV 位於 AppData `logs/camera_temperature_YYYYMMDD_HHMMSS.csv`，欄位為 `timestamp,temperature_c`，timestamp 使用含 milliseconds 與 timezone 的 ISO 8601。
 - 寫圖時只消費 `CameraTemperatureMonitor.metadata_fields()`。最近有效 sample 超過 3 秒即視為 stale；unavailable/stale 時省略 `CameraTemperature_C` 與 `CameraTemperatureTimestamp`，不寫 0 或 `None`。
-- 一般 TIFF／PNG／JPEG／BMP 沿用既有同名 JSON sidecar；HDR raw EL／Dark、Master Dark、float32 TIFF 與 preview PNG 也使用各自同名 sidecar。metadata I/O 不改變 image pixels 或 bit depth。
+- 一般 TIFF／PNG／JPEG／BMP 沿用既有同名 JSON sidecar；metadata I/O 不改變 image pixels 或 bit depth。
 - 暫時 SDK error、invalid value 或 unavailable 為 non-fatal，當次 sample 跳過並在下一 interval 重試；缺少 `NNCAM_FLAG_GETTEMPERATURE` 時記錄一次 unsupported、顯示 N/A 並停止無意義查詢。
 
 類別內不需要 instance 狀態的格式化 helper 必須明確使用 `@staticmethod`；其餘方法必須保留 `self`／`cls` 參數。`_format_exposure()` 由相機開啟、手動套用與自動曝光訊號共同呼叫，測試需驗證其 descriptor 綁定方式，不能只檢查函式內容。
@@ -64,29 +64,14 @@ Camera Temperature Monitoring 的依賴與資料流固定為：
 
 | 模組 | 單一責任 |
 | --- | --- |
-| `recipe_store.py` | Recipe dataclass、schema v8、Channel／Matrix、明確舊版遷移／future rejection、Matrix safety 驗證與 Store |
+| `recipe_store.py` | Recipe dataclass、schema v10、Channel／Matrix、明確舊版遷移／future rejection、Matrix safety 驗證與 Store |
 | `recipe_dialog.py` | Recipe 管理對話框外殼、頁面導航與穩定公開入口 |
-| `recipe_dialog_pages.py` | 八個設定頁與 widget 建構 |
-| `recipe_dialog_points.py` | EL 點位產生、表格解析、HDR 欄位反灰、相機欄位保存 |
+| `recipe_dialog_pages.py` | 四個設定頁與 widget 建構 |
 | `recipe_dialog_logic.py` | 表單與 Recipe 雙向綁定、CRUD、驗證、摘要、JSON 匯入／匯出 |
 
 `recipe_store.py` 即使較長仍維持單檔，因為 schema、遷移、驗證及時間估算共享相同資料不變條件。只有日後出現第二種獨立量測類型或 schema 遷移顯著增加時，才重新評估拆分。
 
-### 4.3 HDR
-
-| 模組 | 單一責任 |
-| --- | --- |
-| `hdr_settings.py` | 系統級 HDR 設定、驗證、雜湊與舊設定遷移 |
-| `hdr_settings_dialog.py` | `設定 → HDR` 編輯介面 |
-| `auto_hdr.py` | 曝光規劃、預掃描估算、第一幀過曝判定、提前終止、Dark 扣除與定量 HDR 合成 |
-| `hdr_output.py` | 原始 EL／Dark、Master Dark、float32 TIFF、preview 與 JSON／CSV manifest |
-| `hdr_profile.py` | T0 Profile 建立、簽章、保存、讀取與相容性檢查 |
-| `hdr_workflow.py` | T0／Aging 使用者流程與 Profile 選擇 |
-| `measurement_snapshot.py` | 完整有效設定與執行結果快照 |
-
-`auto_hdr.py` 保留完整數值流程，避免把曝光規劃、過曝判定與合成拆成過多小檔案。`hdr_output.py` 獨立是因為其責任是檔案 I/O 與稽核 manifest，且可與數值算法分開測試。
-
-### 4.4 相機、SMU 與輸出
+### 4.3 相機、SMU 與輸出
 
 | 模組 | 單一責任 |
 | --- | --- |
@@ -127,12 +112,12 @@ Camera Temperature Monitoring 的依賴與資料流固定為：
 
 HID path 僅供當次連線使用，設定檔不保存 USB port、Windows location 或 path。主畫面白光控制只能呼叫 `RelayService.group_on/off("white_light")`；CH1／CH2 的單獨控制僅位於設定視窗。Group ON 部分失敗會對全部 member 嘗試 OFF rollback，Group OFF 則累積失敗但繼續操作後續 member。
 
-## 5. Recipe 與 HDR 設定邊界
+## 5. Recipe 與 EL Matrix 邊界
 
-- Recipe 只保存 `hdr.enabled`；所有 HDR 詳細參數位於系統級 `hdr_settings.json`。
-- HDR 關閉時，每個 EL 點位的 Exposure、Gain、Frames 與 Frame interval 都是明確且必填的量測條件，不可使用隱含 fallback。
-- HDR 開啟時，EL 表格相機欄位僅顯示狀態；實際值由 `設定 → HDR` 與 T0 Profile 決定。
-- 量測快照必須保存當次有效的完整 Recipe、HDR 設定、T0 Profile、實際曝光計畫與輸出檔案清單。
+- Recipe 的 `el_matrix.current_density_ma_cm2`、`gains_percent`、`exposures_ms` 與 `repeat` 是正式 capture sequence 的唯一來源。
+- Recipe schema 不含 HDR；legacy `hdr` key 僅在讀取時忽略，重新儲存後不再存在。
+- Execution Plan 與 runtime 都固定使用 Channel → Current Density → Gain → Exposure → Repeat。
+- 量測快照保存當次完整 Recipe、相機／SMU／Relay 條件、正式執行順序與輸出設定。
 
 ## 6. SMU 架構與安全邊界
 
@@ -206,6 +191,6 @@ V1.5.1 修正 Manual 實體座標、矛盾 readback 復歸、verified shutdown�
 ## 9. 驗證策略
 
 - `python -m compileall -q gui tests`：所有 Python 檔案語法檢查。
-- `python -m unittest discover -s tests -v`：HDR 數值、Profile、設定快照、Recipe schema、UI 結構與模組邊界。
+- `python -m unittest discover -s tests -v`：EL Matrix、Recipe schema、量測快照、UI 結構、輸出與模組邊界。
 - Windows 實機驗證：RisingCam 連線、Live View、曝光／Gain、一般拍攝、VISA 掃描與 B2900 安全連線。
 - 涉及 SMU 輸出的版本必須另建硬體模擬、錯誤注入與緊急停止測試；race test 使用 Event／Barrier 控制 timing，不以 sleep 猜測 configure 與 OUTPUT ON 的時序，也不能只依賴 GUI 手動測試。

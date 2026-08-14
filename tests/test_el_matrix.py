@@ -11,8 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-import cv2
 import numpy as np
+import tifffile
 from PIL import Image
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QImage
@@ -21,8 +21,6 @@ from gui.el_matrix_plan import ELMatrixPlan
 from gui.el_matrix_preflight import collect_preflight_errors
 from gui.camera_capture_bridge import CameraCaptureBridge
 from gui.el_matrix_runner import CapturedFrame, ELMatrixRunner
-from gui.hdr_settings import HDRSystemSettings
-from gui.hdr_workflow import HDRSessionState
 from gui.measurement_snapshot import (
     build_el_matrix_snapshot,
     snapshot_payload,
@@ -224,44 +222,6 @@ class ELMatrixRecipeAndPlanTests(unittest.TestCase):
 
 
 class ELMatrixRunnerTests(unittest.TestCase):
-    def test_hdr_t0_runner_uses_formal_axes_and_writes_sample_profile(self) -> None:
-        recipe = _small_recipe(1)
-        recipe.polarity.enabled = False
-        recipe.dark_iv.enabled = False
-        recipe.hdr.enabled = True
-        recipe.el_matrix.current_density_ma_cm2 = [2.0]
-        settings = HDRSystemSettings(
-            max_exposure_segments=2,
-            frames_per_exposure=1,
-            min_exposure_ms=1.0,
-            max_exposure_ms=2.0,
-        )
-        session = HDRSessionState(mode="t0_auto", sample_id="HDR/A")
-        hardware = _FakeHardware()
-        with tempfile.TemporaryDirectory() as directory:
-            result = ELMatrixRunner(
-                recipe,
-                hardware,
-                directory,
-                report_progress=lambda _item: None,
-                is_cancel_requested=lambda: False,
-                sample_ids={"CH1": "HDR/A"},
-                hdr_settings=settings,
-                hdr_session=session,
-            ).run()
-            run_directory = Path(result["output_directory"])
-            profile_paths = list(run_directory.glob("CH1_HDR_A/*_HDR_Profile.json"))
-            self.assertEqual(1, len(profile_paths))
-            profile_payload = json.loads(profile_paths[0].read_text(encoding="utf-8"))
-            self.assertEqual(
-                [1.0, 2.0],
-                profile_payload["hdr_profile"]["exposure_times_ms"],
-            )
-            snapshot = json.loads(
-                (run_directory / "measurement_snapshot.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual("t0_auto", snapshot["hdr"]["session"]["mode"])
-
     def test_runner_dark_once_stabilizes_once_per_j_and_keeps_output_during_inner_matrix(self) -> None:
         recipe = _small_recipe(2)
         hardware = _FakeHardware()
@@ -423,7 +383,7 @@ class MatrixImageOutputTests(unittest.TestCase):
             self.assertEqual(str(saved.tiff_path), payload["RawTiffPath"])
             self.assertEqual(str(saved.footer_jpeg_path), payload["AnnotatedJpegPath"])
             self.assertEqual(str(saved.metadata_path), payload["MetadataJsonPath"])
-            tiff = cv2.imread(str(saved.tiff_path), cv2.IMREAD_UNCHANGED)
+            tiff = tifffile.imread(saved.tiff_path)
             np.testing.assert_array_equal(before, tiff)
             with Image.open(saved.footer_jpeg_path) as jpeg:
                 self.assertEqual(8, jpeg.width)

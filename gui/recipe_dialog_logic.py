@@ -99,7 +99,6 @@ class RecipeDialogLogicMixin:
 
         matrix = recipe.el_matrix
         self.dark_frame_enabled_check.setChecked(matrix.dark_frame_enabled)
-        self.hdr_enabled_check.setChecked(recipe.hdr.enabled)
         self.matrix_current_density_edit.setText(
             ", ".join(f"{value:g}" for value in matrix.current_density_ma_cm2)
         )
@@ -170,7 +169,6 @@ class RecipeDialogLogicMixin:
         )
 
         recipe.el_matrix.dark_frame_enabled = self.dark_frame_enabled_check.isChecked()
-        recipe.hdr.enabled = self.hdr_enabled_check.isChecked()
         recipe.el_matrix.current_density_ma_cm2 = _parse_numbers(
             self.matrix_current_density_edit.text(), float
         )
@@ -208,9 +206,7 @@ class RecipeDialogLogicMixin:
             return
         try:
             recipe = self._read_form_to_recipe()
-            plan = build_measurement_execution_plan(
-                recipe, hdr_settings=getattr(self, "hdr_settings", None)
-            )
+            plan = build_measurement_execution_plan(recipe)
         except (TypeError, ValueError):
             return
         self.execution_tree.clear()
@@ -233,7 +229,7 @@ class RecipeDialogLogicMixin:
             self.dark_step_spin, self.dark_direction_combo, self.dark_dwell_spin,
             self.dark_compliance_spin, self.dark_nplc_spin, self.dark_repeat_spin,
             self.dark_inter_delay_spin, self.dark_frame_enabled_check,
-            self.hdr_enabled_check, self.matrix_current_density_edit,
+            self.matrix_current_density_edit,
             self.matrix_gain_edit, self.matrix_exposure_edit, self.matrix_repeat_spin,
             self.matrix_voltage_compliance_spin, self.matrix_stabilization_spin,
             self.matrix_capture_timeout_spin, self.resolution_combo,
@@ -291,7 +287,7 @@ class RecipeDialogLogicMixin:
         except ValueError as exc:
             QMessageBox.warning(self, "Recipe 欄位錯誤", str(exc))
             return
-        errors = recipe.validate(getattr(self, "hdr_settings", None))
+        errors = recipe.validate()
         if recipe.state == "active" and errors:
             self._show_validation(errors, recipe.validation_warnings())
             return
@@ -308,7 +304,7 @@ class RecipeDialogLogicMixin:
         try:
             recipe = self._read_form_to_recipe()
             self._show_validation(
-                recipe.validate(getattr(self, "hdr_settings", None)),
+                recipe.validate(),
                 recipe.validation_warnings(),
             )
         except ValueError as exc:

@@ -14,7 +14,6 @@ from uuid import uuid4
 import numpy as np
 from PySide6.QtGui import QImage
 
-from .auto_hdr import _as_luminance, judge_exposure_frame, merge_quantitative_hdr
 from .el_matrix_plan import ELMatrixPlan, MatrixCapture
 from .measurement_output import (
     append_manifest,
@@ -23,8 +22,6 @@ from .measurement_output import (
     save_matrix_capture,
     sha256_file,
 )
-from .hdr_output import save_hdr_products
-from .hdr_profile import create_t0_profile
 from .measurement_execution_plan import build_measurement_execution_plan
 from .measurement_snapshot import (
     build_el_matrix_snapshot,
@@ -122,14 +119,8 @@ class _RuntimeETA:
         )
 
 
-def _execution_order(
-    recipe: Recipe,
-    hdr_settings: Any | None = None,
-    hdr_profile: Any | None = None,
-) -> list[dict[str, Any]]:
-    return build_measurement_execution_plan(
-        recipe, hdr_settings=hdr_settings, hdr_profile=hdr_profile
-    ).to_dict()["steps"]
+def _execution_order(recipe: Recipe) -> list[dict[str, Any]]:
+    return build_measurement_execution_plan(recipe).to_dict()["steps"]
 
 
 class ELMatrixRunner:
@@ -145,8 +136,6 @@ class ELMatrixRunner:
         now: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         measurement_snapshot: Mapping[str, Any] | None = None,
         sample_ids: Mapping[str, str] | None = None,
-        hdr_settings: Any | None = None,
-        hdr_session: Any | None = None,
         global_safety: Any | None = None,
         max_recipe_time_s: float = 1800.0,
         max_output_time_s: float = 600.0,
@@ -157,8 +146,6 @@ class ELMatrixRunner:
             or channel.channel
             for channel in recipe.enabled_channels()
         }
-        self.hdr_settings = hdr_settings
-        self.hdr_session = hdr_session
         self.global_safety = global_safety
         self.max_recipe_time_s = float(max_recipe_time_s)
         self.max_output_time_s = float(max_output_time_s)
@@ -166,14 +153,10 @@ class ELMatrixRunner:
             isolated = Recipe.from_dict(recipe.to_dict())
             measurement_snapshot = build_el_matrix_snapshot(
                 isolated,
-                execution_order=_execution_order(
-                    isolated, hdr_settings, getattr(hdr_session, "profile", None)
-                ),
+                execution_order=_execution_order(isolated),
                 camera={}, smu={}, relay_mapping={}, polarity_settings={},
                 sample_ids=self.sample_ids,
                 global_safety=global_safety,
-                hdr_settings=hdr_settings,
-                hdr_session=hdr_session,
             )
         else:
             isolated = Recipe.from_dict(
@@ -184,15 +167,11 @@ class ELMatrixRunner:
         self.plan = ELMatrixPlan(
             isolated,
             sample_ids=self.sample_ids,
-            hdr_settings=hdr_settings,
-            hdr_profile=getattr(hdr_session, "profile", None),
             global_safety=global_safety,
         )
         self.execution_plan = build_measurement_execution_plan(
             isolated,
             global_safety,
-            hdr_settings=hdr_settings,
-            hdr_profile=getattr(hdr_session, "profile", None),
         )
         frozen_order = snapshot_payload(self.snapshot).get("execution_order", [])
         if frozen_order != self.execution_plan.to_dict()["steps"]:
@@ -215,7 +194,6 @@ class ELMatrixRunner:
         self._last_remaining = self.plan.estimate().total_time_s
         self._last_finish: datetime | None = None
         self._shared_dark_frames: dict[tuple[int, float], list[np.ndarray]] = {}
-        self._hdr_captured_exposures: dict[str, list[tuple[float, ...]]] = {}
 
     def check_cancel(self) -> None:
         if self.is_cancel_requested():
@@ -344,7 +322,7 @@ class ELMatrixRunner:
         self._route(channel, channel_index, "Channel Switching")
         polarity = self._polarity[channel.channel]
         self.hardware.apply_polarity_factor(int(polarity["polarity_factor"]))
-        if "dark_iv" in self.execution_plan.keys:
+        if self.recipe.dark_iv.enabled:
             self.hardware.prepare_channel_dark()
             self._phase("Dark Stabilization", channel.channel, channel, channel_index)
             started = monotonic()
@@ -365,12 +343,8 @@ class ELMatrixRunner:
                 self._j_output_started = monotonic()
                 self._phase("J Stabilization", f"{channel.channel} — J={density:g} mA/cm²", channel, channel_index)
                 interruptible_wait(self.plan.matrix.stabilization_ms / 1000.0, self.check_cancel)
-                hdr_groups: list[list[np.ndarray]] = []
-                hdr_exposures: list[float] = []
-                hdr_early_stop: dict[str, Any] | None = None
                 for gain in self.plan.gains_percent:
                     for exposure in self.plan.exposures_ms:
-                        exposure_group: list[np.ndarray] = []
                         for repeat_index in range(1, self.plan.repeat + 1):
                             channel_completed += 1
                             capture = MatrixCapture(
@@ -381,62 +355,10 @@ class ELMatrixRunner:
                                 channel_capture_total, self._completed + 1,
                                 self.plan.estimate().overall_captures,
                             )
-                            source = self._capture_and_save(capture, channel, None)
-                            exposure_group.append(_as_luminance(source))
-                            if self.recipe.hdr.enabled and repeat_index == 1:
-                                bit_depth = int(
-                                    self.snapshot.get("camera", {}).get("BitDepth", 16)
-                                )
-                                saturation = (
-                                    float(self.hdr_settings.saturation_dn)
-                                    / 255.0
-                                    * ((1 << bit_depth) - 1)
-                                )
-                                decision = judge_exposure_frame(
-                                    exposure_group[0],
-                                    float(exposure),
-                                    saturation_dn=saturation,
-                                    severe_saturation_fraction=float(
-                                        self.hdr_settings.severe_saturation_fraction
-                                    ),
-                                )
-                                if (
-                                    self.hdr_settings.early_stop_on_severe_overexposure
-                                    and decision.severe_overexposure
-                                ):
-                                    hdr_early_stop = {
-                                        "exposure_ms": float(exposure),
-                                        "saturation_fraction": decision.saturation_fraction,
-                                        "reason": decision.reason,
-                                        "remaining_frames_skipped": (
-                                            self.plan.repeat - repeat_index
-                                        ),
-                                    }
-                                    break
-                        if self.recipe.hdr.enabled:
-                            if hdr_early_stop:
-                                break
-                            hdr_groups.append(exposure_group)
-                            hdr_exposures.append(float(exposure))
-                    if hdr_early_stop:
-                        break
-                if self.recipe.hdr.enabled:
-                    if not hdr_exposures:
-                        raise RuntimeError(
-                            f"{channel.channel} J={density:g} HDR has no usable exposure"
-                        )
-                    self._save_hdr_result(
-                        channel,
-                        density,
-                        int(self.plan.gains_percent[0]),
-                        hdr_exposures,
-                        hdr_groups,
-                        hdr_early_stop,
-                    )
+                            self._capture_and_save(capture, channel, None)
                 self.check_cancel()
                 self.hardware.output_off()
                 self._j_output_started = None
-            self._save_t0_hdr_profile(channel)
         finally:
             self._j_output_started = None
             self.hardware.output_off()
@@ -508,105 +430,6 @@ class ELMatrixRunner:
                 (int(capture.gain_percent), float(capture.exposure_ms)), []
             ).append(source.copy())
         return source.copy()
-
-    def _save_hdr_result(
-        self,
-        channel: ChannelRecipe,
-        density: float,
-        gain: int,
-        exposures: list[float],
-        frame_groups: list[list[np.ndarray]],
-        early_stop: dict[str, Any] | None,
-    ) -> None:
-        dark_groups: list[list[np.ndarray]] = []
-        for exposure in exposures:
-            frames = self._shared_dark_frames.get((gain, float(exposure)), [])
-            if not frames:
-                raise RuntimeError(
-                    f"HDR exposure {exposure:g} ms has no matching Shared Dark frame"
-                )
-            dark_groups.append([_as_luminance(frame) for frame in frames])
-        bit_depth = int(self.snapshot.get("camera", {}).get("BitDepth", 16))
-        saturation = float(self.hdr_settings.saturation_dn) / 255.0 * (
-            (1 << bit_depth) - 1
-        )
-        result = merge_quantitative_hdr(
-            frame_groups,
-            dark_groups,
-            exposures,
-            saturation_dn=saturation,
-            low_signal_sigma=float(self.hdr_settings.minimum_snr),
-        )
-        safe_sample = sanitize_filename(self.sample_ids[channel.channel])
-        density_token = sanitize_filename(f"{density:g}")
-        base = (
-            self.run_directory
-            / f"{channel.channel}_{safe_sample}"
-            / "EL"
-            / f"{safe_sample}_{channel.channel}_J{density_token}"
-        )
-        save_hdr_products(
-            base,
-            result,
-            save_preview_png=bool(self.hdr_settings.save_preview_png),
-            image_metadata={
-                "RecipeName": self.recipe.name,
-                "Channel": channel.channel,
-                "SampleID": self.sample_ids[channel.channel],
-                "CommandedCurrentDensity": density,
-                "Gain": gain,
-                "EarlyStop": early_stop,
-                "SnapshotSha256": self.snapshot["snapshot_sha256"],
-            },
-        )
-        self._hdr_captured_exposures.setdefault(channel.channel, []).append(
-            tuple(float(value) for value in exposures)
-        )
-
-    def _save_t0_hdr_profile(self, channel: ChannelRecipe) -> None:
-        if (
-            not self.recipe.hdr.enabled
-            or self.hdr_session is None
-            or str(getattr(self.hdr_session, "mode", "")) != "t0_auto"
-        ):
-            return
-        groups = self._hdr_captured_exposures.get(channel.channel, [])
-        if not groups:
-            raise RuntimeError(f"{channel.channel} did not produce an HDR exposure profile")
-        common = tuple(
-            exposure
-            for exposure in self.plan.exposures_ms
-            if all(exposure in group for group in groups)
-        )
-        if not common:
-            raise RuntimeError(f"{channel.channel} has no common valid HDR exposure")
-        captured = tuple(
-            exposure
-            for exposure in self.plan.exposures_ms
-            if any(exposure in group for group in groups)
-        )
-        profile = create_t0_profile(
-            self.sample_ids[channel.channel],
-            self.recipe,
-            common,
-            int(self.plan.gains_percent[0]),
-            camera_info=dict(self.snapshot.get("camera", {})),
-            hdr_settings=self.hdr_settings,
-            capture_summary={
-                "planned_exposures_ms": list(self.plan.exposures_ms),
-                "captured_exposures_ms": list(captured),
-                "valid_exposures_ms": list(common),
-                "skipped_exposures_ms": [
-                    value for value in self.plan.exposures_ms if value not in captured
-                ],
-            },
-        )
-        safe_sample = sanitize_filename(self.sample_ids[channel.channel])
-        profile.save(
-            self.run_directory
-            / f"{channel.channel}_{safe_sample}"
-            / profile.suggested_filename()
-        )
 
     def _metadata(self, capture: MatrixCapture, channel: ChannelRecipe | None,
                   applicable_channels: list[str] | None, frame: CapturedFrame,

@@ -75,8 +75,6 @@ class MainWindowUIMixin:
         )
         self.recipe_manager_action.setShortcut(QKeySequence("Ctrl+R"))
         self.recipe_manager_action.setToolTip("建立、編輯、驗證或匯入／匯出 Recipe（Ctrl+R）")
-        self.hdr_settings_action = QAction("HDR…", self)
-        self.hdr_settings_action.setToolTip("設定共用的定量 HDR 參數與過曝提前終止規則")
         self.polarity_settings_action = QAction("極性確認…", self)
         self.polarity_settings_action.setToolTip("設定手動輸出與 Recipe 共用的 Jsc / Voc 極性確認條件")
         self.relay_settings_action = QAction("Relay 設定…", self)
@@ -106,7 +104,6 @@ class MainWindowUIMixin:
         self.exit_action.triggered.connect(self.close)
         self.about_action.triggered.connect(self.show_about)
         self.recipe_manager_action.triggered.connect(self.open_recipe_manager)
-        self.hdr_settings_action.triggered.connect(self.open_hdr_settings)
         self.polarity_settings_action.triggered.connect(self.open_polarity_settings)
         self.smu_safety_settings_action.triggered.connect(self.open_smu_safety_settings)
         self.relay_settings_action.triggered.connect(self.open_relay_settings)
@@ -138,7 +135,6 @@ class MainWindowUIMixin:
         settings_menu.addSeparator()
         settings_menu.addAction(self.recipe_manager_action)
         settings_menu.addAction(self.polarity_settings_action)
-        settings_menu.addAction(self.hdr_settings_action)
         settings_menu.addAction(self.smu_safety_settings_action)
         settings_menu.addAction(self.relay_settings_action)
         settings_menu.addSeparator()
@@ -410,7 +406,6 @@ class MainWindowUIMixin:
             "measurement_path_edit",
             "measurement_path_button",
             "selected_recipe_label",
-            "hdr_session_button",
             "white_light_status",
             "white_light_button",
             "start_measurement_button",
@@ -419,7 +414,6 @@ class MainWindowUIMixin:
             setattr(self, name, getattr(bar, name))
         self.measurement_path_edit.setText(str(self.settings.value("measurement/output_root", "")))
         self.measurement_path_button.clicked.connect(self.choose_measurement_output_root)
-        self.hdr_session_button.clicked.connect(self.configure_hdr_session)
         self.white_light_button.setEnabled(False)
         self.white_light_button.clicked.connect(self.toggle_white_light)
         bar.sample_ids_changed.connect(self._on_sample_ids_changed)

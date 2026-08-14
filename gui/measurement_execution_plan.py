@@ -41,39 +41,16 @@ class EffectiveMatrixCaptureAxes:
     gains_percent: tuple[int, ...]
     exposures_ms: tuple[float, ...]
     repeat: int
-    hdr_enabled: bool
 
 
-def effective_matrix_capture_axes(
-    recipe: Recipe,
-    hdr_settings: Any | None = None,
-    *,
-    hdr_profile: Any | None = None,
-) -> EffectiveMatrixCaptureAxes:
-    """Return the one effective capture schedule shared by preview and runtime."""
+def effective_matrix_capture_axes(recipe: Recipe) -> EffectiveMatrixCaptureAxes:
+    """Return the capture schedule owned exclusively by Recipe.el_matrix."""
 
-    if recipe.hdr.enabled:
-        if hdr_profile is not None:
-            return EffectiveMatrixCaptureAxes(
-                (int(hdr_profile.gain_percent),),
-                tuple(float(value) for value in hdr_profile.exposure_times_ms),
-                int(hdr_profile.frames_per_exposure),
-                True,
-            )
-        if hdr_settings is not None:
-            return EffectiveMatrixCaptureAxes(
-                (int(hdr_settings.locked_gain_percent),),
-                tuple(float(value) for value in hdr_settings.planned_exposures_ms()),
-                int(hdr_settings.frames_per_exposure),
-                True,
-            )
-        return EffectiveMatrixCaptureAxes((), (), 0, True)
     matrix = recipe.el_matrix
     return EffectiveMatrixCaptureAxes(
         tuple(int(value) for value in matrix.gains_percent),
         tuple(float(value) for value in matrix.exposures_ms),
         int(matrix.repeat),
-        False,
     )
 
 
@@ -81,98 +58,71 @@ def _leaf(key: str, title: str, **details: Any) -> ExecutionStep:
     return ExecutionStep(key, title, details=details)
 
 
-def _hdr_children_from_exposures(
-    exposures: tuple[float, ...], early_stop_enabled: bool
-) -> tuple[ExecutionStep, ...]:
-    if not exposures:
-        return (_leaf("hdr_settings_required", "HDR 系統設定待載入"),)
-    children = [
-        _leaf("hdr_base", f"Base / T0（{exposures[0]:g} ms）")
-    ] if exposures else []
-    children.extend(
-        _leaf(f"hdr_stop_{index}", f"Stop {index}（{exposure:g} ms）")
-        for index, exposure in enumerate(exposures[1:], start=1)
-    )
-    if early_stop_enabled:
-        children.append(_leaf("hdr_early_stop", "飽和提前終止判定"))
-    children.append(_leaf("hdr_merge", "線性合併 / 輸出"))
-    return tuple(children)
-
-
-def _matrix_channel_steps(
-    recipe: Recipe,
-    hdr_settings: Any | None,
-    hdr_profile: Any | None,
-) -> Iterable[ExecutionStep]:
+def _matrix_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
     matrix = recipe.el_matrix
-    axes = effective_matrix_capture_axes(
-        recipe, hdr_settings, hdr_profile=hdr_profile
-    )
+    axes = effective_matrix_capture_axes(recipe)
     for channel in recipe.enabled_channels():
         density_steps: list[ExecutionStep] = []
         for density in matrix.current_density_ma_cm2:
-            if recipe.hdr.enabled:
-                capture_steps = (
-                    ExecutionStep(
-                        "hdr",
-                        "HDR",
-                        _hdr_children_from_exposures(
-                            axes.exposures_ms,
-                            bool(
-                                getattr(
-                                    hdr_settings,
-                                    "early_stop_on_severe_overexposure",
-                                    False,
-                                )
+            gain_steps = tuple(
+                ExecutionStep(
+                    f"gain_{gain}",
+                    f"Gain {gain}%",
+                    tuple(
+                        ExecutionStep(
+                            f"exposure_{exposure:g}",
+                            f"Exposure {exposure:g} ms",
+                            tuple(
+                                _leaf(f"repeat_{index}", f"Repeat {index}")
+                                for index in range(1, axes.repeat + 1)
                             ),
-                        ),
+                        )
+                        for exposure in axes.exposures_ms
                     ),
                 )
-            else:
-                capture_steps = tuple(
-                    ExecutionStep(
-                        f"gain_{gain}",
-                        f"Gain {gain}%",
-                        tuple(
-                            _leaf(
-                                f"exposure_{exposure:g}",
-                                f"Exposure {exposure:g} ms × {matrix.repeat}",
-                            )
-                            for exposure in matrix.exposures_ms
-                        ),
-                    )
-                    for gain in matrix.gains_percent
-                )
+                for gain in axes.gains_percent
+            )
             density_steps.append(
                 ExecutionStep(
                     f"density_{density:g}",
                     f"Current Density {density:g} mA/cm²",
-                    capture_steps,
+                    gain_steps,
                 )
             )
+        channel_steps: list[ExecutionStep] = []
+        if recipe.dark_iv.enabled:
+            channel_steps.append(
+                ExecutionStep(
+                    "dark_iv",
+                    "Dark IV",
+                    (
+                        _leaf("dark_iv_apply", "套用 Dark IV 設定"),
+                        _leaf("dark_iv_measure", "Sweep / Measure"),
+                        _leaf("dark_iv_save", "保存結果"),
+                    ),
+                )
+            )
+        channel_steps.append(ExecutionStep("el_matrix", "EL Matrix", tuple(density_steps)))
         yield ExecutionStep(
-            f"channel_{channel.channel.lower()}", channel.channel, tuple(density_steps)
+            f"channel_{channel.channel.lower()}", channel.channel, tuple(channel_steps)
         )
 
 
 def build_measurement_execution_plan(
     recipe: Recipe,
     global_settings: Any | None = None,
-    *,
-    hdr_settings: Any | None = None,
-    hdr_profile: Any | None = None,
 ) -> MeasurementExecutionPlan:
-    """Build the exact enabled workflow; disabled phases are absent."""
+    """Build the exact enabled workflow in the same order used by the runner."""
 
-    del global_settings  # Reserved for future plan annotations; safety stays global.
+    del global_settings
     steps: list[ExecutionStep] = [
         ExecutionStep(
             "initialize",
             "初始化 / 前置檢查",
             (
-                _leaf("camera_preflight", "相機與解析度確認"),
-                _leaf("smu_preflight", "SMU OUTPUT OFF 與安全限制確認"),
-                _leaf("output_preflight", "輸出目錄與磁碟空間確認"),
+                _leaf("camera_preflight", "相機連線 / 能力檢查"),
+                _leaf("smu_preflight", "SMU OUTPUT OFF / 身分確認"),
+                _leaf("output_preflight", "輸出目錄 / 空間 / 快照檢查"),
             ),
         )
     ]
@@ -189,32 +139,16 @@ def build_measurement_execution_plan(
                 ),
             )
         )
-    if recipe.dark_iv.enabled:
-        steps.append(
-            ExecutionStep(
-                "dark_iv",
-                "Dark IV",
-                (
-                    _leaf("dark_iv_apply", "套用 Dark IV 設定"),
-                    _leaf("dark_iv_measure", "Sweep / Measure"),
-                    _leaf("dark_iv_save", "儲存結果"),
-                ),
-            )
-        )
     if recipe.el_matrix.dark_frame_enabled:
         steps.append(
             ExecutionStep(
                 "dark_frame",
-                "Dark Frame",
-                (_leaf("dark_frame_acquire", "拍攝 Shared Dark Matrix"),),
+                "Shared Dark Frame",
+                (_leaf("dark_frame_acquire", "擷取 Shared Dark Matrix"),),
             )
         )
     steps.append(
-        ExecutionStep(
-            "el_matrix",
-            "EL Matrix",
-            tuple(_matrix_channel_steps(recipe, hdr_settings, hdr_profile)),
-        )
+        ExecutionStep("channels", "Channels", tuple(_matrix_channel_steps(recipe)))
     )
     steps.append(
         ExecutionStep(
@@ -226,4 +160,5 @@ def build_measurement_execution_plan(
             ),
         )
     )
+    steps.append(ExecutionStep("safe_shutdown", "Safe Shutdown"))
     return MeasurementExecutionPlan(tuple(steps))

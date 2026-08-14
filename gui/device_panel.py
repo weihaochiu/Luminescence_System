@@ -124,7 +124,6 @@ class DevicePanel(QWidget):
         recipes: list[Recipe],
         preferred_id: str = "",
         *,
-        hdr_settings: object | None = None,
         global_safety: object | None = None,
     ) -> None:
         self.recipes = list(recipes)
@@ -134,7 +133,6 @@ class DevicePanel(QWidget):
             try:
                 counts = ELMatrixPlan(
                     recipe,
-                    hdr_settings=hdr_settings,
                     global_safety=global_safety,
                 ).capture_counts()
             except ValueError:

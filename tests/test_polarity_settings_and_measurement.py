@@ -115,7 +115,6 @@ class PolaritySettingsTests(unittest.TestCase):
         settings = PolarityMeasurementSettings(jsc_sample_count=7)
         snapshot = build_measurement_snapshot(
             Recipe(),
-            type("HDR", (), {"snapshot": lambda self: {}})(),
             "test",
             polarity_settings=settings,
             polarity_result={"polarity_result": "NORMAL", "polarity_factor": 1},

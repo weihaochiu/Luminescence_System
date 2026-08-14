@@ -12,8 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-import cv2
 import numpy as np
+import tifffile
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 from PySide6.QtGui import QImage
 
@@ -193,9 +193,9 @@ def save_scientific_tiff(path: Path, scientific_image: np.ndarray) -> None:
     if source.dtype != np.uint16:
         raise TypeError("TIFF scientific master requires uint16 source data")
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = source if source.ndim == 2 else cv2.cvtColor(source, cv2.COLOR_RGB2BGR)
-    if not cv2.imwrite(str(path), encoded):
-        raise OSError(f"Unable to write scientific TIFF: {path}")
+    if source.ndim not in (2, 3) or (source.ndim == 3 and source.shape[2] != 3):
+        raise ValueError("Scientific image must be H×W or H×W×3")
+    tifffile.imwrite(path, source, photometric="rgb" if source.ndim == 3 else "minisblack")
 
 
 def save_matrix_capture(

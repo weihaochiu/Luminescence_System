@@ -44,7 +44,6 @@ class MeasurementControlBar(QFrame):
         self.recipe_label = QLabel("Recipe")
         self.selected_recipe_label = QLabel("尚未選擇")
         self.selected_recipe_label.setWordWrap(True)
-        self.hdr_session_button = QPushButton("HDR：未設定")
         self.white_light_status = QLabel("白光 ● 未連線")
         self.white_light_button = QPushButton("開啟白光")
         self.start_measurement_button = QPushButton("開始量測")
@@ -129,7 +128,7 @@ class MeasurementControlBar(QFrame):
         widgets = (
             self.sample_label, self.sample_container, self.path_label,
             self.measurement_path_edit, self.measurement_path_button,
-            self.recipe_label, self.selected_recipe_label, self.hdr_session_button,
+            self.recipe_label, self.selected_recipe_label,
             self.white_light_status, self.white_light_button,
             self.start_measurement_button, self.stop_measurement_button,
         )
@@ -143,7 +142,6 @@ class MeasurementControlBar(QFrame):
         self.grid.addWidget(self.sample_container, 0, 1)
         self.grid.addWidget(self.recipe_label, 0, 2)
         self.grid.addWidget(self.selected_recipe_label, 0, 3, 1, 2)
-        self.grid.addWidget(self.hdr_session_button, 0, 5)
         self.grid.addWidget(self.path_label, 1, 0)
         self.grid.addWidget(self.measurement_path_edit, 1, 1, 1, 4)
         self.grid.addWidget(self.measurement_path_button, 1, 5)
@@ -160,8 +158,7 @@ class MeasurementControlBar(QFrame):
         self.grid.addWidget(self.path_label, 2, 0)
         self.grid.addWidget(self.measurement_path_edit, 2, 1, 1, 3)
         self.grid.addWidget(self.measurement_path_button, 2, 4)
-        self.grid.addWidget(self.hdr_session_button, 3, 0, 1, 2)
-        self.grid.addWidget(self.white_light_status, 3, 2, 1, 3)
+        self.grid.addWidget(self.white_light_status, 3, 0, 1, 5)
         self.grid.addWidget(self.white_light_button, 4, 0)
         self.grid.addWidget(self.start_measurement_button, 4, 1)
         self.grid.addWidget(self.stop_measurement_button, 4, 2, 1, 3)

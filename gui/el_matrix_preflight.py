@@ -17,15 +17,11 @@ def estimate_required_bytes(
     width: int,
     height: int,
     *,
-    hdr_settings: Any | None = None,
-    hdr_profile: Any | None = None,
     global_safety: Any | None = None,
 ) -> int:
     pixels = max(1, int(width)) * max(1, int(height))
     captures = ELMatrixPlan(
         recipe,
-        hdr_settings=hdr_settings,
-        hdr_profile=hdr_profile,
         global_safety=global_safety,
     ).capture_counts()["overall"]
     # RAW TIFF + annotated JPEG + metadata and manifest allowance.
@@ -51,11 +47,9 @@ def collect_preflight_errors(
     camera_snapshot: Mapping[str, Any],
     current_camera: Mapping[str, Any],
     output_root: str | Path,
-    hdr_settings: Any | None = None,
-    hdr_profile: Any | None = None,
     global_safety: Any | None = None,
 ) -> list[str]:
-    errors = list(recipe.validate(hdr_settings, global_safety))
+    errors = list(recipe.validate(global_safety))
     if not smu_metadata.get("connected"):
         errors.append("SMU 未連線")
     if not smu_metadata.get("supported"):
@@ -87,9 +81,7 @@ def collect_preflight_errors(
         errors.append("Camera 未連線")
     exposure_range = current_camera.get("exposure_range_us")
     gain_range = current_camera.get("gain_range")
-    axes = effective_matrix_capture_axes(
-        recipe, hdr_settings, hdr_profile=hdr_profile
-    )
+    axes = effective_matrix_capture_axes(recipe)
     if not exposure_range:
         errors.append("Camera 未提供 Exposure SDK capability")
     else:
@@ -119,8 +111,6 @@ def collect_preflight_errors(
             recipe,
             int(camera_snapshot.get("ImageWidth", 0)),
             int(camera_snapshot.get("ImageHeight", 0)),
-            hdr_settings=hdr_settings,
-            hdr_profile=hdr_profile,
             global_safety=global_safety,
         )
         available = shutil.disk_usage(root).free

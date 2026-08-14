@@ -50,24 +50,16 @@ class ELMatrixPlan:
         recipe: Recipe,
         *,
         sample_ids: dict[str, str] | None = None,
-        hdr_settings: object | None = None,
-        hdr_profile: object | None = None,
         global_safety: object | None = None,
     ) -> None:
-        if recipe.hdr.enabled and hdr_settings is None and hdr_profile is None:
-            raise ValueError("HDR Recipe requires global HDR settings or a locked T0 Profile")
-        errors = recipe.validate(hdr_settings, global_safety)
+        errors = recipe.validate(global_safety)
         if errors:
             raise ValueError("Invalid EL Matrix Recipe: " + "; ".join(errors))
         self.recipe = recipe
         self.channels = tuple(recipe.enabled_channels())
         self.matrix = recipe.el_matrix
         self.sample_ids = dict(sample_ids or {})
-        self.hdr_settings = hdr_settings
-        self.hdr_profile = hdr_profile
-        axes = effective_matrix_capture_axes(
-            recipe, hdr_settings, hdr_profile=hdr_profile
-        )
+        axes = effective_matrix_capture_axes(recipe)
         self.gains_percent = axes.gains_percent
         self.exposures_ms = axes.exposures_ms
         self.repeat = axes.repeat

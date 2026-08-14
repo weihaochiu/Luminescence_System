@@ -5,6 +5,13 @@
 
 註：版本摘要中的「Recipe 停用／暫緩」只描述當時版本，現行狀態一律以 FLOW-ELM-001 與 V1.8.2 為準。
 
+## Current superseding requirement — HDR removal
+
+- 狀態：已完成（2026-08-14）。
+- 現行產品不包含 HDR UI、設定、Recipe schema、runtime、snapshot、preflight、output、Profile 或專用模組。
+- 舊 Recipe 的 legacy `hdr` key 只在載入時忽略，重新儲存後移除。
+- 本文件後續所有 HDR 條目只保留為歷史需求紀錄，不代表現行功能或相容性承諾。
+
 ## 1. 強制維護規則
 
 本文件是後續使用者需求的正式追蹤紀錄。每次新增、修改、取消或延後功能時，開發者必須：

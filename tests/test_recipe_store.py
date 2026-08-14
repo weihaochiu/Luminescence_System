@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gui.hdr_settings import HDRSystemSettings
 from gui.recipe_store import Recipe, RecipeStore
 
 
@@ -14,7 +13,7 @@ class RecipeStoreTests(unittest.TestCase):
         self.assertEqual([], recipe.validate())
         self.assertEqual(("TIFF", "JPG with Footer"), recipe.output.selected_formats())
 
-    def test_v9_round_trip_contains_only_formal_recipe_sections(self) -> None:
+    def test_v10_round_trip_contains_only_formal_recipe_sections(self) -> None:
         recipe = Recipe()
         recipe.name = "Round trip"
         recipe.state = "active"
@@ -25,7 +24,7 @@ class RecipeStoreTests(unittest.TestCase):
             store.upsert(recipe)
             loaded = RecipeStore(path).recipes[0]
         payload = loaded.to_dict()
-        self.assertEqual(9, RecipeStore.schema_version)
+        self.assertEqual(10, RecipeStore.schema_version)
         for removed in ("camera", "el_sweep", "dark_frames", "smu", "safety"):
             self.assertNotIn(removed, payload)
         self.assertNotIn("sample_id", payload["channels"][0])
@@ -51,17 +50,6 @@ class RecipeStoreTests(unittest.TestCase):
         recipe.output.format_jpg = False
         recipe.output.format_jpg_with_footer = False
         self.assertTrue(any("至少必須選擇" in error for error in recipe.validate()))
-
-    def test_hdr_uses_global_settings_and_requires_dark_and_tiff(self) -> None:
-        recipe = Recipe()
-        recipe.hdr.enabled = True
-        settings = HDRSystemSettings(max_exposure_segments=4)
-        self.assertEqual([], recipe.validate(settings))
-        recipe.el_matrix.dark_frame_enabled = False
-        self.assertTrue(any("Dark Frame" in error for error in recipe.validate(settings)))
-        recipe.el_matrix.dark_frame_enabled = True
-        recipe.output.format_tiff = False
-        self.assertTrue(any("TIFF" in error for error in recipe.validate(settings)))
 
     def test_legacy_sources_migrate_but_are_not_written_back(self) -> None:
         migrated = Recipe.from_dict({
@@ -93,6 +81,20 @@ class RecipeStoreTests(unittest.TestCase):
         })
         self.assertFalse(migrated.el_matrix.dark_frame_enabled)
         self.assertEqual(("PNG",), migrated.output.selected_formats())
+
+    def test_legacy_hdr_key_is_ignored_and_removed_on_save(self) -> None:
+        legacy = Recipe.from_dict({"name": "Legacy", "hdr": {"enabled": True}})
+        self.assertFalse(hasattr(legacy, "hdr"))
+        self.assertNotIn("hdr", legacy.to_dict())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recipes.json"
+            path.write_text(
+                '{"schema_version":9,"recipes":[{"name":"Legacy","hdr":{"enabled":true}}]}',
+                encoding="utf-8",
+            )
+            store = RecipeStore(path)
+            store.save()
+            self.assertNotIn('"hdr"', path.read_text(encoding="utf-8"))
 
     def test_current_schema_rejects_deprecated_sections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

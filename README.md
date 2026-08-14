@@ -1,4 +1,11 @@
-# EL 量測設備控制程式 V1.8.2
+# EL 量測設備控制程式
+
+## Current workflow: EL Matrix only
+
+- Recipe schema v10 不含 HDR；舊 Recipe 的 legacy `hdr` key 只在載入時忽略，重新儲存後即消失。
+- 正式量測順序固定為：初始化／Preflight → 選配極性確認 → 選配 Shared Dark → 各 Channel 的選配 Dark IV → Current Density → Gain → Exposure → Repeat → 輸出 → Safe Shutdown。
+- Gain、Exposure 與 Repeat 完全由 `recipe.el_matrix` 控制；主畫面、Recipe UI、Settings、snapshot、preflight、runner 與輸出均無 HDR 分支。
+- Scientific TIFF 使用 NumPy 與 tifffile；PNG/JPEG 視覺化使用 Pillow，專案不再依賴 OpenCV。
 
 ## V1.8.2 Safe Pixel CSV Post-processing
 
@@ -25,7 +32,7 @@
 - 相機連線後使用 bundled RisingCam `Nncam.get_Temperature()` 每秒讀取一次感測器溫度；SDK 的 0.1 °C 整數會轉為 °C。
 - 左側「相機溫度」與狀態列即時顯示目前溫度；「相機 → 相機溫度趨勢圖…」顯示最近 30 分鐘、目前值與本次 session 最低／最高值。
 - 每次相機連線在 AppData `logs` 建立 `camera_temperature_YYYYMMDD_HHMMSS.csv`，有效 sample 逐筆 flush；關閉圖表不影響 monitoring 或 logging。
-- 一般 TIFF／PNG／JPEG／BMP 與 HDR raw EL、Dark、Master Dark、linear TIFF、preview PNG 皆可透過同名 JSON sidecar 保存 `CameraTemperature_C` 與 `CameraTemperatureTimestamp`，不改變 pixel data 或 bit depth。
+- 一般 TIFF／PNG／JPEG／BMP 可透過同名 JSON sidecar 保存 `CameraTemperature_C` 與 `CameraTemperatureTimestamp`，不改變 pixel data 或 bit depth。
 - 影像寫檔只取用 monitor 的最近有效 snapshot，不另查 SDK；超過 3 秒的 stale sample 或 unavailable 值會省略欄位，不偽造 0 °C。
 - 暫時讀取失敗為 non-fatal，下一秒繼續嘗試；未宣告 `NNCAM_FLAG_GETTEMPERATURE` 的相機顯示 N/A 並停止重複查詢。
 
@@ -52,7 +59,7 @@
 - 新增 Manual ↔ Recipe 安全交接，以及 Emergency latch／VISA 佇列行為的明確狀態與訊息。
 - Responsive control bar 會在 runtime font、style、screen／DPI 變更時重新計算 metrics；修正 Recipe 重複文字。
 
-V1.8.1 已啟用上述非 HDR EL Matrix 正式流程；定量 HDR Matrix 仍由 validation 阻擋，且尚未完成 Keysight／Relay／Camera 組合的實機 acceptance test。
+V1.8.1 已啟用上述 EL Matrix 正式流程；Keysight／Relay／Camera 組合仍需完成實機 acceptance test。
 
 ## V1.5.0 SMU state／安全自動連線／Responsive GUI
 
@@ -248,29 +255,17 @@ V1.2 當時只完成 Recipe 資料結構與介面；其「開始量測禁用」�
 - 完成後回零及 OUTPUT OFF
 - Compliance 發生時確認或中止
 
-### 4 相機／非 HDR 預設
+### 4 EL Matrix
 
-- 非 HDR 預設 Exposure／Gain／Frames／Frame interval（只供建立或批次填入 EL 點位）
-- Frame handling、trigger、timeout
+- Current Density、Gain、Exposure 與 Repeat 列表
+- Voltage Compliance、J Stabilization、Shared Dark 與 Capture timeout
 
-非 HDR 實際拍攝一律使用 EL 表格的逐列數值，不存在隱含的全域 fallback。解析度、ROI、Pixel format 與讀出模式不允許逐點改變，以保留 pixel-to-pixel mapping 的一致性。
+正式拍攝一律使用 EL Matrix 的數值，不存在隱含的全域 fallback。解析度、ROI、Pixel format 與讀出模式不允許逐點改變，以保留 pixel-to-pixel mapping 的一致性。
 
-### 5 EL 點位
+### 5 Capture order
 
-- 本頁上方選擇是否啟用 HDR；詳細 HDR 參數統一到主選單 `設定 → HDR`
-- 啟用 HDR 時，相機欄位反灰並顯示「啟用 HDR」
-- T0 全域自動預掃描、固定 Gain 與自動決定實際曝光段數
-- 嚴重過曝時保存判斷幀並提前終止更長曝光
-- Aging 匯入並鎖定首次 HDR Profile
-- 各曝光原始 EL／Dark、Master Dark 與 float32 HDR 強制保存
-
-- Source Current／Source Voltage
-- 電流密度、電流或電壓單位
-- Ascending／Descending／Bidirectional
-- Repeat 與輪次間隔
-- Voltage／Current Compliance
-- 線性、對數、自訂列表建表
-- HDR 關閉時，每點 Exposure、Gain、Frames 與 Frame interval 皆為必填
+- Channel → Current Density → Gain → Exposure → Repeat
+- 每個 capture 保存科學 TIFF、選定的視覺化輸出、JSON metadata 與 manifest。
 
 不同曝光且 Gain 固定時，後續分析仍須使用匹配 Dark、確認相機線性並做曝光正規化；不同 Gain 在完成 Gain calibration 前不可直接合併成定量 EL–I 或 k mapping。
 
@@ -332,7 +327,7 @@ Dark I–V／EL scan summary CSV、JSON metadata 與 Recipe snapshot 為可啟�
 
 ## 本版安全界線
 
-V1.4.1 的歷史範圍只開放 Manual CV／CC；V1.8.1 已新增非 HDR Recipe 的 Jsc／Voc、Shared Dark、每 Channel Dark I–V、EL Matrix 與相機同步。HDR acquisition 仍不屬於本次正式 Matrix runner。
+V1.4.1 的歷史範圍只開放 Manual CV／CC；目前已支援 Recipe 的 Jsc／Voc、Shared Dark、每 Channel Dark I–V、EL Matrix 與相機同步。
 
 Emergency latch 能阻止 Emergency request 之後尚未送出的 `OUTPUT ON`；正在執行中的 blocking PyVISA call 無法宣稱可被安全強制 preempt。Keysight B2900 實體輸出、readback 與 failure recovery 仍需以低限制、無敏感 DUT 條件進行實機驗證。
 
@@ -341,19 +336,13 @@ Emergency latch 能阻止 Emergency request 之後尚未送出的 `OUTPUT ON`；
 ## 程式結構
 
 - `main.py`：入口
-- `gui/main_window.py`：主視窗狀態、Recipe／HDR 協調與生命週期
+- `gui/main_window.py`：主視窗狀態、Recipe 協調與生命週期
 - `gui/main_window_ui.py`：主畫面、工具列、狀態列與訊號連接
 - `gui/main_window_devices.py`：相機／SMU 連線、Live View 與一般拍攝
 - `gui/recipe_store.py`：四階段 Recipe schema、驗證、時間估算與 JSON 儲存
 - `gui/recipe_dialog.py`：Recipe 管理對話框骨架與頁面導航
-- `gui/recipe_dialog_pages.py`：八個 Recipe 設定頁的 UI 建構
-- `gui/recipe_dialog_points.py`：EL 點位表、HDR 反灰與相機欄位邏輯
+- `gui/recipe_dialog_pages.py`：Recipe 設定頁的 UI 建構
 - `gui/recipe_dialog_logic.py`：Recipe 表單綁定、CRUD、驗證、摘要及匯入／匯出
-- `gui/auto_hdr.py`：自動曝光規劃、過曝提前終止與線性 HDR 合成
-- `gui/hdr_output.py`：HDR TIFF、原始分曝光資料與 JSON／CSV manifest 輸出
-- `gui/hdr_settings.py`、`hdr_settings_dialog.py`：共用 HDR 設定、舊版遷移與 `設定 → HDR` 介面
-- `gui/hdr_profile.py`：T0 Profile 建立、讀寫、條件簽章與相容性檢查
-- `gui/hdr_workflow.py`：T0／Aging 選擇與 Profile 匯入介面
 - `gui/measurement_snapshot.py`：不可變的完整量測有效設定與執行快照
 - `gui/device_panel.py`：相機、SMU、Recipe 左側清單
 - `gui/camera_controller.py`：RisingCam SDK 控制

@@ -14,7 +14,6 @@ from PIL import Image
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QLabel
 
-from gui.auto_hdr import merge_quantitative_hdr
 from gui.camera_controller import CameraController
 from gui.camera_temperature_chart import CameraTemperatureChart
 from gui.camera_temperature_monitor import (
@@ -24,8 +23,6 @@ from gui.camera_temperature_monitor import (
     TemperatureSample,
     format_temperature_c,
 )
-from gui.hdr_output import save_hdr_capture_set, save_hdr_products
-from gui.hdr_settings import HDRSystemSettings
 from gui.image_io import save_image_and_metadata
 from gui.main_window_devices import MainWindowDeviceMixin
 from gui.sdk import nncam
@@ -322,60 +319,6 @@ class CameraTemperatureMetadataTests(unittest.TestCase):
             1,
             ui_source.count("self.controller.camera_closing.connect(self.temperature_monitor.stop)"),
         )
-
-    def test_hdr_raw_dark_master_linear_and_preview_outputs_get_metadata_sidecars(self) -> None:
-        frames = [np.full((2, 3, 4), 20, dtype=np.uint8)]
-        dark = [np.full((2, 3, 4), 1, dtype=np.uint8)]
-        result = merge_quantitative_hdr(frames, dark, [100], low_signal_sigma=1)
-        metadata = {
-            "CameraTemperature_C": 40.37,
-            "CameraTemperatureTimestamp": "2026-08-13T10:30:01.123+08:00",
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            products = save_hdr_capture_set(
-                Path(directory) / "EL",
-                frames,
-                dark,
-                result,
-                100,
-                HDRSystemSettings().snapshot(),
-                {
-                    "planned_exposures_ms": [100],
-                    "captured_exposures_ms": [100],
-                    "valid_exposures_ms": [100],
-                    "excluded_exposures_ms": [],
-                    "skipped_exposures_ms": [],
-                    "early_termination": None,
-                },
-                image_metadata=metadata,
-            )
-            image_paths = list(Path(directory).glob("*.tiff")) + list(
-                Path(directory).glob("*.png")
-            )
-            for image_path in image_paths:
-                sidecar = image_path.with_suffix(image_path.suffix + ".json")
-                self.assertTrue(sidecar.is_file(), image_path.name)
-                self.assertEqual(metadata, json.loads(sidecar.read_text(encoding="utf-8")))
-            manifest = json.loads(Path(products["manifest_json"]).read_text(encoding="utf-8"))
-        self.assertGreaterEqual(len(image_paths), 5)
-        self.assertEqual(metadata, manifest["image_metadata"])
-
-    def test_hdr_metadata_sidecar_does_not_change_float32_pixels(self) -> None:
-        frames = [np.full((2, 3, 4), 20, dtype=np.uint8)]
-        dark = [np.zeros((2, 3, 4), dtype=np.uint8)]
-        result = merge_quantitative_hdr(frames, dark, [100], low_signal_sigma=1)
-        with tempfile.TemporaryDirectory() as directory:
-            plain, _ = save_hdr_products(Path(directory) / "plain", result, False)
-            tagged, _ = save_hdr_products(
-                Path(directory) / "tagged",
-                result,
-                False,
-                image_metadata={"CameraTemperature_C": 40.0},
-            )
-            plain_pixels = np.asarray(Image.open(plain))
-            tagged_pixels = np.asarray(Image.open(tagged))
-        np.testing.assert_array_equal(plain_pixels, tagged_pixels)
-
 
 if __name__ == "__main__":
     unittest.main()

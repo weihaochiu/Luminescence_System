@@ -174,7 +174,6 @@ class RecipeDialogPagesMixin:
         form = QFormLayout(page)
         self.dark_frame_enabled_check = QCheckBox("拍攝 Dark Frame")
         self.dark_frame_enabled_check.setChecked(True)
-        self.hdr_enabled_check = QCheckBox("啟用 HDR（詳細參數：設定 → HDR）")
         self.matrix_current_density_edit = QLineEdit("2, 4, 6, 8, 10, 12")
         self.matrix_gain_edit = QLineEdit("100, 200, 300, 400, 500")
         self.matrix_exposure_edit = QLineEdit(
@@ -188,7 +187,6 @@ class RecipeDialogPagesMixin:
         self.matrix_stabilization_spin.setSuffix(" ms")
         self.matrix_capture_timeout_spin = _double_spin(0.1, 3600, 20, " s")
         form.addRow(self.dark_frame_enabled_check)
-        form.addRow(self.hdr_enabled_check)
         form.addRow("Current Density List (mA/cm²)", self.matrix_current_density_edit)
         form.addRow("Gain List (%)", self.matrix_gain_edit)
         form.addRow("Exposure List (ms)", self.matrix_exposure_edit)
@@ -197,24 +195,12 @@ class RecipeDialogPagesMixin:
         form.addRow("J Stabilization Time", self.matrix_stabilization_spin)
         form.addRow("Capture timeout", self.matrix_capture_timeout_spin)
         note = QLabel(
-            "HDR 關閉時，Gain 與 Exposure 列表是唯一正式拍攝來源；HDR 開啟時，"
-            "曝光序列由全域 HDR 設定 / T0 Profile 控制。"
+            "Gain、Exposure 與每條件拍攝張數是正式量測唯一的拍攝序列來源。"
         )
         note.setWordWrap(True)
         note.setStyleSheet("background:#edf5fa; border:1px solid #b6cedd; padding:8px;")
         form.addRow(note)
-        self.hdr_enabled_check.toggled.connect(
-            self._set_non_hdr_matrix_widgets_enabled
-        )
         return page
-
-    def _set_non_hdr_matrix_widgets_enabled(self, enabled: bool) -> None:
-        for widget in (
-            self.matrix_gain_edit,
-            self.matrix_exposure_edit,
-            self.matrix_repeat_spin,
-        ):
-            widget.setEnabled(not enabled)
 
     def _build_output_tab(self) -> QWidget:
         page = QWidget()

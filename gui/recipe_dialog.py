@@ -36,12 +36,10 @@ class RecipeManagerDialog(
         store: RecipeStore,
         parent: QWidget | None = None,
         *,
-        hdr_settings: object | None = None,
         camera_resolutions: list[tuple[int, int]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.store = store
-        self.hdr_settings = hdr_settings
         self.current_recipe: Recipe | None = None
         self.setWindowTitle("EL Recipe 管理－四階段流程")
         self.resize(1500, 850)

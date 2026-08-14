@@ -18,28 +18,14 @@ def _now() -> str:
 
 def build_measurement_snapshot(
     recipe: Any,
-    hdr_settings: Any,
     measurement_role: str,
     camera_info: dict[str, Any] | None = None,
-    hdr_profile: Any | None = None,
-    exposure_plan: Any | None = None,
     execution_summary: dict[str, Any] | None = None,
     output_records: list[dict[str, Any]] | None = None,
     polarity_settings: Any | None = None,
     polarity_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Capture the complete effective configuration used by one measurement."""
-    profile_payload = hdr_profile.to_dict() if hdr_profile is not None else None
-    plan_payload = None
-    if exposure_plan is not None:
-        plan_payload = {
-            "planned_exposures_ms": list(exposure_plan.exposures_ms),
-            "gain_percent": int(exposure_plan.gain_percent),
-            "frames_per_exposure": int(exposure_plan.frames_per_exposure),
-            "frame_interval_s": float(exposure_plan.frame_interval_s),
-            "mode": str(exposure_plan.mode),
-            "estimated_point_time_s": float(exposure_plan.estimated_point_time_s),
-        }
     return {
         "schema": "el_measurement_effective_settings_snapshot",
         "snapshot_version": "1.0",
@@ -51,13 +37,7 @@ def build_measurement_snapshot(
             "version": int(recipe.version),
             "complete_snapshot": recipe.to_dict(),
         },
-        "hdr": {
-            "enabled_by_recipe": bool(recipe.hdr.enabled),
-            "system_settings_snapshot": hdr_settings.snapshot() if recipe.hdr.enabled else None,
-            "t0_profile_snapshot": profile_payload,
-            "effective_exposure_plan": plan_payload,
-            "execution": execution_summary,
-        },
+        "execution": execution_summary,
         "camera": dict(camera_info or {}),
         "polarity_measurement": {
             "system_settings_snapshot": (
@@ -69,15 +49,9 @@ def build_measurement_snapshot(
             "current_density_ma_cm2": list(
                 recipe.el_matrix.current_density_ma_cm2
             ),
-            "gains_percent": (
-                None if recipe.hdr.enabled else list(recipe.el_matrix.gains_percent)
-            ),
-            "exposures_ms": (
-                None if recipe.hdr.enabled else list(recipe.el_matrix.exposures_ms)
-            ),
-            "repeat": (
-                None if recipe.hdr.enabled else int(recipe.el_matrix.repeat)
-            ),
+            "gains_percent": list(recipe.el_matrix.gains_percent),
+            "exposures_ms": list(recipe.el_matrix.exposures_ms),
+            "repeat": int(recipe.el_matrix.repeat),
             "dark_frame_enabled": bool(recipe.el_matrix.dark_frame_enabled),
         },
         "output_records": list(output_records or []),
@@ -139,8 +113,6 @@ def build_el_matrix_snapshot(
     started_at: str | None = None,
     sample_ids: Mapping[str, str] | None = None,
     global_safety: Any | None = None,
-    hdr_settings: Any | None = None,
-    hdr_session: Any | None = None,
     output_directory: str = "",
 ) -> Mapping[str, Any]:
     """Create a recursively immutable, content-addressed Matrix snapshot."""
@@ -177,28 +149,6 @@ def build_el_matrix_snapshot(
         "smu": _plain(smu),
         "relay": {"logical_to_physical": dict(relay_mapping)},
         "global_safety": _plain(global_safety),
-        "hdr": {
-            "enabled": bool(recipe.hdr.enabled),
-            "system_settings": (
-                hdr_settings.snapshot()
-                if recipe.hdr.enabled and hasattr(hdr_settings, "snapshot")
-                else _plain(hdr_settings) if recipe.hdr.enabled else None
-            ),
-            "session": (
-                {
-                    "mode": str(hdr_session.mode),
-                    "sample_id": str(hdr_session.sample_id),
-                    "profile_path": str(hdr_session.profile_path),
-                    "profile": (
-                        hdr_session.profile.to_dict()
-                        if getattr(hdr_session, "profile", None) is not None
-                        else None
-                    ),
-                }
-                if recipe.hdr.enabled and hdr_session is not None
-                else None
-            ),
-        },
         "output": _plain(recipe.output),
         "output_directory": str(output_directory),
     }

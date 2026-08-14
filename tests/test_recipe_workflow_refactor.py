@@ -8,11 +8,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import cv2
 import numpy as np
+import tifffile
 from PIL import Image
 
-from gui.hdr_settings import HDRSystemSettings
 from gui.camera_controller import CameraController
 from gui.sdk import nncam
 from gui.el_matrix_plan import ELMatrixPlan
@@ -66,20 +65,19 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                 self.assertEqual(
                     [
                         "1. 初始化 / 前置檢查",
-                        "2. Dark Frame",
-                        "3. EL Matrix",
+                        "2. Shared Dark Frame",
+                        "3. Channels",
                         "4. 輸出（full）",
+                        "5. Safe Shutdown",
                     ],
                     [
                         dialog.execution_tree.topLevelItem(i).text(0)
                         for i in range(dialog.execution_tree.topLevelItemCount())
                     ],
                 )
-                dialog.hdr_enabled_check.setChecked(True)
-                self.assertFalse(dialog.matrix_gain_edit.isEnabled())
-                self.assertFalse(dialog.matrix_exposure_edit.isEnabled())
-                dialog.hdr_enabled_check.setChecked(False)
                 self.assertTrue(dialog.matrix_gain_edit.isEnabled())
+                self.assertTrue(dialog.matrix_exposure_edit.isEnabled())
+                self.assertTrue(dialog.matrix_repeat_spin.isEnabled())
             finally:
                 dialog.close()
 
@@ -107,7 +105,7 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
 
         plan_a = build_measurement_execution_plan(recipe)
         self.assertEqual(
-            ("initialize", "polarity", "dark_iv", "dark_frame", "el_matrix", "output"),
+            ("initialize", "polarity", "dark_frame", "channels", "output", "safe_shutdown"),
             plan_a.keys,
         )
 
@@ -116,21 +114,21 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
         recipe.el_matrix.dark_frame_enabled = False
         plan_b = build_measurement_execution_plan(recipe)
         self.assertEqual(
-            ("initialize", "dark_iv", "el_matrix", "output"), plan_b.keys
+            ("initialize", "channels", "output", "safe_shutdown"), plan_b.keys
         )
 
         recipe.dark_iv.enabled = False
         recipe.el_matrix.dark_frame_enabled = True
         plan_c = build_measurement_execution_plan(recipe)
         self.assertEqual(
-            ("initialize", "dark_frame", "el_matrix", "output"), plan_c.keys
+            ("initialize", "dark_frame", "channels", "output", "safe_shutdown"), plan_c.keys
         )
         serialized = json.dumps(plan_c.to_dict(), ensure_ascii=False)
         self.assertNotIn("skipped", serialized.casefold())
         self.assertNotIn("極性確認", serialized)
         self.assertNotIn("Dark IV", serialized)
 
-    def test_plan_tracks_noncontiguous_channels_hdr_and_formats(self) -> None:
+    def test_plan_tracks_noncontiguous_channels_matrix_axes_and_formats(self) -> None:
         recipe = Recipe()
         for channel in recipe.channels:
             channel.enabled = channel.channel in {"CH1", "CH3", "CH5"}
@@ -139,29 +137,31 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
         recipe.channels[1].enabled = False
         recipe.channels[2].enabled = True
         recipe.channels[3].enabled = False
-        recipe.hdr.enabled = True
         recipe.output.format_png = True
-        settings = HDRSystemSettings(max_exposure_segments=3)
-        plan = build_measurement_execution_plan(recipe, hdr_settings=settings)
-        matrix = next(step for step in plan.steps if step.key == "el_matrix")
-        self.assertEqual(["CH1", "CH3"], [child.title for child in matrix.children])
+        recipe.el_matrix.gains_percent = [100, 200]
+        recipe.el_matrix.exposures_ms = [1.0, 2.0, 5.0]
+        recipe.el_matrix.repeat = 2
+        plan = build_measurement_execution_plan(recipe)
+        channels = next(step for step in plan.steps if step.key == "channels")
+        self.assertEqual(["CH1", "CH3"], [child.title for child in channels.children])
         payload = json.dumps(plan.to_dict(), ensure_ascii=False)
-        self.assertIn("Base / T0", payload)
-        self.assertIn("Stop 1", payload)
-        self.assertIn("線性合併 / 輸出", payload)
+        self.assertIn("Gain 100%", payload)
+        self.assertIn("Exposure 2 ms", payload)
+        self.assertIn("Repeat 2", payload)
         output = next(step for step in plan.steps if step.key == "output")
         self.assertEqual(
             ["TIFF", "PNG", "JPG with Footer"],
             [child.title for child in output.children],
         )
-        runtime = ELMatrixPlan(recipe, hdr_settings=settings)
-        self.assertEqual(tuple(settings.planned_exposures_ms()), runtime.exposures_ms)
-        self.assertEqual((settings.locked_gain_percent,), runtime.gains_percent)
-        self.assertEqual(settings.frames_per_exposure, runtime.repeat)
+        runtime = ELMatrixPlan(recipe)
+        self.assertEqual((1.0, 2.0, 5.0), runtime.exposures_ms)
+        self.assertEqual((100, 200), runtime.gains_percent)
+        self.assertEqual(2, runtime.repeat)
         expected_per_channel = (
             len(recipe.el_matrix.current_density_ma_cm2)
-            * len(settings.planned_exposures_ms())
-            * settings.frames_per_exposure
+            * len(recipe.el_matrix.gains_percent)
+            * len(recipe.el_matrix.exposures_ms)
+            * recipe.el_matrix.repeat
         )
         self.assertEqual(expected_per_channel, runtime.capture_counts()["el_per_channel"])
 
@@ -192,7 +192,6 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
             bar.sample_id_edits["CH1"].setText("A")
             owner = SimpleNamespace(
                 selected_recipe=Recipe(), measurement_control_bar=bar,
-                hdr_session_state=None,
             )
             with patch(
                 "gui.main_window_measurement.QMessageBox.warning"
@@ -218,8 +217,6 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                     safety=SimpleNamespace(limits=SMUSafetyLimits())
                 )
             ),
-            hdr_settings_store=SimpleNamespace(settings=HDRSystemSettings()),
-            hdr_session_state=None,
         )
         summary = _measurement_summary(owner, plan)
         self.assertIn("樣品：CH1=A/1 / CH2=B 2", summary)
@@ -247,7 +244,7 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                 metadata,
                 recipe.output,
             )
-            reloaded = cv2.imread(str(saved.tiff_path), cv2.IMREAD_UNCHANGED)
+            reloaded = tifffile.imread(saved.tiff_path)
             self.assertEqual(np.uint16, reloaded.dtype)
             np.testing.assert_array_equal(source, reloaded)
             np.testing.assert_array_equal(before, source)
@@ -323,8 +320,7 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                 source, Image.new("RGB", (3, 1)), Path(directory) / "rgb",
                 metadata, output,
             )
-            loaded_bgr = cv2.imread(str(saved.tiff_path), cv2.IMREAD_UNCHANGED)
-            loaded_rgb = cv2.cvtColor(loaded_bgr, cv2.COLOR_BGR2RGB)
+            loaded_rgb = tifffile.imread(saved.tiff_path)
             self.assertEqual(np.uint16, loaded_rgb.dtype)
             np.testing.assert_array_equal(source, loaded_rgb)
 

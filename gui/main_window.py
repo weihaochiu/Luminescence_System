@@ -14,9 +14,6 @@ from .camera_controller import CameraController
 from .camera_temperature_chart import CameraTemperatureChart
 from .camera_temperature_monitor import CameraTemperatureMonitor
 from .emergency_manager import EmergencyManager
-from .hdr_settings import HDRSettingsStore
-from .hdr_settings_dialog import HDRSettingsDialog
-from .hdr_workflow import HDRSessionState, choose_hdr_session
 from .instrument_state_manager import InstrumentStateManager
 from .main_window_devices import MainWindowDeviceMixin
 from .main_window_ui import MainWindowUIMixin
@@ -35,7 +32,7 @@ from .smu_safety_dialog import SMUSafetyDialog, load_global_safety
 
 
 class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
-    """Top-level state owner and Recipe/HDR measurement coordinator."""
+    """Top-level state owner and Recipe measurement coordinator."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -65,10 +62,6 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.smu_manager.control.safety.limits = limits
         recipe_path = application_directory / "recipes.json"
         self.recipe_store = RecipeStore(recipe_path)
-        hdr_settings_path = application_directory / "hdr_settings.json"
-        self.hdr_settings_store = HDRSettingsStore(
-            hdr_settings_path, self.recipe_store.legacy_hdr_settings_candidate
-        )
         relay_settings_path = application_directory / "relay_settings.json"
         self.relay_settings_store = RelaySettingsStore(relay_settings_path)
         polarity_settings_path = (
@@ -90,7 +83,6 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             parent=self,
         )
         self.selected_recipe: Recipe | None = None
-        self.hdr_session_state: HDRSessionState | None = None
         self.devices: list[Any] = []
         self.camera_info: dict[str, Any] = {}
         self.last_image: QImage | None = None
@@ -137,7 +129,6 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.device_panel.set_recipes(
             self.recipe_store.available(),
             preferred,
-            hdr_settings=self.hdr_settings_store.settings,
             global_safety=self.smu_manager.control.safety.limits,
         )
         if self.device_panel.selected_recipe() is None:
@@ -149,7 +140,6 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
     def on_recipe_selected(self, recipe_id: str) -> None:
         recipe = self.recipe_store.get(recipe_id) if recipe_id else None
         self.selected_recipe = recipe if recipe and recipe.is_available() else None
-        self.hdr_session_state = None
         if self.selected_recipe is not None:
             self.settings.setValue("recipe/last_selected_id", self.selected_recipe.recipe_id)
             self.measurement_control_bar.set_active_channels(
@@ -166,21 +156,11 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         dialog = RecipeManagerDialog(
             self.recipe_store,
             self,
-            hdr_settings=self.hdr_settings_store.settings,
             camera_resolutions=list(self.camera_info.get("resolutions", [])),
         )
         dialog.recipes_changed.connect(self.refresh_recipes)
         dialog.exec()
         self.refresh_recipes()
-
-    def open_hdr_settings(self) -> None:
-        dialog = HDRSettingsDialog(self.hdr_settings_store, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.hdr_session_state = None
-            self.status_message.setText(
-                "HDR 系統設定已更新；既有量測快照與 T0 Profile 不會被覆寫"
-            )
-            self._update_measurement_controls()
 
     def open_polarity_settings(self) -> None:
         dialog = PolaritySettingsDialog(self.polarity_settings_store, self)
@@ -207,41 +187,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             self.settings.setValue("measurement/output_root", selected)
         self._update_measurement_controls()
 
-    def configure_hdr_session(self) -> None:
-        if self.selected_recipe is None:
-            QMessageBox.information(self, "尚未選擇 Recipe", "請先選擇已啟用且通過驗證的 Recipe。")
-            return
-        initial_directory = str(
-            self.settings.value("measurement/last_hdr_profile_directory", "")
-            or self.measurement_path_edit.text()
-        )
-        state = choose_hdr_session(
-            self,
-            self._primary_sample_id(),
-            self.selected_recipe,
-            self.camera_info,
-            initial_directory,
-            self.hdr_settings_store.settings,
-        )
-        if state is None:
-            return
-        self.hdr_session_state = state
-        if state.profile_path:
-            self.settings.setValue(
-                "measurement/last_hdr_profile_directory", str(Path(state.profile_path).parent)
-            )
-        self._update_measurement_controls()
-
-    def _primary_sample_id(self) -> str:
-        values = self.measurement_control_bar.sample_ids()
-        return next(iter(values.values()), "")
-
     def _on_sample_ids_changed(self) -> None:
-        if (
-            self.hdr_session_state is not None
-            and self._primary_sample_id() != self.hdr_session_state.sample_id
-        ):
-            self.hdr_session_state = None
         self._update_measurement_controls()
 
     def _update_measurement_controls(self) -> None:
@@ -249,8 +195,6 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             return
         if self.selected_recipe is None:
             self.selected_recipe_label.setText("尚未選擇")
-            self.hdr_session_button.setText("HDR：未設定")
-            self.hdr_session_button.setEnabled(False)
             reason = "請先從左側選擇已啟用且通過驗證的 Recipe。"
         else:
             counts = self._effective_capture_counts(self.selected_recipe)
@@ -259,18 +203,6 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
                 f"{len(self.selected_recipe.enabled_channels())} Channels｜"
                 f"{counts['overall']} captures"
             )
-            if self.selected_recipe.hdr.enabled:
-                self.hdr_session_button.setEnabled(True)
-                self.hdr_session_button.setText(
-                    self.hdr_session_state.short_label if self.hdr_session_state else "設定 HDR 量測…"
-                )
-                self.hdr_session_button.setToolTip(
-                    "選擇首次量測（T0 自動校正）或 Aging／重複量測（匯入並鎖定 T0 Profile）"
-                )
-            else:
-                self.hdr_session_button.setText("HDR：關閉")
-                self.hdr_session_button.setEnabled(False)
-                self.hdr_session_button.setToolTip("目前 Recipe 未啟用定量 HDR")
             blockers = []
             if not self.controller.is_open: blockers.append("相機未連線")
             if not self.smu_manager.is_connected: blockers.append("SMU 未連線")
@@ -280,13 +212,9 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             missing_samples = self.measurement_control_bar.missing_sample_channels()
             if missing_samples:
                 blockers.append("尚未設定樣品 ID：" + "、".join(missing_samples))
-            hdr_blocker = self._hdr_session_blocker(self.selected_recipe)
-            if hdr_blocker:
-                blockers.append(hdr_blocker)
             reason = "；".join(blockers) if blockers else "開始多 Channel EL Matrix 自動量測"
         running = self._measurement_worker is not None
         if running:
-            self.hdr_session_button.setEnabled(False)
             reason = "EL Matrix 量測進行中"
         self.start_measurement_button.setEnabled(
             bool(self.selected_recipe is not None and not blockers and not running)
@@ -295,30 +223,6 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.start_measurement_button.setToolTip(reason)
         self.stop_measurement_button.setEnabled(self._measurement_worker is not None)
         self.stop_measurement_button.setToolTip("執行既有 Measurement Safe Stop。")
-
-    def _revalidate_locked_hdr_profile(self) -> None:
-        state = self.hdr_session_state
-        if (
-            state is None
-            or state.mode != "stability_locked"
-            or state.profile is None
-            or self.selected_recipe is None
-        ):
-            return
-        errors, _warnings = state.profile.compatibility_issues(
-            self._primary_sample_id(),
-            self.selected_recipe,
-            self.camera_info,
-            self.hdr_settings_store.settings,
-        )
-        if errors:
-            self.hdr_session_state = None
-            self._update_measurement_controls()
-            QMessageBox.critical(
-                self,
-                "已取消 HDR Profile 鎖定",
-                "連接相機後發現首次量測 Profile 不相容：\n\n• " + "\n• ".join(errors),
-            )
 
     def show_about(self) -> None:
         QMessageBox.about(

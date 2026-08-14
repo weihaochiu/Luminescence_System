@@ -119,12 +119,6 @@ class LegacyCameraRecipe:
 
 
 @dataclass
-class HDRRecipe:
-    """A Recipe only decides whether the system-wide HDR workflow is used."""
-    enabled: bool = False
-
-
-@dataclass
 class LegacyELPoint:
     enabled: bool = True
     setpoint: float = 1.0
@@ -203,7 +197,6 @@ class Recipe:
     el_matrix: ELMatrixRecipe = field(default_factory=ELMatrixRecipe)
     polarity: PolarityRecipe = field(default_factory=PolarityRecipe)
     dark_iv: DarkIVRecipe = field(default_factory=DarkIVRecipe)
-    hdr: HDRRecipe = field(default_factory=HDRRecipe)
     output: OutputRecipe = field(default_factory=OutputRecipe)
     import_review_items: list[str] = field(default_factory=list)
 
@@ -229,30 +222,9 @@ class Recipe:
             decimal_from_number(current_density) * decimal_from_number(channel.area_cm2)
         )
 
-    def hdr_upper_bound_exposures_ms(self, hdr_settings: Any | None = None) -> list[float]:
-        if not self.hdr.enabled or hdr_settings is None:
-            return []
-        return list(hdr_settings.planned_exposures_ms())
+    def dark_profiles(self) -> list[dict[str, Any]]:
+        """Return the Shared Dark profiles required by the Matrix capture axes."""
 
-    def dark_profiles(self, hdr_settings: Any | None = None) -> list[dict[str, Any]]:
-        """Compatibility API backed only by the formal Matrix capture axes."""
-
-        if self.hdr.enabled:
-            if hdr_settings is None:
-                return [{"profile_id": "HDR_RUNTIME_PROFILE", "provisional": True}]
-            gain = int(hdr_settings.locked_gain_percent)
-            return [
-                {
-                    "profile_id": f"HDR_PROVISIONAL_{index + 1}",
-                    "exposure_ms": exposure,
-                    "gain_percent": gain,
-                    "resolution": self.output.resolution_id,
-                    "pixel_format": "RGB48",
-                    "trigger_mode": "software",
-                    "provisional": True,
-                }
-                for index, exposure in enumerate(self.hdr_upper_bound_exposures_ms(hdr_settings))
-            ]
         profiles: dict[tuple[Any, ...], dict[str, Any]] = {}
         for gain in self.el_matrix.gains_percent:
             for exposure in self.el_matrix.exposures_ms:
@@ -289,17 +261,17 @@ class Recipe:
             * self.dark_iv.inter_scan_delay_s
         )
 
-    def matrix_output_on_time_s(self, hdr_settings: Any | None = None) -> float:
+    def matrix_output_on_time_s(self) -> float:
         """Worst continuous OUTPUT ON interval from the formal runtime plan."""
 
         from .el_matrix_plan import ELMatrixPlan
 
-        return ELMatrixPlan(self, hdr_settings=hdr_settings).estimate().output_on_per_j_s
+        return ELMatrixPlan(self).estimate().output_on_per_j_s
 
-    def matrix_estimated_time_s(self, hdr_settings: Any | None = None) -> float:
+    def matrix_estimated_time_s(self) -> float:
         from .el_matrix_plan import ELMatrixPlan
 
-        return ELMatrixPlan(self, hdr_settings=hdr_settings).estimate().total_time_s
+        return ELMatrixPlan(self).estimate().total_time_s
 
     def matrix_worst_power_mw(self) -> float:
         currents = [
@@ -311,11 +283,6 @@ class Recipe:
 
     def validation_warnings(self) -> list[str]:
         warnings: list[str] = []
-        if self.hdr.enabled:
-            warnings.append(
-                "T0 必須建立樣品專屬 HDR Profile；Aging／重複量測必須匯入並鎖定該 Profile"
-            )
-            return warnings
         if len(self.el_matrix.gains_percent) > 1 or len(self.el_matrix.exposures_ms) > 1:
             if len(self.el_matrix.gains_percent) > 1:
                 warnings.append("不同 EL 點使用不同 Gain；未完成 Gain 校正前不可直接建立定量 EL–I 或 k mapping")
@@ -325,7 +292,6 @@ class Recipe:
 
     def validate(
         self,
-        hdr_settings: Any | None = None,
         global_safety: Any | None = None,
     ) -> list[str]:
         """Validate formal Recipe data against application-wide safety limits."""
@@ -366,11 +332,8 @@ class Recipe:
             errors.append("J Stabilization Time 不可小於 0")
         if matrix.capture_timeout_s <= 0:
             errors.append("相機 timeout 必須大於 0")
-        effective_exposures = matrix.exposures_ms
-        if self.hdr.enabled and hdr_settings is not None:
-            effective_exposures = list(hdr_settings.planned_exposures_ms())
         longest_exposure_s = max(
-            (float(value) / 1000.0 for value in effective_exposures), default=0.0
+            (float(value) / 1000.0 for value in matrix.exposures_ms), default=0.0
         )
         if matrix.capture_timeout_s < longest_exposure_s:
             errors.append("相機 timeout 不可短於最大曝光時間")
@@ -409,13 +372,6 @@ class Recipe:
             if not 0 < self.dark_iv.current_compliance_ma <= maximum_current_compliance_ma:
                 errors.append("Dark I–V current compliance 超過全域安全設定")
 
-        if self.hdr.enabled:
-            if hdr_settings is not None:
-                errors.extend(f"HDR 系統設定：{item}" for item in hdr_settings.validate())
-            if not matrix.dark_frame_enabled:
-                errors.append("HDR 必須啟用 Dark Frame 以取得各曝光的匹配暗場")
-            if not self.output.format_tiff:
-                errors.append("定量 HDR 必須選擇 TIFF 科學影像輸出")
         if not self.output.selected_formats():
             errors.append("至少必須選擇一種影像輸出格式")
         if not self.output.save_summary_csv:
@@ -434,14 +390,14 @@ class Recipe:
             errors.append("Pixel CSV 後處理需要 TIFF 科學影像來源")
         return errors
 
-    def estimated_time_s(self, hdr_settings: Any | None = None) -> float:
-        return self.matrix_estimated_time_s(hdr_settings)
+    def estimated_time_s(self) -> float:
+        return self.matrix_estimated_time_s()
 
-    def matrix_capture_counts(self, hdr_settings: Any | None = None) -> dict[str, int]:
+    def matrix_capture_counts(self) -> dict[str, int]:
         from .measurement_execution_plan import effective_matrix_capture_axes
 
         matrix = self.el_matrix
-        axes = effective_matrix_capture_axes(self, hdr_settings)
+        axes = effective_matrix_capture_axes(self)
         channels = len(self.enabled_channels())
         combination = (
             len(axes.gains_percent) * len(axes.exposures_ms) * axes.repeat
@@ -471,6 +427,8 @@ class Recipe:
                 "Legacy Recipe safety/SMU values were detected and ignored; they did "
                 "not override application-wide safety settings"
             )
+        if "hdr" in data:
+            LOG.warning("Legacy HDR configuration was removed and ignored.")
         # V1 single-current Recipes are migrated into a one-point four-stage draft.
         old_camera = _dataclass_from_dict(LegacyCameraRecipe, data.get("camera"))
         el_data = data.get("el_sweep", {})
@@ -620,7 +578,6 @@ class Recipe:
             el_matrix=_dataclass_from_dict(ELMatrixRecipe, matrix_data),
             polarity=_dataclass_from_dict(PolarityRecipe, data.get("polarity")),
             dark_iv=_dataclass_from_dict(DarkIVRecipe, data.get("dark_iv")),
-            hdr=_dataclass_from_dict(HDRRecipe, data.get("hdr")),
             output=_dataclass_from_dict(OutputRecipe, output_data),
             import_review_items=[str(item) for item in data.get("import_review_items", [])]
             if isinstance(data.get("import_review_items", []), list) else [],
@@ -630,17 +587,15 @@ class Recipe:
 class RecipeStore:
     """JSON-backed Recipe repository stored in the user's application-data folder."""
 
-    schema_version = 9
+    schema_version = 10
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.recipes: list[Recipe] = []
-        self.legacy_hdr_settings_candidate: dict[str, Any] | None = None
         self.load()
 
     def load(self) -> None:
         self.recipes = []
-        self.legacy_hdr_settings_candidate = None
         if not self.path.exists():
             return
         try:
@@ -660,10 +615,6 @@ class RecipeStore:
             for item in raw_recipes:
                 if not isinstance(item, dict):
                     raise ValueError("Every Recipe entry must be a JSON object")
-                legacy_hdr = item.get("hdr") or {}
-                if isinstance(legacy_hdr, dict) and any(key != "enabled" for key in legacy_hdr):
-                    self.legacy_hdr_settings_candidate = dict(legacy_hdr)
-                    break
             self.recipes = [Recipe.from_dict(item) for item in raw_recipes]
         except Exception as exc:
             raise RuntimeError(f"無法讀取 Recipe 檔案：{exc}") from exc
@@ -684,7 +635,7 @@ class RecipeStore:
         if not isinstance(data, dict):
             raise ValueError("匯入檔案必須包含 recipe JSON object")
         allowed = {item.name for item in fields(Recipe)} | {
-            "camera", "el_sweep", "dark_frames", "smu", "safety"
+            "camera", "el_sweep", "dark_frames", "smu", "safety", "hdr"
         }
         unknown = sorted(set(data) - allowed)
         if unknown:
@@ -695,13 +646,13 @@ class RecipeStore:
             )
             if deprecated_sections:
                 raise ValueError(
-                    "Recipe schema v9 不可包含已移除欄位："
+                    "Recipe schema v10 不可包含已移除欄位："
                     + ", ".join(deprecated_sections)
                 )
             sections: tuple[tuple[str, type[Any]], ...] = (
                 ("geometry", GeometryRecipe), ("el_matrix", ELMatrixRecipe),
                 ("polarity", PolarityRecipe), ("dark_iv", DarkIVRecipe),
-                ("hdr", HDRRecipe), ("output", OutputRecipe),
+                ("output", OutputRecipe),
             )
             for section, model in sections:
                 raw = data.get(section)
@@ -728,8 +679,7 @@ class RecipeStore:
                             f"Recipe.channels[{index}] 含有不支援欄位：" + ", ".join(extra)
                         )
         important = {
-            "name", "channels", "el_matrix", "polarity", "dark_iv",
-            "hdr", "output",
+            "name", "channels", "el_matrix", "polarity", "dark_iv", "output",
         }
         review = [f"缺少重要欄位：{key}" for key in sorted(important - set(data))]
         recipe = Recipe.from_dict(data)

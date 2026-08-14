@@ -278,7 +278,6 @@ class MainWindowDeviceMixin:
             camera_model=str(info.get("model", "")),
             camera_identifier=str(info.get("identifier", "")),
         )
-        self._revalidate_locked_hdr_profile()
 
     def on_camera_closed(self) -> None:
         self.connect_action.setText("相機連線")
