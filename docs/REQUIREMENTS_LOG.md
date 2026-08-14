@@ -1,9 +1,9 @@
 # EL 量測設備控制程式需求紀錄
 
-文件版本：1.4
+文件版本：1.5
 最後更新：2026-08-14（UTC+8）
 
-註：版本摘要中的「Recipe 停用／暫緩」只描述當時版本，現行狀態一律以 FLOW-ELM-001 與 V1.8.1 為準。
+註：版本摘要中的「Recipe 停用／暫緩」只描述當時版本，現行狀態一律以 FLOW-ELM-001 與 V1.8.2 為準。
 
 ## 1. 強制維護規則
 
@@ -405,6 +405,12 @@
 ```
 
 ## 9. 版本變更摘要
+
+### V1.8.2－2026-08-14
+
+- Pixel CSV 從 EL Matrix 擷取熱路徑移至 verified safe shutdown 後的獨立後處理，禁止在 SMU OUTPUT ON 期間產生 CSV。
+- 新增 TIFF-based Shared Dark 配對（Gain／Exposure／Repeat）、atomic metadata/manifest/status、SHA-256 驗證續作與 GUI 重試。
+- GUI 改用 Runner 已完成的 safe-shutdown 結果，避免正常完成後重複以 Recipe ownership 關機而誤判 FAULT。
 
 ### V1.8.1－2026-08-14
 

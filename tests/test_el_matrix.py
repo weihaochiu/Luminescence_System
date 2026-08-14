@@ -114,6 +114,13 @@ class _FakeHardware:
     def safe_shutdown(self):
         self.safe = True
         self.events.append("safe_shutdown")
+        return {
+            "smu_output_off": True,
+            "routing_off": True,
+            "white_light_off": True,
+            "ownership_released": True,
+            "ok": True,
+        }
 
 
 def _small_recipe(channel_count: int = 2) -> Recipe:

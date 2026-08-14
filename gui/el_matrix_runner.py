@@ -19,7 +19,6 @@ from .measurement_output import (
     capture_timestamp,
     sanitize_filename,
     save_matrix_capture,
-    save_pixel_csv_products,
     sha256_file,
 )
 from .measurement_snapshot import (
@@ -73,7 +72,7 @@ class ELMatrixHardware(Protocol):
                 check_cancel: Callable[[], None]) -> CapturedFrame: ...
     def output_off(self) -> None: ...
     def clear_routing(self) -> None: ...
-    def safe_shutdown(self) -> None: ...
+    def safe_shutdown(self) -> Mapping[str, bool]: ...
 
 
 def interruptible_wait(seconds: float, check_cancel: Callable[[], None]) -> None:
@@ -173,7 +172,6 @@ class ELMatrixRunner:
         self._completed = 0
         self._eta = _RuntimeETA(self.plan)
         self._polarity: dict[str, dict[str, Any]] = {}
-        self._shared_dark: dict[tuple[int, float, int], QImage] = {}
         self._run_started = 0.0
         self._j_output_started: float | None = None
         self._last_remaining = self.plan.estimate().total_time_s
@@ -197,6 +195,7 @@ class ELMatrixRunner:
             self.run_directory / "measurement_snapshot.json", self.snapshot
         )
         self._run_started = monotonic()
+        result: dict[str, Any] | None = None
         try:
             self._run_all_polarities()
             self.hardware.prepare_shared_dark()
@@ -206,7 +205,7 @@ class ELMatrixRunner:
                 self._run_channel(channel, channel_index)
             self.check_cancel()
             final_manifest = self._write_final_files_manifest()
-            return {
+            result = {
                 "run_id": self.run_id,
                 "output_directory": str(self.run_directory),
                 "captures": self._completed,
@@ -216,7 +215,19 @@ class ELMatrixRunner:
             }
         finally:
             self._j_output_started = None
-            self.hardware.safe_shutdown()
+            shutdown_result = self.hardware.safe_shutdown()
+        normalized = dict(shutdown_result)
+        required = (
+            "smu_output_off", "routing_off", "white_light_off",
+            "ownership_released", "ok",
+        )
+        if not all(normalized.get(name) is True for name in required):
+            raise RuntimeError("Safe shutdown did not satisfy every post-processing gate")
+        if result is None:
+            raise RuntimeError("Hardware measurement ended without a result")
+        result["hardware_measurement_completed"] = True
+        result["safe_shutdown"] = normalized
+        return result
 
     def _route(self, channel: ChannelRecipe, channel_index: int, phase: str) -> None:
         self.check_cancel()
@@ -360,19 +371,15 @@ class ELMatrixRunner:
         metadata = self._metadata(capture, channel, applicable_channels, frame, readback, timestamp)
         folder, stem = self._output_location(capture, channel)
         output_stem = folder / stem
-        dark_key = (capture.gain_percent, float(capture.exposure_ms), capture.repeat_index)
-        dark_frame = self._shared_dark.get(dark_key)
-        pixel_paths = save_pixel_csv_products(
-            frame.image, output_stem, self.recipe.output,
-            dark_image=dark_frame if capture.measurement_type == "EL" else frame.image,
-            exposure_ms=capture.exposure_ms,
+        # Full-resolution Pixel CSV is deliberately deferred until verified safe
+        # shutdown.  Only durable capture products are written in this method.
+        metadata["PixelCsvPaths"] = {}
+        metadata["PixelCsvPostprocessStatus"] = (
+            "pending" if self.recipe.output.export_pixel_csv else "not_requested"
         )
-        metadata["PixelCsvPaths"] = pixel_paths
         saved = save_matrix_capture(frame.image, output_stem, metadata)
         metadata.update(saved.file_hashes)
         append_manifest(self.run_directory / "measurement_manifest.csv", metadata)
-        if capture.measurement_type == "DARK":
-            self._shared_dark[dark_key] = frame.image.copy()
         elapsed = monotonic() - started
         self._completed += 1
         self._eta.complete_capture(capture.exposure_ms / 1000.0, elapsed)

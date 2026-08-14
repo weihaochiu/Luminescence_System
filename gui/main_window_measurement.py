@@ -2,6 +2,8 @@ from __future__ import annotations
 
 """Background Recipe lifecycle wiring with centralized SMU cleanup."""
 
+import json
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QThread
@@ -15,6 +17,12 @@ from .el_matrix_runner import ELMatrixRunner, MatrixRuntimeProgress
 from .measurement_snapshot import build_el_matrix_snapshot, snapshot_payload
 from .measurement_progress_dialog import MeasurementProgressDialog
 from .measurement_worker import MeasurementProgress, MeasurementWorker
+from .pixel_csv_postprocessor import (
+    PixelCSVPostprocessError,
+    PixelCSVPostprocessor,
+    PixelCSVProgress,
+    verified_safe_shutdown,
+)
 from .polarity_settings import PolarityMeasurementSettings
 from .recipe_store import Recipe
 from .smu_control import SMUInterlockError, SMUOwnership
@@ -28,11 +36,13 @@ def _best_effort_routing_off(self: Any, source: str) -> bool:
         return False
 
 
-def start_background_measurement(self: Any, run: Any) -> bool:
+def start_background_measurement(
+    self: Any, run: Any, *, acquire_recipe_ownership: bool = True
+) -> bool:
     if self._measurement_thread is not None:
         raise RuntimeError("Measurement is already running")
     control = self.smu_manager.control
-    if control.ownership is SMUOwnership.MANUAL:
+    if acquire_recipe_ownership and control.ownership is SMUOwnership.MANUAL:
         detail = "\n\n啟動 Recipe 前必須先安全關閉手動輸出。" if control.output_enabled else ""
         answer = QMessageBox.question(
             self,
@@ -44,12 +54,13 @@ def start_background_measurement(self: Any, run: Any) -> bool:
         )
         if answer != QMessageBox.StandardButton.Yes:
             return False
-    try:
-        self.emergency_manager.begin_operator_operation()
-        control.prepare_recipe_start(close_manual=True)
-    except SMUInterlockError as exc:
-        self.show_smu_error(str(exc))
-        return False
+    if acquire_recipe_ownership:
+        try:
+            self.emergency_manager.begin_operator_operation()
+            control.prepare_recipe_start(close_manual=True)
+        except SMUInterlockError as exc:
+            self.show_smu_error(str(exc))
+            return False
     thread = QThread(self)
     worker = MeasurementWorker(run)
     worker.moveToThread(thread)
@@ -65,8 +76,10 @@ def start_background_measurement(self: Any, run: Any) -> bool:
     thread.finished.connect(self._clear_measurement_worker)
     self._measurement_thread = thread
     self._measurement_worker = worker
-    _set_measurement_controls_locked(self, True)
-    self.stop_measurement_button.setEnabled(True)
+    self._measurement_hardware_active = acquire_recipe_ownership
+    if acquire_recipe_ownership:
+        _set_measurement_controls_locked(self, True)
+    self.stop_measurement_button.setEnabled(acquire_recipe_ownership)
     self.start_measurement_button.setEnabled(False)
     thread.start()
     return True
@@ -103,6 +116,8 @@ def _set_measurement_controls_locked(self: Any, locked: bool) -> None:
 
 
 def stop_background_measurement(self: Any) -> None:
+    if not getattr(self, "_measurement_hardware_active", False):
+        return
     if self._measurement_worker is not None:
         self._measurement_worker.request_cancel()
     smu_safe = self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE)
@@ -134,8 +149,19 @@ def _stop_camera_for_emergency(self: Any) -> None:
     self.controller.close_camera()
 
 
-def _on_measurement_progress(self: Any, progress: MeasurementProgress | MatrixRuntimeProgress) -> None:
+def _on_measurement_progress(
+    self: Any, progress: MeasurementProgress | MatrixRuntimeProgress | PixelCSVProgress
+) -> None:
     dialog = getattr(self, "_measurement_progress_dialog", None)
+    if isinstance(progress, PixelCSVProgress):
+        self._measurement_hardware_active = False
+        self.stop_measurement_button.setEnabled(False)
+        if dialog is not None:
+            dialog.update_postprocess_progress(progress)
+        self.status_message.setText(
+            f"Pixel CSV 後處理：{progress.current}/{progress.total} ({progress.percent:.1f}%)"
+        )
+        return
     if isinstance(progress, MatrixRuntimeProgress):
         if dialog is not None:
             dialog.update_progress(progress)
@@ -148,30 +174,56 @@ def _on_measurement_progress(self: Any, progress: MeasurementProgress | MatrixRu
 
 
 def _on_measurement_finished(self: Any, result: object) -> None:
-    smu_safe = self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE)
-    routing_safe = _best_effort_routing_off(self, "measurement_finished")
-    light_safe = self.relay_service.safe_white_light_off("measurement_finished")
-    if not (smu_safe and routing_safe and light_safe):
+    shutdown = result.get("safe_shutdown") if isinstance(result, dict) else None
+    hardware_completed = bool(
+        isinstance(result, dict) and result.get("hardware_measurement_completed") is True
+    )
+    if not hardware_completed or not verified_safe_shutdown(shutdown):
         message = "Safe shutdown verification failed; measurement remains FAULT"
         self.status_message.setText(message)
         dialog = getattr(self, "_measurement_progress_dialog", None)
         if dialog is not None:
             dialog.set_failed(message)
         return
+    self._measurement_hardware_active = False
+    self._last_measurement_result = dict(result)
     if self.emergency_manager.is_active:
         self.status_message.setText("ABORTED / EMERGENCY STOP")
     else:
+        postprocess = result.get("postprocess", {})
+        post_status = str(postprocess.get("status", "not_requested"))
+        if post_status in {"failed", "partial"}:
+            reason = str(postprocess.get("error", "Pixel CSV 後處理失敗"))
+            self.status_message.setText("硬體量測完成，但 Pixel CSV 後處理失敗")
+            self._pixel_csv_retry_context = {
+                "output_directory": result.get("output_directory"),
+                "safe_shutdown": dict(shutdown),
+                "base_result": dict(result),
+            }
+            dialog = getattr(self, "_measurement_progress_dialog", None)
+            if dialog is not None:
+                dialog.set_postprocess_failed(reason)
+                dialog.show()
+            return
+        self._pixel_csv_retry_context = None
         self.status_message.setText("Measurement completed")
     dialog = getattr(self, "_measurement_progress_dialog", None)
     if dialog is not None:
         total = int(result.get("captures", 0)) if isinstance(result, dict) else 0
-        dialog.set_complete(total)
+        postprocess = result.get("postprocess", {}) if isinstance(result, dict) else {}
+        post_total = int(postprocess.get("total_files", 0))
+        dialog.set_complete(
+            post_total or total,
+            "量測與 Pixel CSV 後處理完成"
+            if postprocess.get("status") == "completed" else "硬體量測完成",
+        )
 
 
 def _on_measurement_cancelled(self: Any) -> None:
-    self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE)
-    _best_effort_routing_off(self, "measurement_cancelled")
-    self.relay_service.safe_white_light_off("measurement_cancelled")
+    if self.smu_manager.control.ownership is SMUOwnership.RECIPE:
+        if self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE):
+            _best_effort_routing_off(self, "measurement_cancelled")
+            self.relay_service.safe_white_light_off("measurement_cancelled")
     self.status_message.setText(
         "ABORTED / EMERGENCY STOP"
         if self.emergency_manager.is_active
@@ -183,9 +235,10 @@ def _on_measurement_cancelled(self: Any) -> None:
 
 
 def _on_measurement_failed(self: Any, message: str) -> None:
-    self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE)
-    _best_effort_routing_off(self, "critical_exception_cleanup")
-    self.relay_service.safe_white_light_off("critical_exception_cleanup")
+    if self.smu_manager.control.ownership is SMUOwnership.RECIPE:
+        if self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE):
+            _best_effort_routing_off(self, "critical_exception_cleanup")
+            self.relay_service.safe_white_light_off("critical_exception_cleanup")
     self.show_error(f"Measurement failed: {message}")
     dialog = getattr(self, "_measurement_progress_dialog", None)
     if dialog is not None:
@@ -325,6 +378,7 @@ def begin_el_matrix_measurement(self: Any) -> None:
     )
     dialog = MeasurementProgressDialog(recipe.name, self)
     dialog.stop_requested.connect(self.stop_background_measurement)
+    dialog.retry_pixel_csv_requested.connect(self.retry_pixel_csv_postprocess)
     self._measurement_progress_dialog = dialog
     dialog.show()
 
@@ -337,18 +391,83 @@ def begin_el_matrix_measurement(self: Any) -> None:
             is_cancel_requested=cancelled,
             measurement_snapshot=snapshot,
         )
-        return runner.run()
+        result = runner.run()
+        if not verified_safe_shutdown(result.get("safe_shutdown")):
+            raise RuntimeError("Pixel CSV blocked: safe shutdown was not fully verified")
+        if frozen_recipe.output.export_pixel_csv:
+            progress(PixelCSVProgress(
+                current=0,
+                total=0,
+                percent=0.0,
+                remaining_time_s=0.0,
+                estimated_finish=None,
+                message="硬體量測完成，SMU 已安全關閉，正在產生 Pixel CSV",
+            ))
+            try:
+                result["postprocess"] = PixelCSVPostprocessor(
+                    result["output_directory"], result["safe_shutdown"]
+                ).run(progress)
+            except PixelCSVPostprocessError as exc:
+                status_path = Path(result["output_directory"]) / "postprocess_status.json"
+                status = {"status": "failed", "error": str(exc)}
+                if status_path.is_file():
+                    try:
+                        status = json.loads(status_path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        pass
+                status["error"] = str(exc)
+                result["postprocess"] = status
+        else:
+            result["postprocess"] = {"status": "not_requested", "total_files": 0}
+        return result
 
     if not start_background_measurement(self, run):
         dialog.set_stopped()
         dialog.close()
 
 
+def retry_pixel_csv_postprocess(self: Any) -> None:
+    context = getattr(self, "_pixel_csv_retry_context", None)
+    if not context or self._measurement_thread is not None:
+        return
+    output_directory = context.get("output_directory")
+    shutdown = context.get("safe_shutdown")
+    if not output_directory or not verified_safe_shutdown(shutdown):
+        self.status_message.setText("無法重試 Pixel CSV：缺少已驗證的安全關機結果")
+        return
+    dialog = getattr(self, "_measurement_progress_dialog", None)
+    if dialog is not None:
+        dialog.set_hardware_complete_starting_postprocess()
+        dialog.show()
+
+    def run(progress: Any, _cancelled: Any) -> object:
+        result = dict(context.get("base_result", {}))
+        try:
+            result["postprocess"] = PixelCSVPostprocessor(
+                output_directory, shutdown
+            ).run(progress)
+        except PixelCSVPostprocessError as exc:
+            status_path = Path(output_directory) / "postprocess_status.json"
+            status = {"status": "failed", "error": str(exc)}
+            if status_path.is_file():
+                try:
+                    status = json.loads(status_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    pass
+            status["error"] = str(exc)
+            result["postprocess"] = status
+        result["hardware_measurement_completed"] = True
+        result["safe_shutdown"] = dict(shutdown)
+        result["output_directory"] = str(output_directory)
+        return result
+
+    start_background_measurement(self, run, acquire_recipe_ownership=False)
+
+
 def _clear_measurement_worker(self: Any) -> None:
-    # This is the final safety net for normal return, cancellation and exceptions.
-    self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE)
     self._measurement_worker = None
     self._measurement_thread = None
+    self._measurement_hardware_active = False
     self.stop_measurement_button.setEnabled(False)
     _set_measurement_controls_locked(self, False)
     self._update_measurement_controls()
@@ -367,6 +486,7 @@ def attach_measurement_handlers(cls: type[Any]) -> None:
         _on_measurement_finished,
         _on_measurement_cancelled,
         _on_measurement_failed,
+        retry_pixel_csv_postprocess,
         _clear_measurement_worker,
         _validate_camera_matrix,
         _measurement_summary,

@@ -109,19 +109,26 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
-def _write_pixel_csv(path: Path, image: Image.Image, *, divisor: float | None = None) -> None:
+def write_pixel_csv_atomic(
+    path: Path, image: Image.Image, *, divisor: float | None = None
+) -> None:
     rgb = image.convert("RGB")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8-sig") as stream:
-        writer = csv.writer(stream)
-        writer.writerow(("y", "x", "R", "G", "B"))
-        pixels = rgb.load()
-        for y in range(rgb.height):
-            for x in range(rgb.width):
-                values = pixels[x, y]
-                if divisor is not None:
-                    values = tuple(float(value) / divisor for value in values)
-                writer.writerow((y, x, *values))
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        with temporary.open("w", newline="", encoding="utf-8-sig") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(("y", "x", "R", "G", "B"))
+            pixels = rgb.load()
+            for y in range(rgb.height):
+                for x in range(rgb.width):
+                    values = pixels[x, y]
+                    if divisor is not None:
+                        values = tuple(float(value) / divisor for value in values)
+                    writer.writerow((y, x, *values))
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def save_pixel_csv_products(
@@ -143,17 +150,19 @@ def save_pixel_csv_products(
     paths: dict[str, str] = {}
     if output_options.pixel_csv_raw:
         target = output_stem.with_name(output_stem.name + "_pixels_raw.csv")
-        _write_pixel_csv(target, raw)
+        write_pixel_csv_atomic(target, raw)
         paths["RAW"] = str(target)
     if output_options.pixel_csv_dark_corrected:
         if dark is None:
             raise RuntimeError("Dark-corrected Pixel CSV requires a matching Shared Dark frame")
         target = output_stem.with_name(output_stem.name + "_pixels_dark_corrected.csv")
-        _write_pixel_csv(target, corrected)
+        write_pixel_csv_atomic(target, corrected)
         paths["DarkCorrected"] = str(target)
     if output_options.pixel_csv_exposure_normalized:
         target = output_stem.with_name(output_stem.name + "_pixels_exposure_normalized.csv")
-        _write_pixel_csv(target, corrected, divisor=max(float(exposure_ms), 1e-12))
+        write_pixel_csv_atomic(
+            target, corrected, divisor=max(float(exposure_ms), 1e-12)
+        )
         paths["ExposureNormalized"] = str(target)
     return paths
 

@@ -1,4 +1,12 @@
-# EL 量測設備控制程式 V1.8.1
+# EL 量測設備控制程式 V1.8.2
+
+## V1.8.2 Safe Pixel CSV Post-processing
+
+- EL Matrix 硬體量測期間只保存 RAW TIFF、Footer JPG、metadata 與 manifest；SMU OUTPUT ON 期間不再產生任何全解析度 Pixel CSV。
+- Runner 完成並驗證 SMU OUTPUT OFF、routing relay 全 OFF、White Light OFF 與 ownership 釋放後，才啟動獨立的 TIFF-based Pixel CSV 後處理。
+- `postprocess_status.json`、逐張 metadata 與 Pixel CSV manifest 採 atomic write，記錄來源／Shared Dark／輸出路徑及 SHA-256；重新啟動或重試時會跳過 hash 驗證正確的既有 CSV。
+- Progress 視窗區分「硬體量測」與「Pixel CSV 後處理」，顯示檔案進度、百分比、ETA，並可在後處理失敗時重試而不改寫 RAW TIFF 或否定硬體量測完成狀態。
+- 正常完成流程直接使用 Runner 的 authoritative safe-shutdown 結果，不再由 GUI 以 `SMUOwnership.RECIPE` 重複呼叫 safe shutdown。
 
 ## V1.8.1 Multi-Channel EL Matrix Safety Completion
 

@@ -1,7 +1,7 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.8.0
-對應程式版本：V1.8.1
+文件版本：1.8.2
+對應程式版本：V1.8.2
 最後更新：2026-08-14（UTC+8）
 
 ## 1. 文件目的
@@ -18,6 +18,7 @@
 4. 主畫面從 Store 載入通過驗證的 Recipe；EL Matrix 的 Sample ID 與 Area 由各 Logical Channel 保存。
 5. 使用者確認無硬體動作的量測摘要後建立 immutable Measurement Snapshot，完整 preflight 在任何 OUTPUT ON／routing／capture 前彙整執行；worker 只讀 snapshot，主執行緒持續處理 Live View、Progress 與安全停止。
 6. worker 依序執行全 Channel polarity、verified all-off、一次 Shared Dark，再逐 Channel 執行 Dark I–V 與 EL Matrix；所有 exit path 共用 verified safe shutdown。
+7. 只有 Runner 回傳 SMU OUTPUT OFF、routing OFF、White Light OFF、ownership released 全部成功後，才由 `pixel_csv_postprocessor.py` 從 RAW TIFF 產生 Pixel CSV；CSV 失敗不回寫或刪除硬體量測資料。
 
 ## 3. 分層與依賴方向
 
@@ -104,7 +105,8 @@ Camera Temperature Monitoring 的依賴與資料流固定為：
 | `el_matrix_preflight.py` | SMU identity/VISA、Relay mapping、Camera capability/format、輸出與磁碟空間的聚合式 preflight |
 | `measurement_snapshot.py` | 遞迴 immutable Measurement Snapshot、canonical SHA-256 與原子落盤 |
 | `el_matrix_runner.py` | 全 Channel polarity → Shared Dark 一次 → 每 Channel Dark I–V → J → Gain → Exposure → Repeat；runtime watchdog 與共用 safe shutdown |
-| `measurement_output.py` | RAW TIFF、Footer JPG、逐張 JSON、Pixel CSV、manifest 路徑與 SHA-256 |
+| `measurement_output.py` | RAW TIFF、Footer JPG、逐張 JSON，以及 atomic Pixel CSV writer |
+| `pixel_csv_postprocessor.py` | verified safe-shutdown 後的 TIFF-based Pixel CSV、Shared Dark 配對、SHA-256 manifest、atomic status 與續作 |
 | `el_matrix_hardware.py` | runner 到既有 SMU／Relay／Polarity／Camera authority 的安全轉接 |
 | `camera_capture_bridge.py` | worker 等待既有 pull-mode stream 的下一張正式 frame；不建立第二 camera stream |
 | `measurement_progress_dialog.py` | modeless progress presentation；不自行重算 measurement state |

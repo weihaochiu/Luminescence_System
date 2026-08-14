@@ -146,26 +146,54 @@ class ELMatrixHardwareAdapter:
         self.relay.clear_smu_output_channels("el_matrix_channel_switch")
         self.relay.verify_smu_output_channel_state(None, "el_matrix_channel_switch")
 
-    def safe_shutdown(self) -> None:
+    def safe_shutdown(self) -> dict[str, bool]:
         failures: list[str] = []
+        smu_output_off = False
         if self.control.ownership is SMUOwnership.RECIPE:
-            if not self.control.safe_shutdown(
+            smu_output_off = bool(self.control.safe_shutdown(
                 SMUOwnership.RECIPE, reason="EL Matrix safe shutdown"
-            ):
+            ))
+            if not smu_output_off:
                 failures.append("SMU OUTPUT OFF could not be authoritatively confirmed")
+        else:
+            smu_output_off = bool(
+                self.control.ownership is SMUOwnership.IDLE
+                and self.control.last_shutdown_ok is True
+                and self.control.output_confirmed_off
+            )
+            if not smu_output_off:
+                failures.append("SMU OUTPUT OFF/ownership release was not verified")
+        routing_off = False
         try:
-            if not self.relay.safe_smu_output_channels_off("el_matrix_safe_shutdown"):
+            routing_off = bool(
+                self.relay.safe_smu_output_channels_off("el_matrix_safe_shutdown")
+            )
+            if not routing_off:
                 failures.append("Routing safe OFF could not be verified")
         except Exception as exc:
             failures.append(f"Routing safe OFF failed: {exc}")
+        white_light_off = False
         try:
-            if not self.relay.safe_white_light_off("el_matrix_safe_shutdown"):
+            white_light_off = bool(
+                self.relay.safe_white_light_off("el_matrix_safe_shutdown")
+            )
+            if not white_light_off:
                 failures.append("White Light OFF could not be verified")
         except Exception as exc:
             failures.append(f"White Light OFF failed: {exc}")
+        ownership_released = self.control.ownership is SMUOwnership.IDLE
+        if not ownership_released:
+            failures.append("SMU ownership was not safely released")
         if failures:
             reason = "; ".join(failures)
             self.control.request_external_interlock(
                 "EL Matrix safe shutdown verification failed: " + reason
             )
             raise RuntimeError(reason)
+        return {
+            "smu_output_off": smu_output_off,
+            "routing_off": routing_off,
+            "white_light_off": white_light_off,
+            "ownership_released": ownership_released,
+            "ok": True,
+        }
