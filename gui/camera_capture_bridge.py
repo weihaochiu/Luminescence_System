@@ -22,6 +22,9 @@ class _PendingCapture:
     frame: CapturedFrame | None = None
     error: str = ""
     armed: bool = False
+    minimum_sequence: int = 0
+    actual_exposure_us: int = 0
+    actual_gain_percent: int = 0
 
 
 class CameraCaptureBridge(QObject):
@@ -35,8 +38,15 @@ class CameraCaptureBridge(QObject):
         self._lock = Lock()
         self._pending: _PendingCapture | None = None
         self._token = 0
+        self._fallback_sequence = 0
         self.configure_requested.connect(self._configure)
-        controller.frame_ready.connect(self._on_frame)
+        sequenced = getattr(controller, "frame_ready_sequenced", None)
+        if sequenced is not None:
+            sequenced.connect(self._on_sequenced_frame)
+            self._uses_explicit_sequence = True
+        else:
+            controller.frame_ready.connect(self._on_frame)
+            self._uses_explicit_sequence = False
 
     def capture(
         self,
@@ -49,7 +59,8 @@ class CameraCaptureBridge(QObject):
             if self._pending is not None:
                 raise RuntimeError("A camera capture request is already pending")
             self._token += 1
-            pending = _PendingCapture(self._token, Event())
+            baseline = int(getattr(self.controller, "frame_sequence", self._fallback_sequence))
+            pending = _PendingCapture(self._token, Event(), minimum_sequence=baseline + 1)
             self._pending = pending
         self.configure_requested.emit(
             round(float(exposure_ms) * 1000.0), int(gain_percent), pending.token
@@ -91,6 +102,14 @@ class CameraCaptureBridge(QObject):
                     f"requested={exposure_us} us/{gain_percent}%, "
                     f"actual={actual_exposure} us/{actual_gain}%"
                 )
+            pending.actual_exposure_us = int(actual_exposure)
+            pending.actual_gain_percent = int(actual_gain)
+            # Frames generated before the setting readback completed may still
+            # be queued in Qt/SDK. Only a later generation is a formal frame.
+            current_sequence = int(
+                getattr(self.controller, "frame_sequence", self._fallback_sequence)
+            )
+            pending.minimum_sequence = current_sequence + 1
             pending.armed = True
         except Exception as exc:
             pending.error = str(exc)
@@ -98,9 +117,20 @@ class CameraCaptureBridge(QObject):
 
     @Slot(QImage)
     def _on_frame(self, image: QImage) -> None:
+        self._fallback_sequence += 1
+        self._accept_frame(image, self._fallback_sequence)
+
+    @Slot(QImage, int)
+    def _on_sequenced_frame(self, image: QImage, sequence: int) -> None:
+        self._accept_frame(image, int(sequence))
+
+    def _accept_frame(self, image: QImage, sequence: int) -> None:
         with self._lock:
             pending = self._pending
-        if pending is None or not pending.armed or pending.event.is_set():
+        if (
+            pending is None or not pending.armed or pending.event.is_set()
+            or sequence < pending.minimum_sequence
+        ):
             return
         temperature = None
         try:
@@ -113,6 +143,9 @@ class CameraCaptureBridge(QObject):
             "PixelFormat": "RGB24",
             "BitDepth": 8,
             "CameraModel": self.controller.device_name,
+            "FrameSequence": sequence,
+            "ExposureReadbackUs": pending.actual_exposure_us,
+            "GainReadback": pending.actual_gain_percent,
         }
         capture_metadata = getattr(self.controller, "capture_metadata", None)
         if callable(capture_metadata):

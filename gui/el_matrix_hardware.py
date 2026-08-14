@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Adapters from the hardware-neutral EL Matrix runner to verified services."""
 
-from datetime import datetime
 from typing import Any, Callable
 
 from .camera_capture_bridge import CameraCaptureBridge
@@ -76,18 +75,51 @@ class ELMatrixHardwareAdapter:
         payload["logical_channel"] = channel.channel
         return payload
 
-    def use_default_polarity(self, channel: ChannelRecipe) -> dict[str, Any]:
-        # Existing standard wiring is the physical-positive (+1) convention.
-        self.control.set_recipe_polarity_factor(1)
-        return {
-            "polarity_check_status": "SKIPPED",
-            "polarity_result": "STANDARD_WIRING",
-            "polarity_factor": 1,
-            "polarity_timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
-            "Jsc": None,
-            "Voc": None,
-            "logical_channel": channel.channel,
-        }
+    def apply_polarity_factor(self, factor: int) -> None:
+        self.control.set_recipe_polarity_factor(factor)
+
+    def prepare_channel_dark(self) -> None:
+        self.output_off()
+        if not self.relay.safe_white_light_off("el_matrix_channel_dark"):
+            raise RuntimeError("White Light OFF could not be verified for channel Dark I-V")
+
+    def run_dark_iv(
+        self,
+        settings: Any,
+        check_cancel: Callable[[], None],
+    ) -> list[dict[str, Any]]:
+        if settings.step_v <= 0:
+            raise ValueError("Dark I-V step must be greater than zero")
+        ascending: list[float] = []
+        value = float(settings.start_v)
+        direction = 1.0 if settings.stop_v >= settings.start_v else -1.0
+        while (value - settings.stop_v) * direction <= 1e-12:
+            ascending.append(value)
+            value += direction * float(settings.step_v)
+        points = ascending
+        if settings.direction == "bidirectional":
+            points = ascending + list(reversed(ascending[:-1]))
+        rows: list[dict[str, Any]] = []
+        for repeat in range(1, max(1, int(settings.repeat_count)) + 1):
+            for point_index, voltage in enumerate(points, start=1):
+                check_cancel()
+                self.control.recipe_output(
+                    "CV", float(voltage), float(settings.current_compliance_ma) / 1000.0
+                )
+                interruptible_wait(float(settings.dwell_s), check_cancel)
+                reading = self.control.recipe_readback()
+                rows.append({
+                    "Repeat": repeat,
+                    "PointIndex": point_index,
+                    "CommandedVoltageV": float(voltage),
+                    "MeasuredVoltageV": reading.voltage_v,
+                    "MeasuredCurrentA": reading.current_a,
+                    "MeasuredPowerW": reading.power_w,
+                    "ComplianceTripped": reading.compliance_tripped,
+                })
+            if repeat < max(1, int(settings.repeat_count)):
+                interruptible_wait(float(settings.inter_scan_delay_s), check_cancel)
+        return rows
 
     def set_current(self, current_a: float, voltage_compliance_v: float) -> float:
         return self.control.recipe_output("CC", current_a, voltage_compliance_v)
@@ -132,4 +164,8 @@ class ELMatrixHardwareAdapter:
         except Exception as exc:
             failures.append(f"White Light OFF failed: {exc}")
         if failures:
-            raise RuntimeError("; ".join(failures))
+            reason = "; ".join(failures)
+            self.control.request_external_interlock(
+                "EL Matrix safe shutdown verification failed: " + reason
+            )
+            raise RuntimeError(reason)

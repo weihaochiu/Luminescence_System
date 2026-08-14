@@ -37,7 +37,10 @@ class MainWindowRelayMixin:
         state = self.relay_service.group_state("white_light")
         is_on = state is RelayState.ON
         connected = self.relay_controller.connected
-        self.white_light_button.setEnabled(connected and group is not None and group.enabled)
+        measurement_locked = getattr(self, "_measurement_worker", None) is not None
+        self.white_light_button.setEnabled(
+            connected and group is not None and group.enabled and not measurement_locked
+        )
         self.white_light_button.setText("關閉白光" if is_on else "開啟白光")
         state_text = {
             RelayState.ON: "開啟",

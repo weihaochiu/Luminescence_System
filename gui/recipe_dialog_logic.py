@@ -188,7 +188,7 @@ class RecipeDialogLogicMixin:
                 area_cm2=area,
             ))
         recipe.channels = channels
-        recipe.polarity.enabled = self.polarity_required_check.isChecked()
+        recipe.polarity.enabled = True
         try:
             recipe.el_matrix.current_density_ma_cm2 = list(
                 _parse_number_list(self.matrix_current_density_edit.text())
@@ -210,7 +210,7 @@ class RecipeDialogLogicMixin:
         recipe.el_matrix.repeat = self.matrix_repeat_spin.value()
         recipe.el_matrix.voltage_compliance_v = self.matrix_voltage_compliance_spin.value()
         recipe.el_matrix.stabilization_ms = self.matrix_stabilization_spin.value()
-        recipe.el_matrix.shared_dark_enabled = self.shared_dark_enabled_check.isChecked()
+        recipe.el_matrix.shared_dark_enabled = True
 
         recipe.dark_iv.enabled = True
         recipe.dark_iv.dark_stabilization_s = self.dark_stable_spin.value()
@@ -407,12 +407,12 @@ class RecipeDialogLogicMixin:
             f"Exposure：{', '.join(f'{value:g}' for value in recipe.el_matrix.exposures_ms)} ms\n"
             f"Repeat：{recipe.el_matrix.repeat}\n\n"
             "固定執行流程\n"
-            "Shared Dark（一次）→ Channel → J → Gain → Exposure → Repeat\n"
+            "全 Channel 極性 → Verified All OFF → Shared Dark（一次）→ Channel Dark I–V → J → Gain → Exposure → Repeat\n"
             f"Shared Dark：{counts['shared_dark']} 張\n"
             f"EL / Channel：{counts['el_per_channel']} 張\n"
             f"EL Total：{counts['total_el']} 張\n"
             f"Overall：{counts['overall']} 張\n"
-            f"每 Channel 極性確認：{'啟用' if recipe.polarity.enabled else '略過（執行前警告）'}\n"
+            "每 Channel 極性確認：必做\n"
             f"定量警告：{len(recipe.validation_warnings())} 項\n\n"
             f"全解析度像素 CSV：{'啟用' if recipe.output.export_pixel_csv else '關閉（可日後由 TIFF 產生）'}\n\n"
             f"定量 HDR：{'啟用－T0 建檔／Aging 鎖定 Profile' if recipe.hdr.enabled else '關閉'}\n"
@@ -426,13 +426,7 @@ class RecipeDialogLogicMixin:
             return
         try:
             payload = json.loads(Path(filename).read_text(encoding="utf-8"))
-            data = payload.get("recipe", payload)
-            recipe = Recipe.from_dict(data)
-            recipe.recipe_id = Recipe().recipe_id
-            recipe.name = f"{recipe.name} - 匯入"
-            recipe.state = "draft"
-            recipe.version = 1
-            self.store.upsert(recipe)
+            recipe = self.store.import_payload(payload)
         except Exception as exc:
             QMessageBox.warning(self, "匯入失敗", str(exc))
             return
@@ -447,7 +441,7 @@ class RecipeDialogLogicMixin:
         filename, _ = QFileDialog.getSaveFileName(self, "匯出 Recipe JSON", f"{recipe.name}.json", "JSON (*.json)")
         if not filename:
             return
-        Path(filename).write_text(json.dumps({"schema_version": 7, "recipe": recipe.to_dict()}, ensure_ascii=False, indent=2), encoding="utf-8")
+        Path(filename).write_text(json.dumps({"schema_version": self.store.schema_version, "recipe": recipe.to_dict()}, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _choose_output_root(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "選擇量測資料儲存根目錄")

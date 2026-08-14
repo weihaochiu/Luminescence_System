@@ -104,8 +104,30 @@ class RecipeStoreTests(unittest.TestCase):
         })
         self.assertEqual(250, loaded.el_sweep.points[0].exposure_ms)
 
-    def test_recipe_store_uses_schema_v7(self) -> None:
-        self.assertEqual(7, RecipeStore.schema_version)
+    def test_recipe_store_uses_schema_v8(self) -> None:
+        self.assertEqual(8, RecipeStore.schema_version)
+
+    def test_import_rejects_future_schema_and_migrates_missing_fields_to_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecipeStore(Path(directory) / "recipes.json")
+            with self.assertRaisesRegex(ValueError, "高於"):
+                store.import_payload({"schema_version": 999, "recipe": {}})
+            imported = store.import_payload({
+                "schema_version": 1,
+                "recipe": {"name": "Legacy", "measurement_type": "el_single_current"},
+            })
+        self.assertEqual("draft", imported.state)
+        self.assertEqual(1, imported.version)
+        self.assertTrue(imported.import_review_items)
+
+    def test_import_rejects_unknown_recipe_fields_without_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecipeStore(Path(directory) / "recipes.json")
+            with self.assertRaisesRegex(ValueError, "不支援欄位"):
+                store.import_payload({
+                    "schema_version": RecipeStore.schema_version,
+                    "recipe": {"name": "Bad", "unexpected": {"payload": []}},
+                })
 
     def test_pixel_csv_is_optional_and_preserves_selected_products(self) -> None:
         recipe = Recipe()

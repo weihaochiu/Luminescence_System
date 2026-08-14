@@ -1,7 +1,7 @@
 # EL 量測設備控制程式架構
 
 文件版本：1.8.0
-對應程式版本：V1.8.0
+對應程式版本：V1.8.1
 最後更新：2026-08-14（UTC+8）
 
 ## 1. 文件目的
@@ -16,7 +16,8 @@
 2. `app.py` 建立 Qt Application 與 `MainWindow`。
 3. `MainWindow` 建立相機控制器、SMU 連線／控制／監測服務、Recipe Store 與 HDR Settings Store。
 4. 主畫面從 Store 載入通過驗證的 Recipe；EL Matrix 的 Sample ID 與 Area 由各 Logical Channel 保存。
-5. 使用者確認無硬體動作的量測摘要後，worker 執行 Shared Dark 與多 Channel EL Matrix，主執行緒持續處理 Live View、Progress 與安全停止。
+5. 使用者確認無硬體動作的量測摘要後建立 immutable Measurement Snapshot，完整 preflight 在任何 OUTPUT ON／routing／capture 前彙整執行；worker 只讀 snapshot，主執行緒持續處理 Live View、Progress 與安全停止。
+6. worker 依序執行全 Channel polarity、verified all-off、一次 Shared Dark，再逐 Channel 執行 Dark I–V 與 EL Matrix；所有 exit path 共用 verified safe shutdown。
 
 ## 3. 分層與依賴方向
 
@@ -62,7 +63,7 @@ Camera Temperature Monitoring 的依賴與資料流固定為：
 
 | 模組 | 單一責任 |
 | --- | --- |
-| `recipe_store.py` | Recipe dataclass、schema v7、Channel／Matrix、舊版遷移、驗證、警告與 Store |
+| `recipe_store.py` | Recipe dataclass、schema v8、Channel／Matrix、明確舊版遷移／future rejection、Matrix safety 驗證與 Store |
 | `recipe_dialog.py` | Recipe 管理對話框外殼、頁面導航與穩定公開入口 |
 | `recipe_dialog_pages.py` | 八個設定頁與 widget 建構 |
 | `recipe_dialog_points.py` | EL 點位產生、表格解析、HDR 欄位反灰、相機欄位保存 |
@@ -100,7 +101,10 @@ Camera Temperature Monitoring 的依賴與資料流固定為：
 | `smu_manual_panel.py` | CV/CC、setpoint、compliance、輸出按鈕與 readback 顯示；不匯入 driver／VISA |
 | `measurement_control_bar.py` | 底部 context/actions 的單一 widget set 與 WIDE／STANDARD／COMPACT 重排 |
 | `el_matrix_plan.py` | 無硬體依賴的固定順序、capture count、純曝光與 pre-run ETA |
-| `el_matrix_runner.py` | Shared Dark 一次與 Channel → J → Gain → Exposure → Repeat 執行狀態 |
+| `el_matrix_preflight.py` | SMU identity/VISA、Relay mapping、Camera capability/format、輸出與磁碟空間的聚合式 preflight |
+| `measurement_snapshot.py` | 遞迴 immutable Measurement Snapshot、canonical SHA-256 與原子落盤 |
+| `el_matrix_runner.py` | 全 Channel polarity → Shared Dark 一次 → 每 Channel Dark I–V → J → Gain → Exposure → Repeat；runtime watchdog 與共用 safe shutdown |
+| `measurement_output.py` | RAW TIFF、Footer JPG、逐張 JSON、Pixel CSV、manifest 路徑與 SHA-256 |
 | `el_matrix_hardware.py` | runner 到既有 SMU／Relay／Polarity／Camera authority 的安全轉接 |
 | `camera_capture_bridge.py` | worker 等待既有 pull-mode stream 的下一張正式 frame；不建立第二 camera stream |
 | `measurement_progress_dialog.py` | modeless progress presentation；不自行重算 measurement state |
@@ -159,7 +163,7 @@ Manual 與 Recipe 在 `SMUControlManager` 互鎖。所有高階 output transitio
 
 啟動自動連線只選擇上次成功 serial、上次成功 VISA resource，或掃描結果中唯一受支援的 SMU；多台且無法判定時 fail closed，交由使用者手動選擇。受支援 B2900 driver 必須依序送出 `OUTPUT OFF`、以 `:OUTP?` 明確確認 False、設定並讀回確認 `:OUTP:ON:AUTO OFF`、將 source voltage/current 歸零，再次確認 OUTPUT OFF，才可發布 connected／READY_MANUAL；任何 driver bind／初始化失敗均關閉 resource 與 resource manager、清空所有 session 欄位並進入 connection ERROR。
 
-`PolarityService` 預設為 `UNKNOWN`（factor `None`）。Manual setpoint 是 SMU 實體座標，直接送至儀器且不依賴 Polarity；Recipe setpoint 才是 Device 座標，必須明確確認 `+1` 或 `-1` 後轉換成 physical SMU command。`set_confirmed_factor()` 為 idempotent assignment 而非 toggle；polarity determination 尚未實作，其未來流程必須只產生 factor，不可預先套用未確認 factor。Manual panel 的 range 由同一份 `SMUSafetyLimits` 注入，不在 UI 維護第二份上限。
+`PolarityService` 預設為 `UNKNOWN`（factor `None`）。Manual setpoint 是 SMU 實體座標，直接送至儀器且不依賴 Polarity；Recipe setpoint 才是 Device 座標。EL Matrix 會先對每個 Channel 完成 Jsc／Voc determination 並保存結果，之後 Channel 重入時只在 verified OUTPUT OFF 狀態重套該 Channel 的明確 `+1` 或 `-1`。`set_confirmed_factor()` 為 idempotent assignment 而非 toggle；不得略過或沿用上一 Channel factor。
 
 Emergency request 先設定 threading Event latch，再排入相同 single-worker queue 做 `safe_shutdown()`。Normal operation 會在 configure 前及真正送出 `OUTPUT ON` 前檢查 latch；最後一段 check／OUTPUT ON 與 Emergency latch transition 有明確同步邊界，因此 Emergency 之後尚未送出的 normal output 不會開啟。已在執行中的 blocking PyVISA call 不宣稱可被 preempt。Emergency shutdown 完整成功且 OUTPUT OFF 後才回到 IDLE 並清除 latch；failure 則保留 latch/錯誤並進入 FAULT。
 
@@ -170,7 +174,7 @@ Manual → Recipe 交接必須先完成 verified shutdown，釋放至 IDLE 後�
 Readback 由 `SMUMonitor` 的 Qt timer 觸發，但實際 query 在控制層的單一 worker 執行；I/O lock 同時涵蓋 Manual、Recipe、readback 與 shutdown。Recipe ownership 或 busy 時不排入 readback，避免 critical command 中插入 query。B2901BL 實機已確認 OUTPUT OFF 時送出 `:MEAS:VOLT?` 會自動開啟 Source Output，因此 periodic readback 採 OUTP-first：先查 `:OUTP?`，OFF 時禁止 voltage/current/compliance measurement；只有 `MANUAL + OUTPUT_ON` 才量測。其他 OUTPUT ON 組合只發布 output 狀態，保留既有 `UNEXPECTED_OUTPUT_ON` 復歸流程。
 
 V1.5.2 修正 B2901BL readback auto-output：OUTP-first、OUTPUT OFF 禁止 `MEAS:*` polling、B2900 auto-output 明確停用並讀回確認；Recipe、Polarity 與 `UNEXPECTED_OUTPUT_ON` 安全狀態不變。
-V1.5.1 修正 Manual 實體座標、矛盾 readback 復歸、verified shutdown、雙向安全交接與單一 UI snapshot；V1.8.0 在不改寫控制層的前提下啟用 EL Matrix Recipe runner。
+V1.5.1 修正 Manual 實體座標、矛盾 readback 復歸、verified shutdown、雙向安全交接與單一 UI snapshot；V1.8.1 完成 EL Matrix polarity、Dark I–V、snapshot、preflight、watchdog 與輸出閉環。
 
 ## 6.1 Responsive GUI 邊界
 

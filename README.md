@@ -1,10 +1,14 @@
-# EL 量測設備控制程式 V1.8.0
+# EL 量測設備控制程式 V1.8.1
 
-## V1.8.0 Multi-Channel EL Matrix Recipe
+## V1.8.1 Multi-Channel EL Matrix Safety Completion
 
 - Recipe 新增固定 CH1～CH4 的 Logical Channel／Sample ID／Device Area，以及共用 J、Gain、Exposure、Repeat、Compliance 與 J stabilization。
-- 正式量測順序固定為 Shared Dark（一次）→ Channel → Current Density → Gain → Exposure → Repeat；Channel 轉換使用既有 verified break-before-make routing 與 SMU safe shutdown。
-- 每個啟用 Channel 可各自執行既有白光 Jsc／Voc polarity；略過時會先警告並逐 Channel 重設為標準接線 factor。
+- 正式量測順序固定為：所有啟用 Channel 逐一 routing 並完成 Jsc／Voc polarity → verified SMU／白光／routing OFF → Shared Dark（一次）→ 每 Channel 重新 routing／套用 factor／Dark I–V／verified OUTPUT OFF → Current Density → Gain → Exposure → Repeat。
+- 每個啟用 Channel 的 polarity 與 Dark I–V 都是必做；任一 polarity 無法可靠判定或任何安全 readback 失敗時立即停止。
+- `Recipe.validate()`、preflight 與 runtime watchdog 共同限制完整 Matrix 時間及單一 Channel/J 的連續 OUTPUT ON 時間；估算包含曝光、repeat、stabilization、polarity、Dark I–V、routing 與 capture/readback/save overhead。
+- Summary 確認後建立 SHA-256 content-addressed immutable Measurement Snapshot；worker 只使用 snapshot 的 Recipe、相機／SMU identity、Relay mapping、安全限制及輸出選項。
+- 每次 run 保存 `measurement_snapshot.json`、Shared Dark、每 Channel Dark I–V CSV/JSON、RAW TIFF、Footer JPG、逐張 JSON、Pixel CSV 選配、measurement manifest 與含路徑／SHA-256 的 final files manifest。
+- Camera capture 以 frame sequence barrier 排除設定 Exposure/Gain 前已進入 queue 的舊 frame，沿用既有 Live View stream，不建立第二條 camera stream。
 - 量測沿用既有相機 pull-mode frame；每張正式 frame 同時更新主畫面 Live View、保存 RAW TIFF、建立下方灰底白字三行 Footer JPG 與 metadata/CSV。
 - 新增 modeless Progress Window、capture count、純曝光／總時間預估、runtime ETA 與預計完成時間。
 
@@ -40,7 +44,7 @@
 - 新增 Manual ↔ Recipe 安全交接，以及 Emergency latch／VISA 佇列行為的明確狀態與訊息。
 - Responsive control bar 會在 runtime font、style、screen／DPI 變更時重新計算 metrics；修正 Recipe 重複文字。
 
-完整 Recipe 硬體量測仍維持停用，待 Jsc／Voc determination、Dark I–V、Dark Frames、EL 點位與相機同步完成後才可啟用。
+V1.8.1 已啟用上述非 HDR EL Matrix 正式流程；定量 HDR Matrix 仍由 validation 阻擋，且尚未完成 Keysight／Relay／Camera 組合的實機 acceptance test。
 
 ## V1.5.0 SMU state／安全自動連線／Responsive GUI
 
@@ -50,7 +54,7 @@
 - 受支援 SMU 在發布 connected 前先將 voltage/current source 歸零、送出 `OUTPUT OFF` 並查詢確認 OFF；自動連線路徑不會送出 `OUTPUT ON`。可於 `設定 → 啟動時自動連線 SMU` 關閉此行為。
 - 新增 `MeasurementControlBar` 與 `ResponsiveLayoutManager`；同一批 widget 依 Qt logical width、available screen geometry、font metrics 與 DPI context 在 WIDE／STANDARD／COMPACT 間即時重排。
 - 左側設備區改用可拖曳 `QSplitter`，保留既有垂直 `QScrollArea`；底部 Start／Stop／Emergency Stop 位於 scroll 區外，長路徑保留完整內容並以 tooltip 顯示。
-- 新增 state transition、auto-connect safety／selection、responsive mode／widget rearrangement 測試；Camera、Recipe、HDR、Relay、輸出格式與 Recipe execution 安全停用狀態不變。
+- 新增 state transition、auto-connect safety／selection、responsive mode／widget rearrangement 測試；此處所述 Recipe execution 安全停用是 V1.5.0 歷史狀態，已由 V1.8.1 取代。
 
 ## V1.4.1 Manual SMU safety hotfix
 
@@ -60,7 +64,7 @@
 - 一般中斷連線改為 fail-closed：只有 output query 明確為 OFF、ownership 為 IDLE 且 control 無 pending I/O 時才關閉 VISA session；unknown readback 一律拒絕。
 - `safe_shutdown()` 會區分 safety command 是否完整成功；failure 會進入 `FAULT`、保留錯誤與未確認 OFF 狀態，不再把實體輸出誤報為已安全關閉。
 - Manual panel 的 CV／CC range 直接使用 `SMUSafetyLimits`，切換模式時 setpoint 歸零並套用安全 compliance 預設，不跨單位沿用舊值。
-- 新增 deterministic fake SMU regression tests，使用 threading Event 驗證 double-request 與 configure／OUTPUT ON 間的 Emergency race；完整 Recipe execution 仍維持停用。
+- 新增 deterministic fake SMU regression tests，使用 threading Event 驗證 double-request 與 configure／OUTPUT ON 間的 Emergency race；該句描述 V1.4.1 當時狀態，Recipe execution 已由 V1.8.1 正式流程取代。
 
 ## V1.4.0 SMU 手動輸出與集中式安全控制
 
@@ -69,7 +73,7 @@
 - `PolarityService` 以 `physical = requested × factor` 統一座標換算；factor 採明確設定且冪等，不使用累積翻轉。
 - `SMUSafetyService` 集中限制正負電壓、正負電流、功率及 compliance；超限命令在送至硬體前拒絕。
 - Manual OFF、Recipe 完成／停止／例外、Emergency OFF 與程式關閉都會執行 source 歸零、OUTPUT OFF 與 ownership release。
-- Recipe 的完整四階段硬體執行仍未開放；本版加入共用 ownership/interlock 與 lifecycle cleanup 入口，不宣稱已完成實體 Recipe 量測。
+- V1.4.1 當時只加入 ownership/interlock 與 lifecycle cleanup；其「四階段硬體執行未開放」狀態已由 V1.8.1 取代。
 - 新增 fake SMU 測試驗證 CV／CC、± polarity、interlock、安全清理、Emergency、錯誤注入與 I/O serialization；未宣稱 Keysight 實機輸出已驗證。
 
 ## Relay 設定與白光群組控制
@@ -157,7 +161,7 @@
   - 選配的 `*_HDR_preview_8bit.png`（只供顯示，不可定量分析）。
 - Recipe JSON schema 在本版為 v5，舊版 Recipe 可繼續讀取，HDR 預設關閉。
 
-目前量測執行層仍維持安全停用，因此本版不會實際送出 SMU source／OUTPUT 命令，也不會假裝已完成相機與 SMU 同步預掃描。HDR 數值模組、Profile、輸出契約及介面流程已完成，供下一階段執行狀態機直接呼叫。
+V1.3.x 的量測執行層當時尚未開放；此歷史狀態已由 V1.8.1 的非 HDR EL Matrix runner、preflight 與同步擷取取代。
 
 本版將 Recipe 升級為完整的四階段 EL 量測流程：
 
@@ -166,7 +170,7 @@
 3. SMU 回零且 OUTPUT OFF，拍攝該 Recipe 內所有唯一相機條件的 Dark Frames。
 4. 以電流／電流密度或電壓模式進行 EL 點位拍攝。
 
-本版完成 Recipe 資料結構、編輯、驗證、匯入／匯出與主畫面選擇；為避免誤輸出，SMU Source、Compliance、OUTPUT 及相機同步執行仍未開放，主畫面的「開始量測」維持安全禁用。
+V1.2 當時只完成 Recipe 資料結構與介面；其「開始量測禁用」狀態已由 V1.8.1 取代。
 
 ## V1.2.3 介面修正
 
@@ -320,7 +324,7 @@ Dark I–V／EL scan summary CSV、JSON metadata 與 Recipe snapshot 為可啟�
 
 ## 本版安全界線
 
-V1.4.1 只開放經 `SMUControlManager`、已確認 polarity 與 safety limits 保護的 Manual CV／CC 輸出。完整 Recipe 仍不執行 Jsc／Voc、Dark I–V、Dark Frames、EL 點位、HDR acquisition 或相機與 SMU 同步，因此「開始量測」及「停止」維持禁用。
+V1.4.1 的歷史範圍只開放 Manual CV／CC；V1.8.1 已新增非 HDR Recipe 的 Jsc／Voc、Shared Dark、每 Channel Dark I–V、EL Matrix 與相機同步。HDR acquisition 仍不屬於本次正式 Matrix runner。
 
 Emergency latch 能阻止 Emergency request 之後尚未送出的 `OUTPUT ON`；正在執行中的 blocking PyVISA call 無法宣稱可被安全強制 preempt。Keysight B2900 實體輸出、readback 與 failure recovery 仍需以低限制、無敏感 DUT 條件進行實機驗證。
 

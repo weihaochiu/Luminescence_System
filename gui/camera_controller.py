@@ -19,6 +19,7 @@ class CameraController(QObject):
     """Thin Qt-friendly layer around the RisingCam pull-mode SDK."""
 
     frame_ready = Signal(QImage)
+    frame_ready_sequenced = Signal(QImage, int)
     camera_opened = Signal(object)
     camera_closing = Signal()
     camera_closed = Signal()
@@ -41,6 +42,7 @@ class CameraController(QObject):
         self._auto_mode = 0
         self._latest_image: QImage | None = None
         self._status_query_failed = False
+        self._frame_sequence = 0
 
         self._sdk_event.connect(self._handle_sdk_event)
         self._fps_timer = QTimer(self)
@@ -61,6 +63,10 @@ class CameraController(QObject):
     @property
     def image_size(self) -> tuple[int, int]:
         return self._width, self._height
+
+    @property
+    def frame_sequence(self) -> int:
+        return self._frame_sequence
 
     @property
     def temperature_supported(self) -> bool:
@@ -148,6 +154,7 @@ class CameraController(QObject):
         self._auto_mode = 0
         self._latest_image = None
         self._status_query_failed = False
+        self._frame_sequence = 0
         if was_open:
             self.camera_closed.emit()
             self.status_changed.emit("相機已中斷連線")
@@ -422,7 +429,9 @@ class CameraController(QObject):
                 QImage.Format.Format_RGB888,
             ).copy()
             self._latest_image = image
+            self._frame_sequence += 1
             self.frame_ready.emit(image)
+            self.frame_ready_sequenced.emit(image, self._frame_sequence)
         except Exception as exc:
             self.error_occurred.emit(self._format_error("讀取影像失敗", exc))
 

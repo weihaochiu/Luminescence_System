@@ -116,6 +116,7 @@ class RecipeDialogPagesMixin:
         self.matrix_stabilization_spin.setSuffix(" ms")
         self.shared_dark_enabled_check = QCheckBox("量測開始時拍攝一次 Shared Dark Matrix")
         self.shared_dark_enabled_check.setChecked(True)
+        self.shared_dark_enabled_check.setEnabled(False)
         form.addRow("Current Density List (mA/cm²)", self.matrix_current_density_edit)
         form.addRow("Gain List (%)", self.matrix_gain_edit)
         form.addRow("Exposure List (ms)", self.matrix_exposure_edit)
@@ -137,6 +138,7 @@ class RecipeDialogPagesMixin:
         form = QFormLayout(page)
         self.polarity_required_check = QCheckBox("每個 Channel 量測前執行白光 Jsc／Voc 極性確認")
         self.polarity_required_check.setChecked(True)
+        self.polarity_required_check.setEnabled(False)
         form.addRow(self.polarity_required_check)
         note = QLabel(
             "Jsc / Voc 條件由「設定 → 極性確認…」統一管理。Recipe 執行時讀取同一份"

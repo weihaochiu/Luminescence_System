@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .numeric import decimal_from_number, normalize_json_numbers, quantize_number
-from .polarity_settings import PolarityMeasurementSettings
 from uuid import uuid4
 
 
@@ -21,7 +20,9 @@ T = TypeVar("T")
 
 
 def _dataclass_from_dict(cls: type[T], data: dict[str, Any] | None) -> T:
-    """Load known keys only so older/newer Recipe files remain readable."""
+    """Load known keys from a validated mapping."""
+    if data is not None and not isinstance(data, dict):
+        raise ValueError(f"{cls.__name__} must be a JSON object")
     source = data or {}
     allowed = {item.name for item in fields(cls)}
     return cls(**{key: value for key, value in source.items() if key in allowed})
@@ -220,6 +221,7 @@ class Recipe:
     smu: SMURecipe = field(default_factory=SMURecipe)
     safety: SafetyRecipe = field(default_factory=SafetyRecipe)
     output: OutputRecipe = field(default_factory=OutputRecipe)
+    import_review_items: list[str] = field(default_factory=list)
 
     def clone(self) -> "Recipe":
         copied = deepcopy(self)
@@ -325,6 +327,74 @@ class Recipe:
             count = count * 2 - 1
         return count * max(1, self.dark_iv.repeat_count)
 
+    def dark_iv_estimated_time_s(self) -> float:
+        return (
+            self.dark_iv.dark_stabilization_s
+            + self.dark_iv_point_count()
+            * (self.dark_iv.dwell_s + self.dark_iv.nplc / 50.0)
+            + max(0, self.dark_iv.repeat_count - 1)
+            * self.dark_iv.inter_scan_delay_s
+        )
+
+    def matrix_output_on_time_s(self) -> float:
+        """Worst continuous OUTPUT ON interval for one Channel/J."""
+
+        matrix = self.el_matrix
+        captures_per_j = len(matrix.gains_percent) * len(matrix.exposures_ms) * matrix.repeat
+        exposure_s = (
+            sum(float(value) for value in matrix.exposures_ms)
+            * len(matrix.gains_percent)
+            * matrix.repeat
+            / 1000.0
+        )
+        return (
+            matrix.stabilization_ms / 1000.0
+            + exposure_s
+            + captures_per_j * matrix.estimated_capture_overhead_s
+        )
+
+    def matrix_estimated_time_s(self) -> float:
+        matrix = self.el_matrix
+        channels = len(self.enabled_channels())
+        counts = self.matrix_capture_counts()
+        exposure_sum_s = sum(float(value) for value in matrix.exposures_ms) / 1000.0
+        shared_dark_s = (
+            exposure_sum_s * len(matrix.gains_percent) * matrix.repeat
+            if matrix.shared_dark_enabled else 0.0
+        )
+        el_s = (
+            channels
+            * len(matrix.current_density_ma_cm2)
+            * len(matrix.gains_percent)
+            * matrix.repeat
+            * exposure_sum_s
+        )
+        capture_overhead_s = counts["overall"] * matrix.estimated_capture_overhead_s
+        stabilization_s = (
+            channels * len(matrix.current_density_ma_cm2)
+            * matrix.stabilization_ms / 1000.0
+        )
+        polarity_s = channels * matrix.estimated_polarity_duration_s
+        # Every Channel is routed once for polarity and once for Dark I-V/EL.
+        routing_s = channels * 2 * matrix.estimated_routing_transition_s
+        dark_iv_s = channels * self.dark_iv_estimated_time_s()
+        shared_setup_s = (
+            matrix.estimated_shared_dark_overhead_s
+            if matrix.shared_dark_enabled else 0.0
+        )
+        return (
+            shared_dark_s + el_s + capture_overhead_s + stabilization_s
+            + polarity_s + routing_s + dark_iv_s + shared_setup_s
+        )
+
+    def matrix_worst_power_mw(self) -> float:
+        currents = [
+            self.matrix_source_current_ma(channel, float(density))
+            for channel in self.enabled_channels()
+            for density in self.el_matrix.current_density_ma_cm2
+        ]
+        return max(currents, default=0.0) * self.el_matrix.voltage_compliance_v
+
     def validation_warnings(self) -> list[str]:
         warnings: list[str] = []
         if self.hdr.enabled:
@@ -360,6 +430,10 @@ class Recipe:
             if not math.isfinite(channel.area_cm2) or channel.area_cm2 <= 0:
                 errors.append(f"{channel.channel} 的 Device Area 必須大於 0")
         matrix = self.el_matrix
+        if not self.polarity.enabled:
+            errors.append("每個 Channel 都必須執行白光 Jsc/Voc 極性確認")
+        if not matrix.shared_dark_enabled:
+            errors.append("正式 EL Matrix 必須拍攝一次共用 Shared Dark Matrix")
         if not matrix.current_density_ma_cm2:
             errors.append("Current Density 至少需要一個值")
         elif any(not math.isfinite(float(value)) or float(value) <= 0 for value in matrix.current_density_ma_cm2):
@@ -376,6 +450,16 @@ class Recipe:
             errors.append("每條件拍攝張數必須是大於或等於 1 的整數")
         if matrix.stabilization_ms < 0:
             errors.append("J Stabilization Time 不可小於 0")
+        for label, value in (
+            ("Capture/readback/save overhead", matrix.estimated_capture_overhead_s),
+            ("Polarity duration", matrix.estimated_polarity_duration_s),
+            ("Routing transition", matrix.estimated_routing_transition_s),
+            ("Shared Dark overhead", matrix.estimated_shared_dark_overhead_s),
+        ):
+            if not math.isfinite(float(value)) or float(value) < 0:
+                errors.append(f"{label} 必須是大於或等於 0 的有限數值")
+        if self.safety.max_output_time_s <= 0 or self.safety.max_recipe_time_s <= 0:
+            errors.append("Recipe 與 OUTPUT 安全時間上限必須大於 0")
         if not math.isfinite(matrix.voltage_compliance_v) or not (
             0 < matrix.voltage_compliance_v <= self.safety.max_voltage_v
         ):
@@ -428,8 +512,8 @@ class Recipe:
                 if self.hdr.enabled and hdr_settings is not None
                 else point.dwell_s + frames * exposure / 1000.0 + max(0, frames - 1) * interval
             )
-            if point_time > self.safety.max_output_time_s:
-                errors.append(f"EL 點位 {index} 的預估連續輸出時間超過安全上限")
+            # Legacy rows remain structurally validated, but Matrix safety time
+            # is authoritative for the formal execution path below.
         if self.el_sweep.drive_mode == "current":
             if self.el_sweep.voltage_compliance_v <= 0:
                 errors.append("Voltage compliance 必須大於 0")
@@ -440,19 +524,13 @@ class Recipe:
                 errors.append("Current compliance 必須大於 0")
             if self.el_sweep.current_compliance_ma > self.safety.max_current_ma:
                 errors.append("Current compliance 超過最大允許電流")
-        if points:
-            if self.el_sweep.drive_mode == "current":
-                worst_power_mw = max(self.actual_current_ma(point) for point in points) * self.el_sweep.voltage_compliance_v
-            else:
-                worst_power_mw = max(point.setpoint for point in points) * self.el_sweep.current_compliance_ma
-            if worst_power_mw > self.safety.max_power_mw:
-                errors.append("EL 設定值與 Compliance 的最壞情況功率超過安全上限")
+        if self.matrix_worst_power_mw() > self.safety.max_power_mw:
+            errors.append("EL Matrix 設定值與 Compliance 的最壞情況功率超過安全上限")
         if self.dark_frames.frames_per_profile < 1:
             errors.append("每個 Dark Profile 至少需要 1 frame")
-        longest_exposure_s = (
-            float(hdr_settings.max_exposure_ms) / 1000.0
-            if self.hdr.enabled and hdr_settings is not None
-            else max([self.effective_camera(point)[0] / 1000.0 for point in points], default=0.0)
+        longest_exposure_s = max(
+            (float(value) / 1000.0 for value in matrix.exposures_ms),
+            default=0.0,
         )
         if self.camera.capture_timeout_s < longest_exposure_s:
             errors.append("相機 timeout 不可短於最大曝光時間")
@@ -475,9 +553,19 @@ class Recipe:
                 errors.append("HDR Recipe 必須允許保存各曝光原始 EL、原始 Dark 與 Master Dark")
             if self.output.image_format.upper() != "TIFF":
                 errors.append("定量 HDR 的原始與分析影像格式必須使用 TIFF")
-        estimated = self.estimated_time_s(hdr_settings)
+        output_on_s = self.matrix_output_on_time_s()
+        if output_on_s > self.safety.max_output_time_s:
+            errors.append(
+                "同一 Channel、同一 Current Density 的預估連續 OUTPUT ON "
+                f"時間 {output_on_s:.3f} s 超過安全上限 "
+                f"{self.safety.max_output_time_s:.3f} s"
+            )
+        estimated = self.matrix_estimated_time_s()
         if self.safety.max_recipe_time_s < estimated:
-            errors.append("Recipe 最長時間短於預估完整流程時間")
+            errors.append(
+                f"EL Matrix 預估完整流程 {estimated:.3f} s 超過 Recipe 安全上限 "
+                f"{self.safety.max_recipe_time_s:.3f} s"
+            )
         if not self.output.save_summary_csv:
             errors.append("Dark I–V 與 EL scan summary CSV 是必要輸出")
         if not self.output.save_json:
@@ -495,46 +583,7 @@ class Recipe:
         return errors
 
     def estimated_time_s(self, hdr_settings: Any | None = None) -> float:
-        # Polarity duration is global and captured at execution time; a Recipe
-        # no longer owns a second, potentially stale parameter set. The editor
-        # uses the system defaults for its non-binding estimate because Recipe
-        # execution is not currently enabled.
-        polarity = PolarityMeasurementSettings()
-        polarity_time = (
-            polarity.white_light_stabilization_ms
-            + polarity.jsc_settle_ms
-            + polarity.voc_settle_ms
-        ) / 1000.0
-        if polarity.anti_flicker_enabled:
-            polarity_time += (
-                polarity.jsc_sample_count + polarity.voc_sample_count
-            ) * polarity.integration_nplc / polarity.mains_frequency_hz
-        dark_iv_time = (
-            self.dark_iv.dark_stabilization_s
-            + self.dark_iv_point_count() * (self.dark_iv.dwell_s + self.dark_iv.nplc / 50.0)
-            + max(0, self.dark_iv.repeat_count - 1) * self.dark_iv.inter_scan_delay_s
-        )
-        dark_time = 0.0
-        for profile in self.dark_profiles(hdr_settings):
-            if "exposure_ms" not in profile:
-                continue
-            dark_time += self.dark_frames.camera_switch_delay_s
-            dark_time += self.dark_frames.frames_per_profile * (
-                profile["exposure_ms"] / 1000.0 + self.dark_frames.frame_interval_s
-            )
-        sequence_multiplier = 2 if self.el_sweep.scan_direction == "bidirectional" else 1
-        el_time = 0.0
-        for point in self.enabled_points():
-            if self.hdr.enabled:
-                el_time += point.dwell_s + float(getattr(hdr_settings, "max_point_time_s", 0.0))
-            else:
-                exposure, _gain, frames, interval = self.effective_camera(point)
-                el_time += point.dwell_s + frames * exposure / 1000.0 + max(0, frames - 1) * interval
-        el_time *= sequence_multiplier * max(1, self.el_sweep.repeat_count)
-        el_time += max(0, self.el_sweep.repeat_count - 1) * self.el_sweep.inter_scan_delay_s
-        if self.dark_frames.capture_after_el:
-            dark_time *= 2
-        return polarity_time + dark_iv_time + dark_time + el_time + 2.0
+        return self.matrix_estimated_time_s()
 
     def matrix_capture_counts(self) -> dict[str, int]:
         matrix = self.el_matrix
@@ -558,6 +607,8 @@ class Recipe:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Recipe":
+        if not isinstance(data, dict):
+            raise ValueError("Recipe must be a JSON object")
         # V1 single-current Recipes are migrated into a one-point four-stage draft.
         old_camera = _dataclass_from_dict(CameraRecipe, data.get("camera"))
         el_data = data.get("el_sweep", {})
@@ -627,13 +678,15 @@ class Recipe:
             smu=_dataclass_from_dict(SMURecipe, data.get("smu")),
             safety=_dataclass_from_dict(SafetyRecipe, data.get("safety")),
             output=_dataclass_from_dict(OutputRecipe, output_data),
+            import_review_items=[str(item) for item in data.get("import_review_items", [])]
+            if isinstance(data.get("import_review_items", []), list) else [],
         )
 
 
 class RecipeStore:
     """JSON-backed Recipe repository stored in the user's application-data folder."""
 
-    schema_version = 7
+    schema_version = 8
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -648,14 +701,115 @@ class RecipeStore:
             return
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-            for item in payload.get("recipes", []):
+            if not isinstance(payload, dict):
+                raise ValueError("Recipe repository root must be a JSON object")
+            schema = payload.get("schema_version", 1)
+            if not isinstance(schema, int) or isinstance(schema, bool):
+                raise ValueError("schema_version must be an integer")
+            if schema > self.schema_version:
+                raise ValueError(
+                    f"Recipe schema {schema} is newer than supported schema {self.schema_version}"
+                )
+            raw_recipes = payload.get("recipes", [])
+            if not isinstance(raw_recipes, list):
+                raise ValueError("recipes must be a JSON array")
+            for item in raw_recipes:
+                if not isinstance(item, dict):
+                    raise ValueError("Every Recipe entry must be a JSON object")
                 legacy_hdr = item.get("hdr") or {}
-                if any(key != "enabled" for key in legacy_hdr):
+                if isinstance(legacy_hdr, dict) and any(key != "enabled" for key in legacy_hdr):
                     self.legacy_hdr_settings_candidate = dict(legacy_hdr)
                     break
-            self.recipes = [Recipe.from_dict(item) for item in payload.get("recipes", [])]
+            self.recipes = [Recipe.from_dict(item) for item in raw_recipes]
         except Exception as exc:
             raise RuntimeError(f"無法讀取 Recipe 檔案：{exc}") from exc
+
+    def import_payload(self, payload: Any) -> Recipe:
+        """Validate, migrate, and import one untrusted Recipe JSON payload."""
+
+        if not isinstance(payload, dict):
+            raise ValueError("匯入檔案頂層必須是 JSON object")
+        schema = payload.get("schema_version")
+        if not isinstance(schema, int) or isinstance(schema, bool) or schema < 1:
+            raise ValueError("匯入檔案必須包含有效的整數 schema_version")
+        if schema > self.schema_version:
+            raise ValueError(
+                f"Recipe schema_version={schema} 高於目前支援版本 {self.schema_version}，拒絕匯入"
+            )
+        data = payload.get("recipe")
+        if not isinstance(data, dict):
+            raise ValueError("匯入檔案必須包含 recipe JSON object")
+        allowed = {item.name for item in fields(Recipe)}
+        unknown = sorted(set(data) - allowed)
+        if unknown:
+            raise ValueError("Recipe 含有不支援欄位：" + ", ".join(unknown))
+        if schema == self.schema_version:
+            sections: tuple[tuple[str, type[Any]], ...] = (
+                ("geometry", GeometryRecipe), ("el_matrix", ELMatrixRecipe),
+                ("polarity", PolarityRecipe), ("dark_iv", DarkIVRecipe),
+                ("camera", CameraRecipe), ("hdr", HDRRecipe),
+                ("dark_frames", DarkFrameRecipe), ("smu", SMURecipe),
+                ("safety", SafetyRecipe), ("output", OutputRecipe),
+            )
+            for section, model in sections:
+                raw = data.get(section)
+                if raw is None:
+                    continue
+                if not isinstance(raw, dict):
+                    raise ValueError(f"Recipe.{section} 必須是 JSON object")
+                extra = sorted(set(raw) - {item.name for item in fields(model)})
+                if extra:
+                    raise ValueError(
+                        f"Recipe.{section} 含有不支援欄位：" + ", ".join(extra)
+                    )
+            raw_channels = data.get("channels")
+            if raw_channels is not None:
+                if not isinstance(raw_channels, list):
+                    raise ValueError("Recipe.channels 必須是 JSON array")
+                channel_fields = {item.name for item in fields(ChannelRecipe)}
+                for index, raw in enumerate(raw_channels):
+                    if not isinstance(raw, dict):
+                        raise ValueError(f"Recipe.channels[{index}] 必須是 JSON object")
+                    extra = sorted(set(raw) - channel_fields)
+                    if extra:
+                        raise ValueError(
+                            f"Recipe.channels[{index}] 含有不支援欄位：" + ", ".join(extra)
+                        )
+            raw_sweep = data.get("el_sweep")
+            if raw_sweep is not None:
+                if not isinstance(raw_sweep, dict):
+                    raise ValueError("Recipe.el_sweep 必須是 JSON object")
+                sweep_fields = {item.name for item in fields(ELSweepRecipe)}
+                extra = sorted(set(raw_sweep) - sweep_fields)
+                if extra:
+                    raise ValueError("Recipe.el_sweep 含有不支援欄位：" + ", ".join(extra))
+                point_fields = {item.name for item in fields(ELPoint)}
+                points = raw_sweep.get("points", [])
+                if not isinstance(points, list):
+                    raise ValueError("Recipe.el_sweep.points 必須是 JSON array")
+                for index, raw in enumerate(points):
+                    if not isinstance(raw, dict):
+                        raise ValueError(f"Recipe.el_sweep.points[{index}] 必須是 JSON object")
+                    extra = sorted(set(raw) - point_fields)
+                    if extra:
+                        raise ValueError(
+                            f"Recipe.el_sweep.points[{index}] 含有不支援欄位："
+                            + ", ".join(extra)
+                        )
+        important = {
+            "name", "channels", "el_matrix", "polarity", "dark_iv",
+            "camera", "smu", "safety", "output",
+        }
+        review = [f"缺少重要欄位：{key}" for key in sorted(important - set(data))]
+        recipe = Recipe.from_dict(data)
+        recipe.recipe_id = str(uuid4())
+        recipe.version = 1
+        recipe.state = "draft"
+        recipe.created_at = _now()
+        recipe.modified_at = recipe.created_at
+        recipe.import_review_items = review
+        self.upsert(recipe)
+        return recipe
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

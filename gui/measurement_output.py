@@ -3,6 +3,7 @@ from __future__ import annotations
 """RAW TIFF and bottom-footer JPEG output for EL Matrix captures."""
 
 import csv
+import hashlib
 import json
 import math
 import re
@@ -11,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 from PySide6.QtGui import QImage
 
 
@@ -97,6 +98,64 @@ class SavedCapture:
     tiff_path: Path
     jpeg_path: Path
     metadata_path: Path
+    file_hashes: dict[str, str]
+
+
+def sha256_file(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_pixel_csv(path: Path, image: Image.Image, *, divisor: float | None = None) -> None:
+    rgb = image.convert("RGB")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("y", "x", "R", "G", "B"))
+        pixels = rgb.load()
+        for y in range(rgb.height):
+            for x in range(rgb.width):
+                values = pixels[x, y]
+                if divisor is not None:
+                    values = tuple(float(value) / divisor for value in values)
+                writer.writerow((y, x, *values))
+
+
+def save_pixel_csv_products(
+    raw_image: QImage | Image.Image,
+    output_stem: Path,
+    output_options: Any,
+    *,
+    dark_image: QImage | Image.Image | None = None,
+    exposure_ms: float,
+) -> dict[str, str]:
+    if not output_options.export_pixel_csv:
+        return {}
+    raw = qimage_to_pillow(raw_image) if isinstance(raw_image, QImage) else raw_image.copy()
+    dark = (
+        qimage_to_pillow(dark_image) if isinstance(dark_image, QImage)
+        else dark_image.copy() if isinstance(dark_image, Image.Image) else None
+    )
+    corrected = ImageChops.subtract(raw.convert("RGB"), dark.convert("RGB")) if dark is not None else raw.convert("RGB")
+    paths: dict[str, str] = {}
+    if output_options.pixel_csv_raw:
+        target = output_stem.with_name(output_stem.name + "_pixels_raw.csv")
+        _write_pixel_csv(target, raw)
+        paths["RAW"] = str(target)
+    if output_options.pixel_csv_dark_corrected:
+        if dark is None:
+            raise RuntimeError("Dark-corrected Pixel CSV requires a matching Shared Dark frame")
+        target = output_stem.with_name(output_stem.name + "_pixels_dark_corrected.csv")
+        _write_pixel_csv(target, corrected)
+        paths["DarkCorrected"] = str(target)
+    if output_options.pixel_csv_exposure_normalized:
+        target = output_stem.with_name(output_stem.name + "_pixels_exposure_normalized.csv")
+        _write_pixel_csv(target, corrected, divisor=max(float(exposure_ms), 1e-12))
+        paths["ExposureNormalized"] = str(target)
+    return paths
 
 
 def save_matrix_capture(
@@ -117,6 +176,11 @@ def save_matrix_capture(
     annotated.save(jpeg_path, quality=95, subsampling=0)
     if raw.size != raw_size or raw.tobytes() != raw_pixels:
         raise RuntimeError("Footer generation modified the RAW image buffer")
+    metadata.update({
+        "RawTiffPath": str(tiff_path),
+        "AnnotatedJpegPath": str(jpeg_path),
+        "MetadataJsonPath": str(metadata_path),
+    })
     payload = dict(metadata)
     payload.update({
         "RawImageWidth": raw.width,
@@ -125,7 +189,14 @@ def save_matrix_capture(
         "AnnotatedJpegHeight": annotated.height,
     })
     metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return SavedCapture(tiff_path, jpeg_path, metadata_path)
+    hashes = {
+        "RawTiffSha256": sha256_file(tiff_path),
+        "AnnotatedJpegSha256": sha256_file(jpeg_path),
+        "MetadataJsonSha256": sha256_file(metadata_path),
+    }
+    for name, path in dict(metadata.get("PixelCsvPaths", {})).items():
+        hashes[f"PixelCsv{name}Sha256"] = sha256_file(path)
+    return SavedCapture(tiff_path, jpeg_path, metadata_path, hashes)
 
 
 def append_manifest(path: Path, metadata: dict[str, Any]) -> None:

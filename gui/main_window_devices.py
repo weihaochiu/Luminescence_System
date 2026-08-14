@@ -354,6 +354,9 @@ class MainWindowDeviceMixin:
 
     def _update_exposure_control_state(self) -> None:
         connected = self.controller.is_open
+        measurement_locked = getattr(self, "_measurement_worker", None) is not None
+        if measurement_locked:
+            connected = False
         mode = self._selected_exposure_mode()
         manual = connected and mode is ExposureMode.MANUAL
         limits_available = bool(
@@ -402,10 +405,11 @@ class MainWindowDeviceMixin:
         self.last_image = image.copy()
         self.image_view.set_image(image)
         self.resolution_status.setText(f"{image.width()} × {image.height()}")
-        self.capture_button.setEnabled(True)
-        self.auto_capture_button.setEnabled(True)
-        self.capture_action.setEnabled(True)
-        self.auto_capture_action.setEnabled(True)
+        controls_available = getattr(self, "_measurement_worker", None) is None
+        self.capture_button.setEnabled(controls_available)
+        self.auto_capture_button.setEnabled(controls_available)
+        self.capture_action.setEnabled(controls_available)
+        self.auto_capture_action.setEnabled(controls_available)
 
         if self._capture_next_frame and self._pending_auto_path:
             self._capture_next_frame = False
@@ -488,7 +492,10 @@ class MainWindowDeviceMixin:
         self._finish_auto_capture_ui()
 
     def _finish_auto_capture_ui(self) -> None:
-        connected = self.controller.is_open
+        connected = (
+            self.controller.is_open
+            and getattr(self, "_measurement_worker", None) is None
+        )
         self.exposure_mode_combo.setEnabled(connected)
         self.capture_button.setEnabled(connected and self.last_image is not None)
         self.auto_capture_button.setEnabled(connected and self.last_image is not None)
@@ -558,7 +565,9 @@ class MainWindowDeviceMixin:
         return path
 
     def _set_camera_controls_enabled(self, enabled: bool) -> None:
-        self.connect_action.setEnabled(bool(self.devices) or enabled)
+        measurement_locked = getattr(self, "_measurement_worker", None) is not None
+        enabled = bool(enabled and not measurement_locked)
+        self.connect_action.setEnabled((bool(self.devices) or enabled) and not measurement_locked)
         self.capture_button.setEnabled(False)
         self.auto_capture_button.setEnabled(False)
         self.capture_action.setEnabled(False)

@@ -240,7 +240,14 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             if not self.measurement_path_edit.text().strip() and not self.selected_recipe.output.root_directory:
                 blockers.append("尚未設定輸出位置")
             reason = "；".join(blockers) if blockers else "開始多 Channel EL Matrix 自動量測"
-        self.start_measurement_button.setEnabled(self.selected_recipe is not None and not blockers if self.selected_recipe else False)
+        running = self._measurement_worker is not None
+        if running:
+            self.hdr_session_button.setEnabled(False)
+            reason = "EL Matrix 量測進行中"
+        self.start_measurement_button.setEnabled(
+            bool(self.selected_recipe is not None and not blockers and not running)
+            if self.selected_recipe else False
+        )
         self.start_measurement_button.setToolTip(reason)
         self.stop_measurement_button.setEnabled(self._measurement_worker is not None)
         self.stop_measurement_button.setToolTip("執行既有 Measurement Safe Stop。")
@@ -278,7 +285,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             "單次自動曝光後拍攝、TIFF／PNG／JPEG 儲存，"
             "VISA SMU 掃描、選擇、安全連線、手動 CV／CC，以及 Recipe 建立、驗證與選擇。\n\n"
             "SMU 支援：Keysight B2900 系列（手動輸出需先進行實機安全驗證）\n"
-            "Recipe：Shared Dark → Channel → J → Gain → Exposure → Repeat\n"
+            "Recipe：全 Channel 極性 → Shared Dark → 每 Channel Dark I–V → J → Gain → Exposure → Repeat\n"
             "支援多 Channel EL Matrix 自動量測、即時進度與安全停止\n"
             "相機介面：RisingCam SDK 57.27250.20241216",
         )

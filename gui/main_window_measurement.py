@@ -10,9 +10,13 @@ from PySide6.QtWidgets import QMessageBox
 from .camera_capture_bridge import CameraCaptureBridge
 from .el_matrix_hardware import ELMatrixHardwareAdapter
 from .el_matrix_plan import ELMatrixPlan, format_duration, format_finish_time
+from .el_matrix_preflight import collect_preflight_errors
 from .el_matrix_runner import ELMatrixRunner, MatrixRuntimeProgress
+from .measurement_snapshot import build_el_matrix_snapshot, snapshot_payload
 from .measurement_progress_dialog import MeasurementProgressDialog
 from .measurement_worker import MeasurementProgress, MeasurementWorker
+from .polarity_settings import PolarityMeasurementSettings
+from .recipe_store import Recipe
 from .smu_control import SMUInterlockError, SMUOwnership
 
 
@@ -61,10 +65,41 @@ def start_background_measurement(self: Any, run: Any) -> bool:
     thread.finished.connect(self._clear_measurement_worker)
     self._measurement_thread = thread
     self._measurement_worker = worker
+    _set_measurement_controls_locked(self, True)
     self.stop_measurement_button.setEnabled(True)
     self.start_measurement_button.setEnabled(False)
     thread.start()
     return True
+
+
+def _set_measurement_controls_locked(self: Any, locked: bool) -> None:
+    names = (
+        "white_light_button", "relay_settings_action", "recipe_manager_action",
+        "polarity_settings_action", "hdr_settings_action", "hdr_session_button", "resolution_combo",
+        "exposure_mode_combo", "exposure_spin", "gain_spin", "apply_manual_button",
+        "capture_button", "auto_capture_button", "capture_action", "auto_capture_action",
+        "connect_action", "manual_smu_panel", "device_panel", "measurement_path_button",
+        "measurement_path_edit",
+    )
+    if locked:
+        states: list[tuple[Any, bool]] = []
+        for name in names:
+            control = getattr(self, name, None)
+            if control is not None and hasattr(control, "setEnabled"):
+                states.append((control, bool(control.isEnabled())))
+                control.setEnabled(False)
+        self._measurement_locked_controls = states
+        self._cancel_auto_capture()
+        if self.controller.is_open:
+            self.controller.switch_to_manual_exposure()
+        return
+    if self.emergency_manager.is_active or self.smu_manager.control.ownership in (
+        SMUOwnership.FAULT, SMUOwnership.EMERGENCY,
+    ):
+        return
+    for control, enabled in getattr(self, "_measurement_locked_controls", []):
+        control.setEnabled(enabled)
+    self._measurement_locked_controls = []
 
 
 def stop_background_measurement(self: Any) -> None:
@@ -113,8 +148,16 @@ def _on_measurement_progress(self: Any, progress: MeasurementProgress | MatrixRu
 
 
 def _on_measurement_finished(self: Any, result: object) -> None:
-    self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE)
-    _best_effort_routing_off(self, "measurement_finished")
+    smu_safe = self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE)
+    routing_safe = _best_effort_routing_off(self, "measurement_finished")
+    light_safe = self.relay_service.safe_white_light_off("measurement_finished")
+    if not (smu_safe and routing_safe and light_safe):
+        message = "Safe shutdown verification failed; measurement remains FAULT"
+        self.status_message.setText(message)
+        dialog = getattr(self, "_measurement_progress_dialog", None)
+        if dialog is not None:
+            dialog.set_failed(message)
+        return
     if self.emergency_manager.is_active:
         self.status_message.setText("ABORTED / EMERGENCY STOP")
     else:
@@ -178,6 +221,8 @@ def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
     estimate = plan.estimate()
     return (
         "量測摘要\n\n"
+        "正式順序：全 Channel 極性確認 → Verified All OFF → Shared Dark（一次）\n"
+        "→ 每 Channel：Routing → Dark I–V → Verified OFF → J → Gain → Exposure → Repeat\n\n"
         f"Channels：{' / '.join(channel.channel for channel in plan.channels)}\n"
         f"Channel 數量：{len(plan.channels)}\n\n"
         f"Current Density：{', '.join(f'{value:g}' for value in recipe.el_matrix.current_density_ma_cm2)} mA/cm²\n"
@@ -190,6 +235,7 @@ def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
         f"Total：{estimate.overall_captures} 張\n\n"
         f"預估純曝光時間：{format_duration(estimate.exposure_time_s)}\n"
         f"預估總量測時間：{format_duration(estimate.total_time_s)}\n"
+        f"最長單一 J OUTPUT ON：{format_duration(estimate.output_on_per_j_s)}\n"
         f"預計完成：{format_finish_time(estimate.estimated_finish)}"
     )
 
@@ -206,17 +252,6 @@ def begin_el_matrix_measurement(self: Any) -> None:
     if not output_root:
         QMessageBox.warning(self, "尚未設定輸出位置", "請先選擇量測資料儲存位置。")
         return
-    if not recipe.polarity.enabled:
-        answer = QMessageBox.warning(
-            self,
-            "略過白光極性確認",
-            "本次量測將跳過白光 Voc/Jsc 極性確認。\n"
-            "請確認所有啟用 Channel 的元件接線方向正確。",
-            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Ok:
-            return
     plan = ELMatrixPlan(recipe)
     answer = QMessageBox.question(
         self,
@@ -227,15 +262,66 @@ def begin_el_matrix_measurement(self: Any) -> None:
     )
     if answer != QMessageBox.StandardButton.Ok:
         return
+    camera_snapshot = dict(self.controller.capture_metadata())
+    exposure_us, gain = self.controller.current_exposure()
+    camera_snapshot.update({
+        "ExposureCapabilityUs": self.camera_info.get("exposure_range_us"),
+        "GainCapability": self.camera_info.get("gain_range"),
+        "ExposureReadbackUs": exposure_us,
+        "GainReadback": gain,
+    })
+    selected = self.device_panel.selected_smu()
+    smu_metadata = self.smu_manager.connection_metadata(
+        selected.visa_address if selected is not None else ""
+    )
+    relay_mapping = self.relay_service.smu_output_mapping()
+    snapshot_recipe = Recipe.from_dict(recipe.to_dict())
+    snapshot_recipe.output.root_directory = str(output_root)
+    snapshot = build_el_matrix_snapshot(
+        snapshot_recipe,
+        execution_order=[
+            {"phase": "polarity", "channels": [c.channel for c in plan.channels]},
+            {"phase": "verified_all_off"}, {"phase": "shared_dark"},
+            {"phase": "per_channel_dark_iv_and_matrix",
+             "channels": [c.channel for c in plan.channels]},
+        ],
+        camera=camera_snapshot,
+        smu=smu_metadata,
+        relay_mapping=relay_mapping,
+        polarity_settings=self.polarity_settings_store.settings,
+    )
+    frozen_recipe = Recipe.from_dict(
+        snapshot_payload(snapshot)["recipe"]["complete_snapshot"]
+    )
+    current_camera = dict(self.controller.capture_metadata())
+    current_camera.update({
+        "exposure_range_us": self.camera_info.get("exposure_range_us"),
+        "gain_range": self.camera_info.get("gain_range"),
+    })
+    preflight = collect_preflight_errors(
+        frozen_recipe,
+        smu_metadata=smu_metadata,
+        smu_output_confirmed_off=self.smu_manager.control.confirm_output_off_for_routing(),
+        relay_connected=self.relay_controller.connected,
+        relay_settings=self.relay_settings_store.settings,
+        camera_connected=self.controller.is_open,
+        camera_snapshot=camera_snapshot,
+        current_camera=current_camera,
+        output_root=output_root,
+    )
+    if preflight:
+        QMessageBox.warning(self, "EL Matrix Preflight 阻擋", "• " + "\n• ".join(preflight))
+        return
     bridge = getattr(self, "_camera_capture_bridge", None)
     if bridge is None:
         bridge = CameraCaptureBridge(self.controller, self)
         self._camera_capture_bridge = bridge
+    polarity_snapshot = snapshot_payload(snapshot)["polarity"]["system_settings"]["settings"]
     hardware = ELMatrixHardwareAdapter(
         self.smu_manager.control,
         self.relay_service,
         bridge,
-        self.polarity_settings_store.settings,
+        PolarityMeasurementSettings.from_dict(polarity_snapshot),
     )
     dialog = MeasurementProgressDialog(recipe.name, self)
     dialog.stop_requested.connect(self.stop_background_measurement)
@@ -249,6 +335,7 @@ def begin_el_matrix_measurement(self: Any) -> None:
             output_root,
             report_progress=progress,
             is_cancel_requested=cancelled,
+            measurement_snapshot=snapshot,
         )
         return runner.run()
 
@@ -263,12 +350,14 @@ def _clear_measurement_worker(self: Any) -> None:
     self._measurement_worker = None
     self._measurement_thread = None
     self.stop_measurement_button.setEnabled(False)
+    _set_measurement_controls_locked(self, False)
     self._update_measurement_controls()
 
 
 def attach_measurement_handlers(cls: type[Any]) -> None:
     for function in (
         start_background_measurement,
+        _set_measurement_controls_locked,
         _best_effort_routing_off,
         stop_background_measurement,
         emergency_stop_measurement,

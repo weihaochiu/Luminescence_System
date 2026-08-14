@@ -36,6 +36,8 @@ class MatrixEstimate:
     overall_captures: int
     exposure_time_s: float
     total_time_s: float
+    output_on_per_j_s: float
+    dark_iv_per_channel_s: float
     estimated_finish: datetime
 
 
@@ -65,27 +67,8 @@ class ELMatrixPlan:
             * len(self.matrix.current_density_ma_cm2)
             * len(self.channels)
         )
-        recurring_s = counts["overall"] * self.matrix.estimated_capture_overhead_s
-        stabilization_s = (
-            len(self.channels)
-            * len(self.matrix.current_density_ma_cm2)
-            * self.matrix.stabilization_ms
-            / 1000.0
-        )
-        polarity_s = (
-            len(self.channels) * self.matrix.estimated_polarity_duration_s
-            if self.recipe.polarity.enabled else 0.0
-        )
-        routing_s = len(self.channels) * self.matrix.estimated_routing_transition_s
-        dark_overhead_s = (
-            self.matrix.estimated_shared_dark_overhead_s
-            if self.matrix.shared_dark_enabled else 0.0
-        )
         exposure_time_s = dark_exposure_s + el_exposure_s
-        total_time_s = (
-            exposure_time_s + recurring_s + stabilization_s + polarity_s
-            + routing_s + dark_overhead_s
-        )
+        total_time_s = self.recipe.matrix_estimated_time_s()
         return MatrixEstimate(
             shared_dark_captures=counts["shared_dark"],
             el_per_channel=counts["el_per_channel"],
@@ -93,6 +76,8 @@ class ELMatrixPlan:
             overall_captures=counts["overall"],
             exposure_time_s=exposure_time_s,
             total_time_s=total_time_s,
+            output_on_per_j_s=self.recipe.matrix_output_on_time_s(),
+            dark_iv_per_channel_s=self.recipe.dark_iv_estimated_time_s(),
             estimated_finish=now + timedelta(seconds=total_time_s),
         )
 

@@ -3,6 +3,8 @@
 文件版本：1.4
 最後更新：2026-08-14（UTC+8）
 
+註：版本摘要中的「Recipe 停用／暫緩」只描述當時版本，現行狀態一律以 FLOW-ELM-001 與 V1.8.1 為準。
+
 ## 1. 強制維護規則
 
 本文件是後續使用者需求的正式追蹤紀錄。每次新增、修改、取消或延後功能時，開發者必須：
@@ -74,29 +76,29 @@
   2. 關燈、等待暗態穩定、執行 Dark I–V。
   3. SMU 回零且 OUTPUT OFF 後，拍攝所有唯一相機條件的 Dark Frames。
   4. 依電流／電流密度或電壓點位拍攝 EL。
-- 執行層暫緩原因：尚未完成 SMU 安全狀態機、錯誤回零與相機同步。
+- 執行狀態：Legacy `el_sweep` 只作相容讀取；正式硬體執行由 FLOW-ELM-001 的 snapshot-driven EL Matrix 流程取代。
 
 ### FLOW-ELM-001－多 Channel EL Matrix 自動量測
 
-- 狀態：已完成（V1.8.0）。
+- 狀態：已完成並補強（V1.8.1）。
 - 提出日期：2026-08-14（UTC+8）。
 - 使用者原意：將已驗證的 Camera Gain／Exposure Matrix 正式整合至 Recipe，依序量測固定 CH1～CH4 中已啟用者。
-- 詳細行為：Shared Dark 只在 run 最外層拍一次；每個 Channel 各自 route、polarity，之後固定執行 J → Gain → Exposure → Repeat。同一 J 內 SMU OUTPUT 保持 ON，stabilization 只執行一次。
+- 詳細行為：先對全部啟用 Channel 逐一 route 並完成 polarity；verified SMU／白光／routing OFF 後拍一次 Shared Dark。再逐 Channel break-before-make route、重套該 Channel factor、暗態穩定、Dark I–V、verified OUTPUT OFF，最後執行 J → Gain → Exposure → Repeat。同一 J 內 SMU OUTPUT 保持 ON，stabilization 只執行一次。
 - 驗收條件：Logical Channel 不保存 physical relay；Area 逐 Channel 計算 Source Current；Channel transition 必須先 verified OUTPUT OFF 再使用既有專用 routing API；任何 stop/error 走共用安全關閉。
 - 影響模組：`recipe_store.py`、`recipe_dialog*`、`el_matrix_plan.py`、`el_matrix_runner.py`、`el_matrix_hardware.py`、`smu_control.py`。
-- 相容性／資料遷移：schema v7；舊 Recipe 無法可靠取得四組 Sample ID 時轉為需人工確認，不 silent guessing。
+- 相容性／資料遷移：schema v8；已知舊版明確 migration，缺少重要欄位維持 draft 並列出人工確認項目，future schema 及未知新版欄位拒絕匯入。
 - 測試與驗證：`tests/test_el_matrix.py` 與完整 unittest suite。
 
 ### OUTPUT-ELM-001－RAW TIFF 與下方 Footer JPG
 
-- 狀態：已完成（V1.8.0）。
+- 狀態：已完成並補強（V1.8.1）。
 - 詳細行為：同一次正式 capture 的 RAW frame 保存 TIFF、更新既有 Live View，並從 copy 建立原圖下方中性灰底／白字三行 Footer JPG；Sample ID 僅在 filename 使用 sanitized 版本。
 - 驗收條件：TIFF 尺寸與 pixel bytes 不變；Footer 不覆蓋相機有效畫面；Dark 不顯示 J=0／I／V；正式 metadata 與 manifest 持續保存高精度數值。
 - 影響模組：`camera_capture_bridge.py`、`measurement_output.py`、`el_matrix_runner.py`。
 
 ### UI-ELM-001－Modeless Progress、Runtime ETA 與 Live View
 
-- 狀態：已完成（V1.8.0）。
+- 狀態：已完成並補強（V1.8.1）。
 - 詳細行為：Summary 在任何 SMU/routing 操作前確認；runtime window modeless，由 worker progress single source of truth 更新 overall monotonic progress、剩餘張數、時間與 finish time。關閉 X 只隱藏視窗，不停止 worker。
 - 驗收條件：正式 frame 仍由既有 CameraController pull-mode signal 更新主畫面；bridge 不啟動第二 stream、不插入 preview exposure；Progress Stop 呼叫既有 safe stop。
 
@@ -104,7 +106,7 @@
 
 - 狀態：已完成介面。
 - 要求：開始量測與停止按鈕必須位於獨立操作列，不可放在 Recipe 選擇區內。
-- 安全限制：在執行層完成以前，兩者維持禁用或安全提示。
+- 安全限制：Start 只有在 Recipe、設備與輸出 preflight 全部通過時可用；worker 存在期間只保留 Stop 與 Emergency 等安全控制。
 
 ### RECIPE-001－Recipe 相機策略選單移除
 
@@ -270,7 +272,7 @@
 - 使用者原意：左側新增固定 CV／CC 手動輸出，共用 Recipe polarity factor、driver 與 connection，並建立底層 ownership/interlock、安全限制、非阻塞 readback、Emergency OFF 及完整 cleanup。
 - 驗收條件：IDLE/MANUAL/RECIPE/EMERGENCY；Manual/Recipe 不可並行；physical=requested×factor；500 ms polling 不阻塞 UI 且不與 command race；Manual OFF、Recipe return/stop/exception、Emergency 與 app close 均歸零及 OUTPUT OFF。
 - 影響模組：`smu_control.py`、`smu_monitor.py`、`smu_manual_panel.py`、`smu_base.py`、`keysight_b2900.py`、`smu_manager.py`、`main_window*`、文件與測試。
-- 相容性／資料遷移：不改 Recipe schema、Camera/HDR、影像與量測輸出格式；完整 Recipe execution 仍停用。
+- 相容性／資料遷移：當時不改 Recipe schema、Camera/HDR、影像與量測輸出格式；當時的 Recipe 停用邊界已由 FLOW-ELM-001 取代。
 - 安全風險：Keysight SCPI 手動輸出尚未以實體 SMU 驗證；首次硬體使用必須在低限制、無敏感 DUT 條件下確認命令與前面板狀態。
 - 測試與驗證：fake SMU 涵蓋 CV/CC、± factor、idempotence、interlock、shutdown、Emergency、錯誤注入、safety 與 I/O serialization；完整 regression suite 通過。
 - 完成版本：V1.4.0。
@@ -287,7 +289,7 @@
 - 安全風險：threading Event 可阻止 latch 後尚未送出的 OUTPUT ON，但不可 preempt 已在執行的 blocking PyVISA call；Keysight B2900 的 SCPI response、實體 output 與故障恢復仍需實機確認。
 - 測試與驗證：FakeSMU 以 Event 控制 configure timing，涵蓋 double request、Emergency race、UNKNOWN／confirmed polarity、idempotent factor、mode reset、limits injection、unknown disconnect、shutdown failure 與原有 serialization。
 - 完成版本：V1.4.1。
-- 取代或關聯需求：補強 SMU-001；SAFE-001 的 Recipe execution 暫緩狀態不變。
+- 取代或關聯需求：補強 SMU-001；當時的 SAFE-001 暫緩狀態已由 FLOW-ELM-001 取代。
 
 ### SMU-003－統一狀態與安全自動連線
 
@@ -301,7 +303,7 @@
 - 安全風險：SCPI safety initialization 與 `:OUTP?` response 仍需以實體 Keysight B2901BL、低限制且無敏感 DUT 條件驗證。
 - 測試與驗證：狀態轉換、bind reset、選擇優先序、多設備 ambiguity、OUTPUT OFF 確認成功／失敗與禁止 OUTPUT ON。
 - 完成版本：V1.5.0。
-- 取代或關聯需求：補強 SMU-001、SMU-002；SAFE-001 的 Recipe execution 暫緩狀態不變。
+- 取代或關聯需求：補強 SMU-001、SMU-002；當時的 SAFE-001 暫緩狀態已由 FLOW-ELM-001 取代。
 
 ### UI-001－Responsive measurement workspace
 
@@ -325,11 +327,11 @@
 - 詳細行為：所有 GUI 使用同一不可變 `SMUUIState`；`READY_MANUAL` 必須是 IDLE／READY／OUTPUT OFF confirmed；矛盾 readback 進入 `UNEXPECTED_OUTPUT_ON`；Manual 使用 physical SMU coordinate，Recipe 才套用 confirmed Polarity；OFF-first shutdown 明確查詢；Manual ↔ Recipe 交接 fail closed；Emergency 先 latch 並誠實顯示 VISA 序列化限制。
 - 驗收條件：未預期 ON 時只開放 OFF／Emergency；OFF query 為 ON／UNKNOWN／exception 時保留 fault/latch；Recipe ownership 不得被一般 recovery OFF 偷走；bind 失敗不得留下 zombie connection；device label 可換行。
 - 影響模組：`smu_control.py`、`smu_base.py`、`smu_manager.py`、`instrument_state_manager.py`、Manual／Device／Main Window GUI、SMU tests 與文件。
-- 相容性／資料遷移：不改 Recipe schema、Camera、HDR、Relay 或輸出資料；完整 Recipe hardware execution 仍停用。
+- 相容性／資料遷移：當時不改 Recipe schema、Camera、HDR、Relay 或輸出資料；當時的 Recipe 停用邊界已由 FLOW-ELM-001 取代。
 - 安全風險：fake driver 無法驗證實機韌體對 `:OUTP?` 的 timing；B2901BL 實機需驗證 OFF query、VISA timeout 與前面板狀態。
 - 測試與驗證：Manual UNKNOWN polarity、Recipe polarity、unexpected ON、shutdown query failure、雙向 handover、Emergency race、bind cleanup、single-snapshot UI policy。
 - 完成版本：V1.5.1。
-- 取代或關聯需求：補強 SMU-001、SMU-002；SAFE-001 的 Recipe execution 暫緩狀態不變。
+- 取代或關聯需求：補強 SMU-001、SMU-002；當時的 SAFE-001 暫緩狀態已由 FLOW-ELM-001 取代。
 
 ### SMU-004－B2901BL OUTPUT OFF readback auto-output hotfix
 
@@ -343,7 +345,7 @@
 - 安全風險：修正版仍須使用 B2901BL 驗證啟動後等待至少 10 秒保持 OUTPUT OFF，並驗證 Manual ON／readback／OFF 循環。
 - 測試與驗證：fake B2901BL auto-enable regression、readback call order、unexpected ON state、startup repeated ticks、Manual ON→OFF、auto-output initialization order／fail-closed。
 - 完成版本：V1.5.2。
-- 取代或關聯需求：補強 SMU-002、SMU-003；SAFE-001 與 Recipe execution 暫緩狀態不變。
+- 取代或關聯需求：補強 SMU-002、SMU-003；當時的 SAFE-001 暫緩狀態已由 FLOW-ELM-001 取代。
 
 ### UI-002－Runtime responsive metrics 與 Recipe 顯示修正
 
@@ -369,8 +371,8 @@
 
 ### SAFE-001－SMU 輸出保持停用
 
-- 狀態：部分取代；手動輸出由 SMU-001 開放，Recipe 實際量測仍暫緩。
-- 要求：完整 Recipe 在完成 polarity determination、四階段硬體狀態機、相機同步與資料落盤驗證以前不可啟用。
+- 狀態：已由 SMU-001 與 FLOW-ELM-001 取代（V1.8.1）。
+- 要求：Manual 與 Recipe 只能經 authoritative ownership/interlock 輸出；EL Matrix 必須完成每 Channel polarity、Dark I–V、相機 frame generation barrier、資料落盤及 verified safe shutdown。
 
 ### SCOPE-001－Door 功能
 
@@ -404,6 +406,15 @@
 
 ## 9. 版本變更摘要
 
+### V1.8.1－2026-08-14
+
+- Recipe safety 改以實際 EL Matrix 計算完整流程、單一 Channel/J OUTPUT ON、最壞功率與最大曝光；新增 runtime watchdog。
+- 正式順序改為全 Channel polarity → verified all-off → Shared Dark 一次 → 每 Channel Dark I–V → verified OFF → EL Matrix；禁止略過 polarity。
+- 新增 immutable Measurement Snapshot/SHA-256、聚合式 hardware preflight、量測中控制鎖定及 frame sequence barrier。
+- 完成 Pixel CSV 選配、逐張 metadata 實際路徑、Dark I–V CSV/JSON 與 final files SHA-256 manifest。
+- Recipe schema v8 強化 untrusted JSON 結構、known migration、draft review items、unknown field 與 future schema rejection。
+- 驗證結果：targeted 74/74、完整 unittest suite 274/274、compileall 與 `git diff --check` 通過；實機 acceptance test 待執行。
+
 ### V1.8.0－2026-08-14
 
 - Recipe schema v7 新增固定 CH1～CH4 與共用 EL Matrix，舊 Recipe 缺少 Sample ID 時要求人工確認。
@@ -423,7 +434,7 @@
 - B2901BL 實機確認 OUTPUT OFF 時 `:MEAS:VOLT?` 會自動開啟 Source Output；readback 改為 OUTP-first，OFF 時禁止 `MEAS:*` polling。
 - 只有合法 Manual OUTPUT ON 才取得 voltage/current/compliance；其他 ON 狀態保留 `UNEXPECTED_OUTPUT_ON` 安全復歸。
 - B2900 初始化新增 `:OUTP:ON:AUTO OFF` 與 query confirmation；無法確認時連線 fail closed。
-- Output OFF 的量測欄位顯示 unavailable；Recipe、Polarity、InstrumentStateManager 與完整 Recipe 停用邊界不變。
+- Output OFF 的量測欄位顯示 unavailable；該版 Recipe 停用邊界其後已由 FLOW-ELM-001 取代。
 
 ### V1.5.1－2026-08-12
 
@@ -431,7 +442,7 @@
 - Manual 改用 physical SMU coordinate；Recipe 保留 Device coordinate × confirmed Polarity。
 - 安全關閉改為 OUTPUT OFF／明確 query／source zero，新增雙向交接、Emergency latch 說明與 bind failure 全面清理。
 - Responsive 測試改為真實 resize + manager update，新增 runtime metrics 重新計算並修正 Recipe 重複文字。
-- 清理 Git index 中 Python cache 並擴充 `.gitignore`；完整 Recipe 硬體執行仍停用。
+- 清理 Git index 中 Python cache 並擴充 `.gitignore`；該版 Recipe 停用邊界其後已由 FLOW-ELM-001 取代。
 
 ### V1.5.0－2026-08-12
 
@@ -450,7 +461,7 @@
 ### V1.4.0－2026-08-11
 
 - 新增 Manual CV／CC panel、central ownership/interlock、共用 polarity、安全限制、序列化 readback、Emergency 與 lifecycle cleanup。
-- 新增 fake SMU control regression tests；完整 Recipe 執行維持停用。
+- 新增 fake SMU control regression tests；該版 Recipe 停用邊界其後已由 FLOW-ELM-001 取代。
 
 ### V1.3.6－2026-08-06
 
