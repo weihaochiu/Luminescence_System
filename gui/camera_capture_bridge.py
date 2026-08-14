@@ -150,12 +150,19 @@ class CameraCaptureBridge(QObject):
             temperature = self.controller.read_temperature_c()
         except Exception:
             pass
+        capture_metadata = getattr(self.controller, "capture_metadata", None)
+        controller_metadata = (
+            dict(capture_metadata()) if callable(capture_metadata) else {}
+        )
         metadata = {
             "ImageWidth": image.width(),
             "ImageHeight": image.height(),
-            "PixelFormat": "RGB48" if scientific_image is not None else "RGB24",
+            "PixelFormat": (
+                str(controller_metadata.get("PixelFormat", "UNKNOWN"))
+                if scientific_image is not None else "RGB24"
+            ),
             "BitDepth": (
-                int(self.controller.capture_metadata().get("BitDepth", 8))
+                int(controller_metadata.get("BitDepth", 8))
                 if scientific_image is not None else 8
             ),
             "CameraModel": self.controller.device_name,
@@ -163,9 +170,7 @@ class CameraCaptureBridge(QObject):
             "ExposureReadbackUs": pending.actual_exposure_us,
             "GainReadback": pending.actual_gain_percent,
         }
-        capture_metadata = getattr(self.controller, "capture_metadata", None)
-        if callable(capture_metadata):
-            metadata.update(capture_metadata())
+        metadata.update(controller_metadata)
         pending.frame = CapturedFrame(
             image.copy(),
             datetime.now().astimezone(),

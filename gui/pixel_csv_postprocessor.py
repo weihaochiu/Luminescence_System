@@ -10,9 +10,10 @@ from pathlib import Path
 from time import monotonic
 from typing import Any, Callable, Mapping
 
-from PIL import Image, ImageChops
+import numpy as np
+import tifffile
 
-from .measurement_output import sha256_file, write_pixel_csv_atomic
+from .measurement_output import sha256_file, write_mono_array_csv_atomic
 
 
 SAFE_SHUTDOWN_KEYS = (
@@ -68,9 +69,20 @@ def _atomic_csv(path: Path, fieldnames: list[str], rows: list[Mapping[str, Any]]
         temporary.unlink(missing_ok=True)
 
 
-def _key(metadata: Mapping[str, Any]) -> tuple[int, str, int]:
+def _key(metadata: Mapping[str, Any]) -> tuple[int, str, int, str, tuple[int, ...]]:
     exposure = format(float(metadata["Exposure"]), ".12g")
-    return int(metadata["Gain"]), exposure, int(metadata["RepeatIndex"])
+    shape = metadata.get("ScientificShape")
+    if not isinstance(shape, (list, tuple)):
+        height = metadata.get("RawImageHeight", metadata.get("ImageHeight"))
+        width = metadata.get("RawImageWidth", metadata.get("ImageWidth"))
+        shape = () if height is None or width is None else (height, width)
+    return (
+        int(metadata["Gain"]),
+        exposure,
+        int(metadata["RepeatIndex"]),
+        str(metadata.get("Resolution", "")),
+        tuple(int(value) for value in shape),
+    )
 
 
 class PixelCSVPostprocessor:
@@ -217,7 +229,9 @@ class PixelCSVPostprocessor:
     def _jobs(
         self,
         metadata_items: list[tuple[Path, dict[str, Any]]],
-        dark_by_key: Mapping[tuple[int, str, int], tuple[Path, dict[str, Any]]],
+        dark_by_key: Mapping[
+            tuple[int, str, int, str, tuple[int, ...]], tuple[Path, dict[str, Any]]
+        ],
         options: Mapping[str, Any],
     ) -> list[dict[str, Any]]:
         if not options.get("export_pixel_csv", False):
@@ -238,7 +252,8 @@ class PixelCSVPostprocessor:
             for product, suffix in products:
                 if product != "RAW" and dark_entry is None:
                     raise PixelCSVPostprocessError(
-                        "No Shared Dark matches Gain/Exposure/Repeat for " + str(metadata_path)
+                        "No Shared Dark matches Gain/Exposure/Repeat/Resolution/Geometry for "
+                        + str(metadata_path)
                     )
                 dark_metadata = None if dark_entry is None else dark_entry[1]
                 output_path = stem.with_name(stem.name + suffix)
@@ -259,21 +274,37 @@ class PixelCSVPostprocessor:
     def _process_job(self, job: Mapping[str, Any]) -> dict[str, Any]:
         source_path = Path(str(job["source_tiff"]))
         output_path = Path(str(job["output_path"]))
-        with Image.open(source_path) as source_file:
-            source = source_file.convert("RGB").copy()
+        source = np.asarray(tifffile.imread(source_path))
+        self._validate_scientific_array(source, source_path)
         product = str(job["product"])
         if product == "RAW":
-            output_image = source
-            divisor = None
+            output_array = source
+            value_header = "DN"
+            unit = "DN"
         else:
             dark_path = Path(str(job["shared_dark_tiff"]))
-            with Image.open(dark_path) as dark_file:
-                dark = dark_file.convert("RGB").copy()
-            if dark.size != source.size:
-                raise ValueError(f"Shared Dark dimensions do not match {source_path}")
-            output_image = ImageChops.subtract(source, dark)
-            divisor = float(job["exposure_ms"]) if product == "ExposureNormalized" else None
-        write_pixel_csv_atomic(output_path, output_image, divisor=divisor)
+            dark = np.asarray(tifffile.imread(dark_path))
+            self._validate_scientific_array(dark, dark_path)
+            if dark.shape != source.shape:
+                raise ValueError(
+                    f"Shared Dark shape {dark.shape} does not match source "
+                    f"shape {source.shape}: {source_path}"
+                )
+            corrected = source.astype(np.int32) - dark.astype(np.int32)
+            if product == "DarkCorrected":
+                output_array = corrected
+                value_header = "DarkCorrectedDN"
+                unit = "DN"
+            else:
+                exposure_ms = float(job["exposure_ms"])
+                if exposure_ms <= 0:
+                    raise ValueError("Exposure normalization requires Exposure > 0 ms")
+                output_array = corrected.astype(np.float64) / exposure_ms
+                value_header = "DN_per_ms"
+                unit = "DN/ms"
+        write_mono_array_csv_atomic(
+            output_path, output_array, value_header=value_header
+        )
         return {
             "job_id": job["job_id"],
             "product": product,
@@ -284,14 +315,31 @@ class PixelCSVPostprocessor:
             "shared_dark_sha256": job["shared_dark_sha256"],
             "output_csv": str(output_path),
             "output_sha256": sha256_file(output_path),
+            "value_header": value_header,
+            "unit": unit,
+            "array_dtype": str(output_array.dtype),
             "completed_at": self.now().isoformat(timespec="seconds"),
         }
+
+    @staticmethod
+    def _validate_scientific_array(array: np.ndarray, path: Path) -> None:
+        if array.dtype != np.uint16:
+            raise TypeError(
+                f"Scientific TIFF must contain uint16 pixels, got {array.dtype}: {path}"
+            )
+        if array.ndim != 2:
+            raise ValueError(
+                f"Scientific TIFF must be H×W mono, got shape {array.shape}: {path}"
+            )
 
     def _record_is_valid(self, record: Mapping[str, Any], job: Mapping[str, Any]) -> bool:
         output = Path(str(record.get("output_csv", "")))
         return bool(
             record.get("source_sha256") == job.get("source_sha256")
             and record.get("shared_dark_sha256") == job.get("shared_dark_sha256")
+            and record.get("value_header")
+            and record.get("unit")
+            and record.get("array_dtype")
             and output.is_file()
             and record.get("output_sha256") == sha256_file(output)
         )
@@ -322,6 +370,14 @@ class PixelCSVPostprocessor:
             }
             for item in related
         }
+        payload["PixelCsvQuantities"] = {
+            str(item["product"]): {
+                "ValueHeader": item["value_header"],
+                "Unit": item["unit"],
+                "ArrayDtype": item["array_dtype"],
+            }
+            for item in related
+        }
         payload["PixelCsvPostprocessStatus"] = (
             "completed" if len(related) >= expected_products else "processing"
         )
@@ -331,7 +387,7 @@ class PixelCSVPostprocessor:
         fields = [
             "job_id", "product", "metadata_path", "source_tiff", "source_sha256",
             "shared_dark_tiff", "shared_dark_sha256", "output_csv", "output_sha256",
-            "completed_at",
+            "value_header", "unit", "array_dtype", "completed_at",
         ]
         rows = [records[key] for key in sorted(records)]
         _atomic_csv(self.pixel_manifest_path, fields, rows)
@@ -344,7 +400,10 @@ class PixelCSVPostprocessor:
             rows = [dict(row) for row in reader]
             fields = list(reader.fieldnames or [])
         payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-        additions = ["PixelCsvPaths", "PixelCsvHashes", "PixelCsvSources", "PixelCsvPostprocessStatus"]
+        additions = [
+            "PixelCsvPaths", "PixelCsvHashes", "PixelCsvSources", "PixelCsvQuantities",
+            "PixelCsvPostprocessStatus",
+        ]
         for field in additions:
             if field not in fields:
                 fields.append(field)

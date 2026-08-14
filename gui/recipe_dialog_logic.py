@@ -121,10 +121,10 @@ class RecipeDialogLogicMixin:
         self.output_png_check.setChecked(recipe.output.format_png)
         self.output_jpg_check.setChecked(recipe.output.format_jpg)
         self.output_jpg_footer_check.setChecked(recipe.output.format_jpg_with_footer)
-        self.save_raw_check.setChecked(recipe.output.save_raw_frames)
-        self.save_summary_csv_check.setChecked(recipe.output.save_summary_csv)
-        self.save_json_check.setChecked(recipe.output.save_json)
-        self.save_snapshot_check.setChecked(recipe.output.save_recipe_snapshot)
+        self.save_raw_check.setChecked(True)
+        self.save_summary_csv_check.setChecked(True)
+        self.save_json_check.setChecked(True)
+        self.save_snapshot_check.setChecked(True)
         self.export_pixel_csv_check.setChecked(recipe.output.export_pixel_csv)
         self.pixel_csv_raw_check.setChecked(recipe.output.pixel_csv_raw)
         self.pixel_csv_corrected_check.setChecked(recipe.output.pixel_csv_dark_corrected)
@@ -188,10 +188,10 @@ class RecipeDialogLogicMixin:
         recipe.output.format_png = self.output_png_check.isChecked()
         recipe.output.format_jpg = self.output_jpg_check.isChecked()
         recipe.output.format_jpg_with_footer = self.output_jpg_footer_check.isChecked()
-        recipe.output.save_raw_frames = self.save_raw_check.isChecked()
-        recipe.output.save_summary_csv = self.save_summary_csv_check.isChecked()
-        recipe.output.save_json = self.save_json_check.isChecked()
-        recipe.output.save_recipe_snapshot = self.save_snapshot_check.isChecked()
+        recipe.output.save_raw_frames = True
+        recipe.output.save_summary_csv = True
+        recipe.output.save_json = True
+        recipe.output.save_recipe_snapshot = True
         recipe.output.export_pixel_csv = self.export_pixel_csv_check.isChecked()
         recipe.output.pixel_csv_raw = self.pixel_csv_raw_check.isChecked()
         recipe.output.pixel_csv_dark_corrected = self.pixel_csv_corrected_check.isChecked()
@@ -234,7 +234,9 @@ class RecipeDialogLogicMixin:
             self.matrix_voltage_compliance_spin, self.matrix_stabilization_spin,
             self.matrix_capture_timeout_spin, self.resolution_combo,
             self.output_tiff_check, self.output_png_check, self.output_jpg_check,
-            self.output_jpg_footer_check,
+            self.output_jpg_footer_check, self.export_pixel_csv_check,
+            self.pixel_csv_raw_check, self.pixel_csv_corrected_check,
+            self.pixel_csv_normalized_check,
         )
         for widget in widgets:
             for signal_name in (

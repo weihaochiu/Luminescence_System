@@ -230,7 +230,7 @@ class Recipe:
             for exposure in self.el_matrix.exposures_ms:
                 exposure = float(exposure)
                 gain = int(gain)
-                key = (round(exposure, 6), gain, self.output.resolution_id, "RGB48")
+                key = (round(exposure, 6), gain, self.output.resolution_id)
                 profiles.setdefault(
                     key,
                     {
@@ -238,7 +238,6 @@ class Recipe:
                         "exposure_ms": exposure,
                         "gain_percent": gain,
                         "resolution": self.output.resolution_id,
-                        "pixel_format": "RGB48",
                         "trigger_mode": "software",
                     },
                 )
@@ -374,6 +373,8 @@ class Recipe:
 
         if not self.output.selected_formats():
             errors.append("至少必須選擇一種影像輸出格式")
+        if not self.output.save_raw_frames:
+            errors.append("每次 capture 的輸出紀錄是必要輸出")
         if not self.output.save_summary_csv:
             errors.append("Dark I–V 與 EL scan summary CSV 是必要輸出")
         if not self.output.save_json:
@@ -388,6 +389,15 @@ class Recipe:
             errors.append("啟用全解析度像素 CSV 時，至少要選擇一種輸出內容")
         if self.output.export_pixel_csv and not self.output.format_tiff:
             errors.append("Pixel CSV 後處理需要 TIFF 科學影像來源")
+        if (
+            self.output.export_pixel_csv
+            and (
+                self.output.pixel_csv_dark_corrected
+                or self.output.pixel_csv_exposure_normalized
+            )
+            and not self.el_matrix.dark_frame_enabled
+        ):
+            errors.append("Dark-corrected / Exposure-normalized Pixel CSV 需要 Shared Dark")
         return errors
 
     def estimated_time_s(self) -> float:
@@ -463,6 +473,12 @@ class Recipe:
         if original_measurement_type == "el_single_current":
             measurement_type = "el_sequence"
         output_data = dict(data.get("output") or {})
+        # These records are unconditional runtime traceability products. Older
+        # false values came from a misleading optional-looking UI and are ignored.
+        for required_output in (
+            "save_raw_frames", "save_summary_csv", "save_json", "save_recipe_snapshot"
+        ):
+            output_data[required_output] = True
         # V1.2.1 used one ambiguous save_csv flag. It represented the required
         # Dark I-V / EL summary tables, not full-resolution pixel matrices.
         if "save_summary_csv" not in output_data and "save_csv" in output_data:

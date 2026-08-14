@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,8 +11,6 @@ import numpy as np
 import tifffile
 from PIL import Image
 
-from gui.camera_controller import CameraController
-from gui.sdk import nncam
 from gui.el_matrix_plan import ELMatrixPlan
 from gui.measurement_control_bar import MeasurementControlBar
 from gui.main_window_measurement import begin_el_matrix_measurement, _measurement_summary
@@ -52,6 +49,14 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                 self.assertTrue(hasattr(dialog, "polarity_enabled_check"))
                 self.assertTrue(hasattr(dialog, "dark_iv_enabled_check"))
                 self.assertTrue(hasattr(dialog, "dark_frame_enabled_check"))
+                for required_output in (
+                    dialog.save_raw_check,
+                    dialog.save_summary_csv_check,
+                    dialog.save_json_check,
+                    dialog.save_snapshot_check,
+                ):
+                    self.assertTrue(required_output.isChecked())
+                    self.assertFalse(required_output.isEnabled())
                 for removed in (
                     "image_format_combo", "output_root_edit", "device_match_combo",
                     "points_table", "dark_frames_per_profile_spin",
@@ -138,20 +143,44 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
         recipe.channels[2].enabled = True
         recipe.channels[3].enabled = False
         recipe.output.format_png = True
+        recipe.output.export_pixel_csv = True
+        recipe.output.pixel_csv_exposure_normalized = True
         recipe.el_matrix.gains_percent = [100, 200]
         recipe.el_matrix.exposures_ms = [1.0, 2.0, 5.0]
         recipe.el_matrix.repeat = 2
         plan = build_measurement_execution_plan(recipe)
         channels = next(step for step in plan.steps if step.key == "channels")
         self.assertEqual(["CH1", "CH3"], [child.title for child in channels.children])
+        polarity = next(step for step in plan.steps if step.key == "polarity")
+        self.assertEqual(["CH1", "CH3"], [child.title for child in polarity.children])
+        self.assertEqual(
+            [
+                "Routing CH1", "White Light ON", "Polarity Measurement",
+                "Determine polarity", "White Light OFF",
+            ],
+            [child.title for child in polarity.children[0].children],
+        )
+        shared_dark = next(step for step in plan.steps if step.key == "dark_frame")
+        self.assertEqual(["Gain 100%", "Gain 200%"], [child.title for child in shared_dark.children])
+        self.assertTrue(all(not child.title.startswith("CH") for child in shared_dark.children))
         payload = json.dumps(plan.to_dict(), ensure_ascii=False)
         self.assertIn("Gain 100%", payload)
         self.assertIn("Exposure 2 ms", payload)
         self.assertIn("Repeat 2", payload)
         output = next(step for step in plan.steps if step.key == "output")
         self.assertEqual(
-            ["TIFF", "PNG", "JPG with Footer"],
+            [
+                "TIFF", "PNG", "JPG with Footer", "Capture Records（必要）",
+                "Summary CSV（必要）",
+                "JSON Metadata（必要）", "Recipe Snapshot（必要）",
+                "Pixel CSV（Safe Shutdown 後處理）",
+            ],
             [child.title for child in output.children],
+        )
+        pixel_csv = output.children[-1]
+        self.assertEqual(
+            ["Raw DN", "Dark-corrected", "Exposure-normalized（DN/ms）"],
+            [child.title for child in pixel_csv.children],
         )
         runtime = ELMatrixPlan(recipe)
         self.assertEqual((1.0, 2.0, 5.0), runtime.exposures_ms)
@@ -323,19 +352,6 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
             loaded_rgb = tifffile.imread(saved.tiff_path)
             self.assertEqual(np.uint16, loaded_rgb.dtype)
             np.testing.assert_array_equal(source, loaded_rgb)
-
-    def test_camera_scientific_branch_enables_high_bit_mode_and_pulls_rgb48(self) -> None:
-        open_source = inspect.getsource(CameraController.open_device)
-        pull_source = inspect.getsource(CameraController._pull_live_frame)
-        self.assertIn("NNCAM_OPTION_BITDEPTH, 1", open_source)
-        self.assertIn("PullImageV4(self._buffer, 0, 48", pull_source)
-        self.assertIn('dtype="<u2"', pull_source)
-        self.assertIn("scientific_frame_ready.emit(scientific", pull_source)
-        self.assertEqual(
-            12,
-            CameraController._native_sensor_bit_depth(nncam.NNCAM_FLAG_RAW12),
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

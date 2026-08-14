@@ -104,8 +104,13 @@ class _FakeHardware:
             image,
             datetime(2026, 8, 14, 6, 44, 12).astimezone(),
             39.8,
-            {"CameraModel": "Fake", "CameraSerial": "SN1", "PixelFormat": "RGB48", "BitDepth": 12},
-            np.full((3, 4, 3), 1024, dtype=np.uint16),
+            {
+                "CameraModel": "Fake", "CameraSerial": "SN1", "PixelFormat": "MONO16",
+                "BitDepth": 12, "SensorBitDepth": 12, "ContainerBitDepth": 16,
+                "ContainerDtype": "uint16", "Channels": 1,
+                "RawValueAlignment": "right",
+            },
+            np.full((3, 4), 1024, dtype=np.uint16),
         )
 
     def output_off(self):
@@ -408,12 +413,12 @@ class MatrixImageOutputTests(unittest.TestCase):
     def test_pixel_csv_products_follow_output_options(self) -> None:
         recipe = Recipe()
         recipe.output.export_pixel_csv = True
-        image = Image.new("RGB", (2, 1), (10, 20, 30))
-        dark = Image.new("RGB", (2, 1), (1, 2, 3))
+        image = np.array([[10, 20]], dtype=np.uint16)
+        dark = np.array([[1, 30]], dtype=np.uint16)
         with tempfile.TemporaryDirectory() as directory:
             paths = save_pixel_csv_products(
                 image, Path(directory) / "capture", recipe.output,
-                dark_image=dark, exposure_ms=10,
+                dark_array=dark, exposure_ms=10,
             )
             self.assertEqual({"RAW", "DarkCorrected"}, set(paths))
             for path in paths.values():

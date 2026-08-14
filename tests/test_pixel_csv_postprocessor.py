@@ -8,7 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from PIL import Image
+import numpy as np
+import tifffile
 
 from gui.el_matrix_runner import ELMatrixRunner
 from gui.main_window_measurement import _on_measurement_finished
@@ -34,7 +35,7 @@ def _capture(
     root: Path,
     name: str,
     measurement_type: str,
-    value: int,
+    value: int | np.ndarray,
     *,
     gain: int = 100,
     exposure: float = 10.0,
@@ -43,12 +44,19 @@ def _capture(
 ) -> Path:
     tiff = root / f"{name}.tiff"
     metadata = root / f"{name}.json"
-    Image.new("RGB", size, (value, value, value)).save(tiff, compression="tiff_lzw")
+    array = (
+        np.asarray(value, dtype=np.uint16)
+        if isinstance(value, np.ndarray)
+        else np.full((size[1], size[0]), value, dtype=np.uint16)
+    )
+    tifffile.imwrite(tiff, array, photometric="minisblack")
     metadata.write_text(json.dumps({
         "MeasurementType": measurement_type,
         "Gain": gain,
         "Exposure": exposure,
         "RepeatIndex": repeat,
+        "Resolution": f"{array.shape[1]}x{array.shape[0]}",
+        "ScientificShape": list(array.shape),
         "RawTiffPath": str(tiff),
         "RawTiffSha256": sha256_file(tiff),
         "MetadataJsonPath": str(metadata),
@@ -68,10 +76,9 @@ def _snapshot(root: Path, *, raw: bool, corrected: bool, normalized: bool) -> No
     }), encoding="utf-8")
 
 
-def _first_rgb(csv_path: Path) -> tuple[float, float, float]:
+def _values(csv_path: Path, column: str) -> list[float]:
     with csv_path.open("r", newline="", encoding="utf-8-sig") as stream:
-        row = next(csv.DictReader(stream))
-    return float(row["R"]), float(row["G"]), float(row["B"])
+        return [float(row[column]) for row in csv.DictReader(stream)]
 
 
 class PixelCSVPostprocessorTests(unittest.TestCase):
@@ -114,8 +121,8 @@ class PixelCSVPostprocessorTests(unittest.TestCase):
             status = PixelCSVPostprocessor(root, SAFE).run()
             corrected = root / "el_r2_pixels_dark_corrected.csv"
             normalized = root / "el_r2_pixels_exposure_normalized.csv"
-            self.assertEqual((3.0, 3.0, 3.0), _first_rgb(corrected))
-            self.assertEqual((0.3, 0.3, 0.3), _first_rgb(normalized))
+            self.assertEqual([3.0, 3.0], _values(corrected, "DarkCorrectedDN"))
+            self.assertEqual([0.3, 0.3], _values(normalized, "DN_per_ms"))
             self.assertEqual("completed", status["status"])
             metadata = json.loads((root / "el_r2.json").read_text(encoding="utf-8"))
             source = metadata["PixelCsvSources"]["DarkCorrected"]
@@ -140,7 +147,13 @@ class PixelCSVPostprocessorTests(unittest.TestCase):
             root = Path(directory)
             _snapshot(root, raw=True, corrected=True, normalized=False)
             _capture(root, "dark", "DARK", 1, size=(1, 1))
-            _capture(root, "el", "EL", 10, size=(2, 1))
+            el_metadata_path = _capture(root, "el", "EL", 10, size=(2, 1))
+            # Simulate corrupt metadata that claims a matching geometry; the
+            # TIFF array validation must still catch the real shape mismatch.
+            el_metadata = json.loads(el_metadata_path.read_text(encoding="utf-8"))
+            el_metadata["Resolution"] = "1x1"
+            el_metadata["ScientificShape"] = [1, 1]
+            el_metadata_path.write_text(json.dumps(el_metadata), encoding="utf-8")
             before = sha256_file(root / "el.tiff")
             with self.assertRaises(PixelCSVPostprocessError):
                 PixelCSVPostprocessor(root, SAFE).run()
@@ -184,13 +197,49 @@ class PixelCSVPostprocessorTests(unittest.TestCase):
             processor.run()
             paths = sorted(root.glob("*_pixels_*.csv"))
             before = {path: (path.stat().st_mtime_ns, sha256_file(path)) for path in paths}
-            with patch("gui.pixel_csv_postprocessor.write_pixel_csv_atomic") as writer:
+            with patch("gui.pixel_csv_postprocessor.write_mono_array_csv_atomic") as writer:
                 resumed = PixelCSVPostprocessor(root, SAFE).run()
             writer.assert_not_called()
             self.assertEqual("completed", resumed["status"])
             self.assertEqual(
                 before,
                 {path: (path.stat().st_mtime_ns, sha256_file(path)) for path in paths},
+            )
+
+    def test_raw_csv_exactly_preserves_uint16_dn_above_255(self) -> None:
+        source = np.array([[0, 1, 255, 256, 1024, 2048, 4095]], dtype=np.uint16)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _snapshot(root, raw=True, corrected=False, normalized=False)
+            _capture(root, "dark", "DARK", source)
+            PixelCSVPostprocessor(root, SAFE).run()
+            csv_path = root / "dark_pixels_raw.csv"
+            with csv_path.open("r", newline="", encoding="utf-8-sig") as stream:
+                reader = csv.DictReader(stream)
+                self.assertEqual(["y", "x", "DN"], reader.fieldnames)
+                actual = [int(row["DN"]) for row in reader]
+            self.assertEqual(source.ravel().tolist(), actual)
+
+    def test_dark_correction_preserves_negative_and_normalization_is_dn_per_ms(self) -> None:
+        dark = np.array([[10, 30, 100]], dtype=np.uint16)
+        source = np.array([[100, 20, 4095]], dtype=np.uint16)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _snapshot(root, raw=False, corrected=True, normalized=True)
+            _capture(root, "dark", "DARK", dark, exposure=10.0)
+            _capture(root, "el", "EL", source, exposure=10.0)
+            PixelCSVPostprocessor(root, SAFE).run()
+            self.assertEqual(
+                [90.0, -10.0, 3995.0],
+                _values(root / "el_pixels_dark_corrected.csv", "DarkCorrectedDN"),
+            )
+            self.assertEqual(
+                [9.0, -1.0, 399.5],
+                _values(root / "el_pixels_exposure_normalized.csv", "DN_per_ms"),
+            )
+            payload = json.loads((root / "el.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                "DN/ms", payload["PixelCsvQuantities"]["ExposureNormalized"]["Unit"]
             )
 
     def test_normal_completion_does_not_repeat_safe_shutdown(self) -> None:

@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 import numpy as np
 import tifffile
-from PIL import Image, ImageChops, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 from PySide6.QtGui import QImage
 
 
@@ -113,73 +113,101 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
-def write_pixel_csv_atomic(
-    path: Path, image: Image.Image, *, divisor: float | None = None
+def write_mono_array_csv_atomic(
+    path: Path, array: np.ndarray, *, value_header: str = "DN"
 ) -> None:
-    rgb = image.convert("RGB")
+    """Atomically write an H×W scientific array without image conversion."""
+
+    values = np.asarray(array)
+    if values.ndim != 2:
+        raise ValueError("Scientific Pixel CSV requires an H×W mono array")
+    if not value_header or value_header in {"x", "y"}:
+        raise ValueError("Pixel CSV value header must identify the scientific value")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     try:
         with temporary.open("w", newline="", encoding="utf-8-sig") as stream:
             writer = csv.writer(stream)
-            writer.writerow(("y", "x", "R", "G", "B"))
-            pixels = rgb.load()
-            for y in range(rgb.height):
-                for x in range(rgb.width):
-                    values = pixels[x, y]
-                    if divisor is not None:
-                        values = tuple(float(value) / divisor for value in values)
-                    writer.writerow((y, x, *values))
+            writer.writerow(("y", "x", value_header))
+            for y in range(values.shape[0]):
+                for x in range(values.shape[1]):
+                    writer.writerow((y, x, values[y, x].item()))
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
 
 
 def save_pixel_csv_products(
-    raw_image: QImage | Image.Image,
+    raw_array: np.ndarray,
     output_stem: Path,
     output_options: Any,
     *,
-    dark_image: QImage | Image.Image | None = None,
+    dark_array: np.ndarray | None = None,
     exposure_ms: float,
 ) -> dict[str, str]:
+    """Array-only helper retained for focused tests and offline tooling."""
+
     if not output_options.export_pixel_csv:
         return {}
-    raw = qimage_to_pillow(raw_image) if isinstance(raw_image, QImage) else raw_image.copy()
-    dark = (
-        qimage_to_pillow(dark_image) if isinstance(dark_image, QImage)
-        else dark_image.copy() if isinstance(dark_image, Image.Image) else None
-    )
-    corrected = ImageChops.subtract(raw.convert("RGB"), dark.convert("RGB")) if dark is not None else raw.convert("RGB")
+    raw = np.asarray(raw_array)
+    if raw.dtype != np.uint16 or raw.ndim != 2:
+        raise TypeError("Raw Pixel CSV requires a uint16 H×W scientific array")
+    dark = None if dark_array is None else np.asarray(dark_array)
+    if dark is not None and (dark.dtype != np.uint16 or dark.shape != raw.shape):
+        raise TypeError("Shared Dark must be a shape-matched uint16 H×W array")
+    corrected = None if dark is None else raw.astype(np.int32) - dark.astype(np.int32)
     paths: dict[str, str] = {}
     if output_options.pixel_csv_raw:
         target = output_stem.with_name(output_stem.name + "_pixels_raw.csv")
-        write_pixel_csv_atomic(target, raw)
+        write_mono_array_csv_atomic(target, raw, value_header="DN")
         paths["RAW"] = str(target)
     if output_options.pixel_csv_dark_corrected:
-        if dark is None:
+        if corrected is None:
             raise RuntimeError("Dark-corrected Pixel CSV requires a matching Shared Dark frame")
         target = output_stem.with_name(output_stem.name + "_pixels_dark_corrected.csv")
-        write_pixel_csv_atomic(target, corrected)
+        write_mono_array_csv_atomic(target, corrected, value_header="DarkCorrectedDN")
         paths["DarkCorrected"] = str(target)
     if output_options.pixel_csv_exposure_normalized:
+        if corrected is None:
+            raise RuntimeError("Exposure-normalized Pixel CSV requires a matching Shared Dark frame")
+        if float(exposure_ms) <= 0:
+            raise ValueError("Exposure normalization requires exposure_ms > 0")
         target = output_stem.with_name(output_stem.name + "_pixels_exposure_normalized.csv")
-        write_pixel_csv_atomic(
-            target, corrected, divisor=max(float(exposure_ms), 1e-12)
+        write_mono_array_csv_atomic(
+            target,
+            corrected.astype(np.float64) / float(exposure_ms),
+            value_header="DN_per_ms",
         )
         paths["ExposureNormalized"] = str(target)
     return paths
 
 
-def scientific_to_visualization(scientific_image: np.ndarray) -> Image.Image:
+def scientific_to_visualization(
+    scientific_image: np.ndarray,
+    sensor_bit_depth: int,
+    raw_value_alignment: str,
+) -> Image.Image:
     """Create an 8-bit display copy without mutating the scientific source."""
 
     source = np.asarray(scientific_image)
     if source.dtype != np.uint16:
         raise TypeError("Scientific camera source must use a uint16 container")
-    working = source.astype(np.float64, copy=True)
-    maximum = float(np.max(working, initial=0.0))
-    scale_max = 4095.0 if maximum <= 4095.0 else 65535.0
+    bit_depth = int(sensor_bit_depth)
+    if not 1 <= bit_depth <= 16:
+        raise ValueError("SensorBitDepth must be between 1 and 16")
+    alignment = str(raw_value_alignment).strip().lower()
+    if alignment == "right":
+        working = source.astype(np.float64, copy=True)
+        scale_max = float((1 << bit_depth) - 1)
+    elif alignment == "left":
+        working = np.right_shift(source, 16 - bit_depth).astype(np.float64)
+        scale_max = float((1 << bit_depth) - 1)
+    elif alignment == "unknown":
+        # Do not infer alignment or bit depth from the brightness of one frame.
+        working = source.astype(np.float64, copy=True)
+        scale_max = 65535.0
+    else:
+        raise ValueError("RawValueAlignment must be 'right', 'left', or 'unknown'")
     mapped = np.clip(np.rint(working * (255.0 / scale_max)), 0, 255).astype(np.uint8)
     if mapped.ndim == 2:
         return Image.fromarray(mapped, mode="L")
@@ -217,7 +245,11 @@ def save_matrix_capture(
     # Derived formats branch from the same acquisition array; the QImage is
     # accepted only for live-view reporting and is never used as save input.
     del preview_image
-    preview = scientific_to_visualization(scientific)
+    preview = scientific_to_visualization(
+        scientific,
+        int(metadata.get("SensorBitDepth", metadata.get("BitDepth", 16))),
+        str(metadata.get("RawValueAlignment", "unknown")),
+    )
 
     tiff_path = output_stem.with_suffix(".tiff") if output_options.format_tiff else None
     png_path = output_stem.with_suffix(".png") if output_options.format_png else None

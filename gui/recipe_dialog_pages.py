@@ -213,10 +213,19 @@ class RecipeDialogPagesMixin:
         self.output_jpg_footer_check = QCheckBox("JPG with Footer")
         self.output_tiff_check.setChecked(True)
         self.output_jpg_footer_check.setChecked(True)
-        self.save_raw_check = QCheckBox("保存原始 Frames")
-        self.save_summary_csv_check = QCheckBox("輸出 Dark IV / EL summary CSV")
-        self.save_json_check = QCheckBox("輸出 JSON metadata")
-        self.save_snapshot_check = QCheckBox("保存 Recipe snapshot")
+        self.save_raw_check = QCheckBox("保存 capture records（必要）")
+        self.save_summary_csv_check = QCheckBox("Dark IV / EL Summary CSV（必要）")
+        self.save_json_check = QCheckBox("JSON Metadata（必要）")
+        self.save_snapshot_check = QCheckBox("Recipe Snapshot（必要）")
+        for required in (
+            self.save_raw_check,
+            self.save_summary_csv_check,
+            self.save_json_check,
+            self.save_snapshot_check,
+        ):
+            required.setChecked(True)
+            required.setEnabled(False)
+            required.setToolTip("量測追溯所需，正式流程固定輸出")
         self.export_pixel_csv_check = QCheckBox("輸出全解析度 Pixel CSV")
         self.pixel_csv_raw_check = QCheckBox("Raw DN")
         self.pixel_csv_corrected_check = QCheckBox("Dark-corrected")

@@ -108,6 +108,71 @@ def _matrix_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
         )
 
 
+def _polarity_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
+    for channel in recipe.enabled_channels():
+        channel_key = channel.channel.lower()
+        yield ExecutionStep(
+            f"polarity_{channel_key}",
+            channel.channel,
+            (
+                _leaf(f"polarity_route_{channel_key}", f"Routing {channel.channel}"),
+                _leaf(f"white_light_on_{channel_key}", "White Light ON"),
+                _leaf(f"polarity_measure_{channel_key}", "Polarity Measurement"),
+                _leaf(f"polarity_determine_{channel_key}", "Determine polarity"),
+                _leaf(f"white_light_off_{channel_key}", "White Light OFF"),
+            ),
+        )
+
+
+def _shared_dark_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
+    axes = effective_matrix_capture_axes(recipe)
+    for gain in axes.gains_percent:
+        yield ExecutionStep(
+            f"dark_gain_{gain}",
+            f"Gain {gain}%",
+            tuple(
+                ExecutionStep(
+                    f"dark_exposure_{exposure:g}",
+                    f"Exposure {exposure:g} ms",
+                    tuple(
+                        _leaf(f"dark_repeat_{index}", f"Repeat {index}")
+                        for index in range(1, axes.repeat + 1)
+                    ),
+                )
+                for exposure in axes.exposures_ms
+            ),
+        )
+
+
+def _output_steps(recipe: Recipe) -> tuple[ExecutionStep, ...]:
+    children = [
+        _leaf(f"output_{label.lower().replace(' ', '_')}", label)
+        for label in recipe.output.selected_formats()
+    ]
+    children.extend((
+        _leaf("output_capture_records", "Capture Records（必要）"),
+        _leaf("output_summary_csv", "Summary CSV（必要）"),
+        _leaf("output_json_metadata", "JSON Metadata（必要）"),
+        _leaf("output_recipe_snapshot", "Recipe Snapshot（必要）"),
+    ))
+    if recipe.output.export_pixel_csv:
+        pixel_products: list[ExecutionStep] = []
+        if recipe.output.pixel_csv_raw:
+            pixel_products.append(_leaf("pixel_csv_raw", "Raw DN"))
+        if recipe.output.pixel_csv_dark_corrected:
+            pixel_products.append(_leaf("pixel_csv_dark_corrected", "Dark-corrected"))
+        if recipe.output.pixel_csv_exposure_normalized:
+            pixel_products.append(
+                _leaf("pixel_csv_exposure_normalized", "Exposure-normalized（DN/ms）")
+            )
+        children.append(
+            ExecutionStep(
+                "pixel_csv", "Pixel CSV（Safe Shutdown 後處理）", tuple(pixel_products)
+            )
+        )
+    return tuple(children)
+
+
 def build_measurement_execution_plan(
     recipe: Recipe,
     global_settings: Any | None = None,
@@ -131,12 +196,7 @@ def build_measurement_execution_plan(
             ExecutionStep(
                 "polarity",
                 "極性確認",
-                (
-                    _leaf("white_light_on", "White Light ON"),
-                    _leaf("polarity_measure", "Polarity measurement"),
-                    _leaf("polarity_determine", "Determine polarity / routing factor"),
-                    _leaf("white_light_off", "White Light OFF"),
-                ),
+                tuple(_polarity_channel_steps(recipe)),
             )
         )
     if recipe.el_matrix.dark_frame_enabled:
@@ -144,7 +204,7 @@ def build_measurement_execution_plan(
             ExecutionStep(
                 "dark_frame",
                 "Shared Dark Frame",
-                (_leaf("dark_frame_acquire", "擷取 Shared Dark Matrix"),),
+                tuple(_shared_dark_steps(recipe)),
             )
         )
     steps.append(
@@ -154,10 +214,7 @@ def build_measurement_execution_plan(
         ExecutionStep(
             "output",
             f"輸出（{recipe.output.resolution_id}）",
-            tuple(
-                _leaf(f"output_{label.lower().replace(' ', '_')}", label)
-                for label in recipe.output.selected_formats()
-            ),
+            _output_steps(recipe),
         )
     )
     steps.append(ExecutionStep("safe_shutdown", "Safe Shutdown"))

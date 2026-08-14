@@ -46,6 +46,12 @@ class CameraController(QObject):
         self._status_query_failed = False
         self._frame_sequence = 0
         self._sensor_bit_depth = 16
+        self._bit_depth_source = "CapabilityFlagFallback"
+        self._camera_is_mono = False
+        self._scientific_pixel_format = "UNKNOWN"
+        self._scientific_channels = 0
+        self._scientific_pull_bits = 0
+        self._raw_value_alignment = "unknown"
 
         self._sdk_event.connect(self._handle_sdk_event)
         self._fps_timer = QTimer(self)
@@ -98,13 +104,30 @@ class CameraController(QObject):
             resolution_index = camera.get_eSize()
             resolution = device.model.res[resolution_index]
             self._width, self._height = resolution.width, resolution.height
+            self._camera_is_mono = bool(device.model.flag & nncam.NNCAM_FLAG_MONO)
+            if not self._camera_is_mono:
+                raise RuntimeError(
+                    "Formal scientific capture currently supports monochrome cameras only"
+                )
 
-            # Match QImage's RGB byte order. Preview and saved basic captures use RGB24.
+            # The scientific stream owns its SDK format. Live View is derived later
+            # and never feeds the scientific TIFF/CSV path.
             camera.put_Option(nncam.NNCAM_OPTION_BYTEORDER, 0)
-            # Formal acquisition stays in the sensor's high-bit-depth mode.
-            # Live View is derived as a separate 8-bit display branch below.
             camera.put_Option(nncam.NNCAM_OPTION_BITDEPTH, 1)
-            self._sensor_bit_depth = self._native_sensor_bit_depth(device.model.flag)
+            camera.put_Option(nncam.NNCAM_OPTION_LINEAR, 0)
+            camera.put_Option(nncam.NNCAM_OPTION_CURVE, 0)
+            camera.put_Gamma(100)
+            # Bundled SDK: RGB option 4 = 16-bit Grey when BITDEPTH is enabled.
+            camera.put_Option(nncam.NNCAM_OPTION_RGB, 4)
+            self._scientific_pixel_format = "MONO16"
+            self._scientific_channels = 1
+            self._scientific_pull_bits = 16
+            self._sensor_bit_depth, self._bit_depth_source = self._read_sensor_bit_depth(
+                camera, device.model.flag
+            )
+            # The bundled wrapper documents the uint16 container but does not
+            # guarantee whether effective DN bits are right- or left-aligned.
+            self._raw_value_alignment = "unknown"
             camera.put_AutoExpoEnable(1)
             self._auto_mode = 1
             self._start_stream()
@@ -123,13 +146,21 @@ class CameraController(QObject):
                 "exposure_us": current[0] if current is not None else None,
                 "gain": current[1] if current is not None else None,
                 "auto_target": auto_target,
-                "mono": bool(device.model.flag & nncam.NNCAM_FLAG_MONO),
+                "mono": self._camera_is_mono,
                 "temperature_supported": bool(
                     device.model.flag & nncam.NNCAM_FLAG_GETTEMPERATURE
                 ),
                 "sdk_version": self.sdk_version(),
+                "max_bit_depth": (
+                    self._sensor_bit_depth
+                    if self._bit_depth_source == "MaxBitDepth" else None
+                ),
                 "scientific_bit_depth": self._sensor_bit_depth,
                 "scientific_container": "uint16",
+                "scientific_pixel_format": self._scientific_pixel_format,
+                "scientific_channels": self._scientific_channels,
+                "bit_depth_source": self._bit_depth_source,
+                "raw_value_alignment": self._raw_value_alignment,
             }
             self._log_camera_capabilities(info)
             self.camera_opened.emit(info)
@@ -165,6 +196,12 @@ class CameraController(QObject):
         self._status_query_failed = False
         self._frame_sequence = 0
         self._sensor_bit_depth = 16
+        self._bit_depth_source = "CapabilityFlagFallback"
+        self._camera_is_mono = False
+        self._scientific_pixel_format = "UNKNOWN"
+        self._scientific_channels = 0
+        self._scientific_pull_bits = 0
+        self._raw_value_alignment = "unknown"
         if was_open:
             self.camera_closed.emit()
             self.status_changed.emit("相機已中斷連線")
@@ -287,9 +324,20 @@ class CameraController(QObject):
             "ResolutionId": f"sdk:{self._camera.get_eSize()}" if self._camera else "",
             "ImageWidth": self._width,
             "ImageHeight": self._height,
-            "PixelFormat": "RGB48",
+            "PixelFormat": self._scientific_pixel_format,
             "BitDepth": self._sensor_bit_depth,
+            "SensorBitDepth": self._sensor_bit_depth,
+            "BitDepthSource": self._bit_depth_source,
+            "MaxBitDepthReadback": (
+                self._sensor_bit_depth
+                if self._bit_depth_source == "MaxBitDepth" else None
+            ),
+            "ContainerBitDepth": 16,
             "ContainerDtype": "uint16",
+            "Channels": self._scientific_channels,
+            "RawValueAlignment": self._raw_value_alignment,
+            "ScientificGammaApplied": False,
+            "ScientificToneMappingApplied": False,
         }
 
     def read_temperature_c(self) -> float | None:
@@ -374,11 +422,33 @@ class CameraController(QObject):
         auto_range = info.get("auto_exposure_range")
         target = info.get("auto_target")
         LOG.info(
+            "Camera Model: %s\n"
+            "Mono: %s\n"
+            "Resolution: %sx%s\n"
+            "MaxBitDepth: %s\n"
+            "BitDepthSource: %s\n"
+            "ScientificPixelFormat: %s\n"
+            "ScientificContainer: %s\n"
+            "ScientificChannels: %s\n"
+            "RawValueAlignment: %s\n"
             "Camera Exposure Hardware Range: min = %s us, max = %s us, default = %s us\n"
             "Camera Gain Hardware Range: min = %s %%, max = %s %%, default = %s %%\n"
             "Auto Exposure Range: min exposure = %s us, max exposure = %s us, "
             "min gain = %s %%, max gain = %s %%\n"
             "Auto Exposure Target: %s /255",
+            info.get("model") or info.get("name") or "--",
+            info.get("mono", "--"),
+            *(
+                info.get("resolutions", [("--", "--")])[info.get("resolution_index", 0)]
+                if info.get("resolutions")
+                else ("--", "--")
+            ),
+            info.get("max_bit_depth") if info.get("max_bit_depth") is not None else "--",
+            info.get("bit_depth_source", "--"),
+            info.get("scientific_pixel_format", "--"),
+            info.get("scientific_container", "--"),
+            info.get("scientific_channels", "--"),
+            info.get("raw_value_alignment", "--"),
             *(exposure or ("--", "--", "--")),
             *(gain or ("--", "--", "--")),
             *(auto_range or ("--", "--", "--", "--")),
@@ -406,10 +476,28 @@ class CameraController(QObject):
                 return bits
         return 16
 
+    @classmethod
+    def _read_sensor_bit_depth(cls, camera: Any, flags: int) -> tuple[int, str]:
+        try:
+            bit_depth = int(camera.MaxBitDepth())
+            if not 1 <= bit_depth <= 16:
+                raise ValueError(f"unexpected MaxBitDepth value: {bit_depth}")
+            return bit_depth, "MaxBitDepth"
+        except Exception as exc:
+            fallback = cls._native_sensor_bit_depth(flags)
+            LOG.warning(
+                "RisingCam MaxBitDepth() failed (%s); using capability-flag fallback: %s bits",
+                exc,
+                fallback,
+            )
+            return fallback, "CapabilityFlagFallback"
+
     def _start_stream(self) -> None:
         if self._camera is None:
             return
-        self._pitch = nncam.TDIBWIDTHBYTES(self._width * 48)
+        if self._scientific_pull_bits != 16 or not self._camera_is_mono:
+            raise RuntimeError("Scientific camera format was not configured")
+        self._pitch = nncam.TDIBWIDTHBYTES(self._width * self._scientific_pull_bits)
         self._buffer = bytes(self._pitch * self._height)
         self._camera.StartPullModeWithCallback(self._camera_callback, self)
         self._fps_timer.start()
@@ -445,16 +533,28 @@ class CameraController(QObject):
         if self._camera is None or self._buffer is None:
             return
         try:
-            self._camera.PullImageV4(self._buffer, 0, 48, 0, None)
+            self._camera.PullImageV4(
+                self._buffer, 0, self._scientific_pull_bits, 0, None
+            )
             row_words = self._pitch // 2
-            scientific = np.frombuffer(self._buffer, dtype="<u2").reshape(
+            rows = np.frombuffer(self._buffer, dtype="<u2").reshape(
                 self._height, row_words
-            )[:, : self._width * 3].reshape(self._height, self._width, 3).copy()
-            maximum_dn = float((1 << self._sensor_bit_depth) - 1)
-            if int(scientific.max(initial=0)) > maximum_dn:
+            )
+            scientific = rows[:, : self._width].copy()
+            if self._raw_value_alignment == "right":
+                display_source = scientific.astype(np.float64)
+                maximum_dn = float((1 << self._sensor_bit_depth) - 1)
+            elif self._raw_value_alignment == "left":
+                shift = 16 - self._sensor_bit_depth
+                display_source = np.right_shift(scientific, shift).astype(np.float64)
+                maximum_dn = float((1 << self._sensor_bit_depth) - 1)
+            else:
+                # Unknown means unknown: use the full container range rather than
+                # inferring alignment/bit depth from this frame's brightness.
+                display_source = scientific.astype(np.float64)
                 maximum_dn = 65535.0
             display = np.clip(
-                np.rint(scientific.astype(np.float64) * (255.0 / maximum_dn)),
+                np.rint(display_source * (255.0 / maximum_dn)),
                 0,
                 255,
             ).astype(np.uint8)
@@ -462,8 +562,8 @@ class CameraController(QObject):
                 display.data,
                 self._width,
                 self._height,
-                self._width * 3,
-                QImage.Format.Format_RGB888,
+                self._width,
+                QImage.Format.Format_Grayscale8,
             ).copy()
             self._latest_image = image
             self._frame_sequence += 1

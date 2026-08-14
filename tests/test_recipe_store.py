@@ -43,6 +43,33 @@ class RecipeStoreTests(unittest.TestCase):
             loaded.output.selected_formats(),
         )
 
+    def test_dark_profiles_are_camera_agnostic(self) -> None:
+        recipe = Recipe()
+        recipe.el_matrix.gains_percent = [100, 200]
+        recipe.el_matrix.exposures_ms = [1.0, 5.0]
+        profiles = recipe.dark_profiles()
+        self.assertEqual(4, len(profiles))
+        self.assertTrue(all("pixel_format" not in profile for profile in profiles))
+        self.assertEqual(
+            {"exposure_ms", "gain_percent", "resolution"},
+            {"exposure_ms", "gain_percent", "resolution"} & set(profiles[0]),
+        )
+
+    def test_required_traceability_outputs_are_normalized_on_load(self) -> None:
+        loaded = Recipe.from_dict({
+            "output": {
+                "save_raw_frames": False,
+                "save_summary_csv": False,
+                "save_json": False,
+                "save_recipe_snapshot": False,
+            }
+        })
+        self.assertTrue(loaded.output.save_raw_frames)
+        self.assertTrue(loaded.output.save_summary_csv)
+        self.assertTrue(loaded.output.save_json)
+        self.assertTrue(loaded.output.save_recipe_snapshot)
+        self.assertEqual([], loaded.validate())
+
     def test_at_least_one_image_format_is_required(self) -> None:
         recipe = Recipe()
         recipe.output.format_tiff = False
@@ -138,6 +165,15 @@ class RecipeStoreTests(unittest.TestCase):
         errors = recipe.validate()
         self.assertTrue(any("至少要選擇一種" in error for error in errors))
         self.assertTrue(any("TIFF" in error for error in errors))
+
+    def test_quantitative_pixel_csv_requires_shared_dark(self) -> None:
+        recipe = Recipe()
+        recipe.output.export_pixel_csv = True
+        recipe.el_matrix.dark_frame_enabled = False
+        self.assertTrue(any("Shared Dark" in error for error in recipe.validate()))
+        recipe.output.pixel_csv_dark_corrected = False
+        recipe.output.pixel_csv_exposure_normalized = False
+        self.assertFalse(any("Shared Dark" in error for error in recipe.validate()))
 
 
 if __name__ == "__main__":
