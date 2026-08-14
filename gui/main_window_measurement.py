@@ -324,11 +324,16 @@ def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
         hdr_profile=getattr(self.hdr_session_state, "profile", None),
     )
     order = " → ".join(step.title for step in execution.steps)
+    samples = " / ".join(
+        f"{channel.channel}={plan.sample_ids.get(channel.channel, '')}"
+        for channel in plan.channels
+    )
     return (
         "量測摘要\n\n"
         f"正式順序：{order}\n\n"
         f"Channels：{' / '.join(channel.channel for channel in plan.channels)}\n"
         f"Channel 數量：{len(plan.channels)}\n\n"
+        f"樣品：{samples}\n\n"
         f"Current Density：{', '.join(f'{value:g}' for value in recipe.el_matrix.current_density_ma_cm2)} mA/cm²\n"
         f"Gain：{', '.join(str(value) for value in plan.gains_percent)} %\n"
         f"Exposure：{', '.join(f'{value:g}' for value in plan.exposures_ms)} ms\n"

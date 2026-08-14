@@ -17,11 +17,12 @@ from gui.camera_controller import CameraController
 from gui.sdk import nncam
 from gui.el_matrix_plan import ELMatrixPlan
 from gui.measurement_control_bar import MeasurementControlBar
-from gui.main_window_measurement import begin_el_matrix_measurement
+from gui.main_window_measurement import begin_el_matrix_measurement, _measurement_summary
 from gui.measurement_execution_plan import build_measurement_execution_plan
 from gui.measurement_output import save_matrix_capture
 from gui.recipe_dialog import RecipeManagerDialog
 from gui.recipe_store import Recipe, RecipeStore
+from gui.smu_control import SMUSafetyLimits
 from tests.qt_test_utils import ensure_qapplication
 
 
@@ -204,6 +205,24 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
             )
         finally:
             bar.close()
+
+    def test_measurement_summary_keeps_channel_sample_mapping(self) -> None:
+        recipe = Recipe()
+        recipe.channels[1].enabled = True
+        plan = ELMatrixPlan(
+            recipe, sample_ids={"CH1": "A/1", "CH2": "B 2"}
+        )
+        owner = SimpleNamespace(
+            smu_manager=SimpleNamespace(
+                control=SimpleNamespace(
+                    safety=SimpleNamespace(limits=SMUSafetyLimits())
+                )
+            ),
+            hdr_settings_store=SimpleNamespace(settings=HDRSystemSettings()),
+            hdr_session_state=None,
+        )
+        summary = _measurement_summary(owner, plan)
+        self.assertIn("樣品：CH1=A/1 / CH2=B 2", summary)
 
     def test_uint16_tiff_exact_match_and_derived_outputs_do_not_mutate_source(self) -> None:
         source = np.array([[0, 1, 255, 256, 1024, 2048, 4095]], dtype=np.uint16)
