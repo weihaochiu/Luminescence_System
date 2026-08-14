@@ -450,7 +450,11 @@ class MeasurementSnapshotAndPreflightTests(unittest.TestCase):
         camera = {"Resolution": "4x3", "PixelFormat": "RGB24", "BitDepth": 8,
                   "ImageWidth": 4, "ImageHeight": 3}
         current = dict(camera)
-        current.update({"exposure_range_us": (1, 1000000, 1), "gain_range": (0, 500, 1)})
+        current.update({
+            "ScientificMeasurementReady": True,
+            "exposure_range_us": (1, 1000000, 1),
+            "gain_range": (0, 500, 1),
+        })
         with tempfile.TemporaryDirectory() as directory:
             errors = collect_preflight_errors(
                 recipe,
@@ -464,7 +468,7 @@ class MeasurementSnapshotAndPreflightTests(unittest.TestCase):
         self.assertFalse(any("VISA" in item for item in errors))
         self.assertTrue(any("不可重複" in item or "不完整或不唯一" in item for item in errors))
 
-    def test_preflight_blocks_unverified_scientific_isp_but_not_live_view(self) -> None:
+    def test_preflight_blocks_until_actual_scientific_frame_is_validated(self) -> None:
         recipe = _small_recipe(1)
         camera = {
             "Resolution": "4x3",
@@ -477,9 +481,6 @@ class MeasurementSnapshotAndPreflightTests(unittest.TestCase):
         current = dict(camera)
         current.update({
             "ScientificMeasurementReady": False,
-            "LINEAROptionSupported": False,
-            "CURVEOptionSupported": True,
-            "GammaOptionSupported": True,
             "exposure_range_us": (1, 1_000_000, 1),
             "gain_range": (0, 500, 1),
         })
@@ -501,7 +502,7 @@ class MeasurementSnapshotAndPreflightTests(unittest.TestCase):
                 output_root=directory,
             )
         self.assertTrue(any("scientific MONO16" in item for item in errors))
-        self.assertTrue(any("LINEAR" in item for item in errors))
+        self.assertTrue(any("uint16 H×W frame" in item for item in errors))
 
 
 class _FakeCameraController(QObject):

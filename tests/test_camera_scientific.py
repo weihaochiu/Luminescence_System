@@ -13,25 +13,43 @@ from gui.sdk import nncam
 from tests.qt_test_utils import ensure_qapplication
 
 
+class _FakeHRESULT(Exception):
+    def __init__(self, hr: int) -> None:
+        super().__init__(f"HRESULT 0x{hr:08X}")
+        self.hr = hr
+
+
 class _FakeMonoCamera:
+    """Compatibility fake: SDK readbacks intentionally need not echo writes."""
+
     def __init__(
         self,
         *,
-        max_bit_depth: int = 12,
+        max_bit_depth: int | Exception = 12,
         unsupported_options: set[int] | None = None,
+        readback_overrides: dict[int, int] | None = None,
         gamma_unsupported: bool = False,
         start_error: Exception | None = None,
+        pull_error: Exception | None = None,
     ) -> None:
         self.max_bit_depth = max_bit_depth
         self.max_bit_depth_calls = 0
         self.options: list[tuple[int, int]] = []
         self.option_values = {
+            nncam.NNCAM_OPTION_BYTEORDER: 1,
+            nncam.NNCAM_OPTION_BITDEPTH: 0,
+            nncam.NNCAM_OPTION_LINEAR: 1,
+            nncam.NNCAM_OPTION_CURVE: 2,
+            nncam.NNCAM_OPTION_RGB: 0,
             nncam.NNCAM_OPTION_RAW: 0,
             nncam.NNCAM_OPTION_ISP: 0,
         }
         self.unsupported_options = set(unsupported_options or ())
+        self.readback_overrides = dict(readback_overrides or {})
         self.gamma_unsupported = gamma_unsupported
+        self.gamma = 100
         self.start_error = start_error
+        self.pull_error = pull_error
         self.pull_bits: list[int] = []
 
     def get_eSize(self) -> int:
@@ -46,19 +64,21 @@ class _FakeMonoCamera:
     def get_Option(self, option: int) -> int:
         if option in self.unsupported_options:
             raise _FakeHRESULT(nncam.E_INVALIDARG)
-        return self.option_values.get(option, 0)
+        return self.readback_overrides.get(option, self.option_values.get(option, 0))
 
     def MaxBitDepth(self) -> int:
         self.max_bit_depth_calls += 1
+        if isinstance(self.max_bit_depth, Exception):
+            raise self.max_bit_depth
         return self.max_bit_depth
 
     def put_AutoExpoEnable(self, _enabled: int) -> None:
         pass
 
-    def put_Gamma(self, _gamma: int) -> None:
+    def put_Gamma(self, gamma: int) -> None:
         if self.gamma_unsupported:
             raise _FakeHRESULT(nncam.E_INVALIDARG)
-        self.gamma = _gamma
+        self.gamma = gamma
 
     def get_Gamma(self) -> int:
         if self.gamma_unsupported:
@@ -71,26 +91,45 @@ class _FakeMonoCamera:
 
     def PullImageV4(self, _buffer, _still: int, bits: int, _pitch: int, _info) -> None:
         self.pull_bits.append(bits)
+        if self.pull_error is not None:
+            raise self.pull_error
 
     def Close(self) -> None:
         pass
 
 
-class _FakeHRESULT(Exception):
-    def __init__(self, hr: int) -> None:
-        super().__init__(f"HRESULT 0x{hr:08X}")
-        self.hr = hr
-
-
-def _mono_device() -> SimpleNamespace:
+def _mono_device(
+    flags: int = nncam.NNCAM_FLAG_MONO | nncam.NNCAM_FLAG_RAW12,
+) -> SimpleNamespace:
     resolution = SimpleNamespace(width=3, height=2)
     model = SimpleNamespace(
         name="IUA8300KMB",
-        flag=nncam.NNCAM_FLAG_MONO | nncam.NNCAM_FLAG_RAW12,
+        flag=flags,
         res=[resolution],
         preview=1,
     )
     return SimpleNamespace(id="FAKE-MONO", displayname="IUA8300KMB", model=model)
+
+
+def _open(camera: _FakeMonoCamera, device: SimpleNamespace | None = None):
+    controller = CameraController()
+    errors: list[str] = []
+    controller.error_occurred.connect(errors.append)
+    with patch("gui.camera_controller.nncam.Nncam.Open", return_value=camera):
+        controller.open_device(device or _mono_device())
+    return controller, errors
+
+
+def _install_frame(controller: CameraController, values: np.ndarray | None = None) -> np.ndarray:
+    expected = (
+        np.asarray(values, dtype="<u2")
+        if values is not None
+        else np.arange(6, dtype="<u2").reshape(2, 3)
+    )
+    padded = np.zeros((2, controller._pitch // 2), dtype="<u2")
+    padded[:, :3] = expected
+    controller._buffer = padded.tobytes()
+    return expected
 
 
 class MonoScientificCameraTests(unittest.TestCase):
@@ -98,154 +137,187 @@ class MonoScientificCameraTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = ensure_qapplication()
 
-    def test_mono_scientific_branch_uses_uint16_grayscale(self) -> None:
-        camera = _FakeMonoCamera(max_bit_depth=12)
-        controller = CameraController()
-        errors: list[str] = []
-        controller.error_occurred.connect(errors.append)
-        with patch("gui.camera_controller.nncam.Nncam.Open", return_value=camera):
-            controller.open_device(_mono_device())
+    def test_byteorder_bgr_readback_is_ignored_for_mono_connection(self) -> None:
+        camera = _FakeMonoCamera(
+            readback_overrides={nncam.NNCAM_OPTION_BYTEORDER: 1}
+        )
+        controller, errors = _open(camera)
         try:
             self.assertTrue(controller.is_open, errors)
-            self.assertEqual(1, camera.max_bit_depth_calls)
+            self.assertNotIn((nncam.NNCAM_OPTION_BYTEORDER, 0), camera.options)
+            metadata = controller.capture_metadata()
+            self.assertEqual(1, metadata["ByteOrderReadback"])
+            self.assertTrue(metadata["ByteOrderIgnoredForMono"])
+            self.assertTrue(metadata["CameraConnected"])
+            self.assertFalse(metadata["ScientificMeasurementReady"])
+
+            _install_frame(controller)
+            controller._pull_live_frame()
+            self.assertTrue(controller.capture_metadata()["ScientificMeasurementReady"])
+        finally:
+            controller.close_camera()
+
+    def test_preferred_rgb4_path_pulls_uint16_hxw_frame(self) -> None:
+        camera = _FakeMonoCamera(max_bit_depth=12)
+        controller, errors = _open(camera)
+        try:
+            self.assertTrue(controller.is_open, errors)
             self.assertIn((nncam.NNCAM_OPTION_BITDEPTH, 1), camera.options)
             self.assertIn((nncam.NNCAM_OPTION_RGB, 4), camera.options)
-            self.assertIn((nncam.NNCAM_OPTION_LINEAR, 0), camera.options)
-            self.assertIn((nncam.NNCAM_OPTION_CURVE, 0), camera.options)
             self.assertEqual(nncam.TDIBWIDTHBYTES(3 * 16), controller._pitch)
 
-            metadata = controller.capture_metadata()
-            self.assertEqual(12, metadata["SensorBitDepth"])
-            self.assertEqual("MaxBitDepth", metadata["BitDepthSource"])
-            self.assertEqual("MONO16", metadata["PixelFormat"])
-            self.assertEqual(1, metadata["Channels"])
-            self.assertEqual(16, metadata["ContainerBitDepth"])
-            self.assertEqual("uint16", metadata["ContainerDtype"])
-            self.assertEqual("unknown", metadata["RawValueAlignment"])
-            self.assertEqual("RGBOption4", metadata["ScientificFormatNegotiation"])
-            self.assertTrue(metadata["RGBOption4Supported"])
-
-            expected = np.array([[0, 1, 4095], [256, 1024, 2048]], dtype="<u2")
-            padded = np.zeros((2, controller._pitch // 2), dtype="<u2")
-            padded[:, :3] = expected
-            controller._buffer = padded.tobytes()
-            controller._raw_value_alignment = "right"
+            expected = _install_frame(
+                controller,
+                np.array([[0, 1, 4095], [256, 1024, 2048]], dtype="<u2"),
+            )
             frames: list[tuple[np.ndarray, QImage, int]] = []
             controller.scientific_frame_ready.connect(
                 lambda array, image, sequence: frames.append((array, image, sequence))
             )
             controller._pull_live_frame()
 
-            self.assertEqual([16], camera.pull_bits)
-            self.assertNotIn(48, camera.pull_bits)
             scientific, preview, sequence = frames[-1]
+            self.assertEqual([16], camera.pull_bits)
             self.assertEqual(np.uint16, scientific.dtype)
             self.assertEqual(2, scientific.ndim)
             self.assertEqual((2, 3), scientific.shape)
             np.testing.assert_array_equal(expected, scientific)
             self.assertEqual(QImage.Format.Format_Grayscale8, preview.format())
             self.assertEqual(1, sequence)
-            self.assertTrue(controller.capture_metadata()["ScientificFrameValidated"])
-            self.assertTrue(controller.capture_metadata()["ScientificMeasurementReady"])
+
+            metadata = controller.capture_metadata()
+            self.assertEqual(12, metadata["SensorBitDepth"])
+            self.assertEqual("MaxBitDepth", metadata["BitDepthSource"])
+            self.assertEqual(16, metadata["BitDepth"])
+            self.assertEqual(16, metadata["ContainerBitDepth"])
+            self.assertEqual("uint16", metadata["ContainerDtype"])
+            self.assertEqual("RGBOption4", metadata["ScientificFormatNegotiation"])
+            self.assertTrue(metadata["ScientificFrameValidated"])
+            self.assertTrue(metadata["ScientificMeasurementReady"])
         finally:
             controller.close_camera()
 
-    def test_rgb4_invalidarg_uses_pull_bits_16_fallback(self) -> None:
-        camera = _FakeMonoCamera(
-            unsupported_options={nncam.NNCAM_OPTION_RGB}
-        )
-        controller = CameraController()
-        errors: list[str] = []
-        controller.error_occurred.connect(errors.append)
-        with patch("gui.camera_controller.nncam.Nncam.Open", return_value=camera):
-            controller.open_device(_mono_device())
+    def test_rgb4_invalidarg_uses_valid_pull_bits_16_fallback(self) -> None:
+        camera = _FakeMonoCamera(unsupported_options={nncam.NNCAM_OPTION_RGB})
+        controller, errors = _open(camera)
         try:
             self.assertTrue(controller.is_open, errors)
-            metadata = controller.capture_metadata()
-            self.assertEqual("MONO16", metadata["ScientificPixelFormat"])
-            self.assertEqual(
-                "PullBits16Fallback", metadata["ScientificFormatNegotiation"]
-            )
-            self.assertFalse(metadata["RGBOption4Supported"])
-
-            expected = np.arange(6, dtype="<u2").reshape(2, 3)
-            padded = np.zeros((2, controller._pitch // 2), dtype="<u2")
-            padded[:, :3] = expected
-            controller._buffer = padded.tobytes()
+            expected = _install_frame(controller)
             frames: list[np.ndarray] = []
             controller.scientific_frame_ready.connect(
                 lambda array, _image, _sequence: frames.append(array)
             )
             controller._pull_live_frame()
 
+            metadata = controller.capture_metadata()
+            self.assertEqual("PullBits16Fallback", metadata["ScientificFormatNegotiation"])
+            self.assertFalse(metadata["RGBOption4Supported"])
             self.assertEqual([16], camera.pull_bits)
-            self.assertEqual(np.uint16, frames[-1].dtype)
-            self.assertEqual((2, 3), frames[-1].shape)
             np.testing.assert_array_equal(expected, frames[-1])
-            self.assertTrue(controller.capture_metadata()["ScientificMeasurementReady"])
+            self.assertTrue(metadata["ScientificMeasurementReady"])
         finally:
             controller.close_camera()
 
-    def test_linear_unsupported_keeps_connection_but_blocks_scientific_ready(self) -> None:
+    def test_rgb4_readback_mismatch_uses_valid_pull_bits_16_fallback(self) -> None:
         camera = _FakeMonoCamera(
-            unsupported_options={nncam.NNCAM_OPTION_LINEAR}
+            readback_overrides={nncam.NNCAM_OPTION_RGB: 0}
         )
-        controller = CameraController()
-        errors: list[str] = []
-        controller.error_occurred.connect(errors.append)
-        with patch("gui.camera_controller.nncam.Nncam.Open", return_value=camera):
-            controller.open_device(_mono_device())
+        controller, errors = _open(camera)
         try:
             self.assertTrue(controller.is_open, errors)
+            _install_frame(controller)
+            controller._pull_live_frame()
+
+            metadata = controller.capture_metadata()
+            self.assertEqual(0, metadata["RGBOptionReadback"])
+            self.assertFalse(metadata["RGBOption4Supported"])
+            self.assertEqual("PullBits16Fallback", metadata["ScientificFormatNegotiation"])
+            self.assertTrue(metadata["ScientificMeasurementReady"])
+        finally:
+            controller.close_camera()
+
+    def test_optional_isp_failures_do_not_override_valid_frame_authority(self) -> None:
+        camera = _FakeMonoCamera(
+            unsupported_options={
+                nncam.NNCAM_OPTION_LINEAR,
+                nncam.NNCAM_OPTION_CURVE,
+            },
+            gamma_unsupported=True,
+        )
+        controller, errors = _open(camera)
+        try:
+            self.assertTrue(controller.is_open, errors)
+            _install_frame(controller)
+            controller._pull_live_frame()
+
             metadata = controller.capture_metadata()
             self.assertFalse(metadata["LINEAROptionSupported"])
-            self.assertFalse(metadata["ScientificISPBypassed"])
-            self.assertFalse(metadata["ScientificMeasurementReady"])
-        finally:
-            controller.close_camera()
-
-    def test_curve_unsupported_keeps_connection_but_blocks_scientific_ready(self) -> None:
-        camera = _FakeMonoCamera(
-            unsupported_options={nncam.NNCAM_OPTION_CURVE}
-        )
-        controller = CameraController()
-        errors: list[str] = []
-        controller.error_occurred.connect(errors.append)
-        with patch("gui.camera_controller.nncam.Nncam.Open", return_value=camera):
-            controller.open_device(_mono_device())
-        try:
-            self.assertTrue(controller.is_open, errors)
-            metadata = controller.capture_metadata()
             self.assertFalse(metadata["CURVEOptionSupported"])
-            self.assertFalse(metadata["ScientificISPBypassed"])
-            self.assertFalse(metadata["ScientificMeasurementReady"])
+            self.assertFalse(metadata["GammaOptionSupported"])
+            self.assertTrue(metadata["ScientificFrameValidated"])
+            self.assertTrue(metadata["ScientificMeasurementReady"])
         finally:
             controller.close_camera()
 
-    def test_gamma_unsupported_keeps_connection_but_blocks_scientific_ready(self) -> None:
-        camera = _FakeMonoCamera(gamma_unsupported=True)
-        controller = CameraController()
-        errors: list[str] = []
-        controller.error_occurred.connect(errors.append)
-        with patch("gui.camera_controller.nncam.Nncam.Open", return_value=camera):
-            controller.open_device(_mono_device())
+    def test_max_bit_depth_failure_uses_raw12_capability(self) -> None:
+        camera = _FakeMonoCamera(max_bit_depth=RuntimeError("readback failed"))
+        with self.assertLogs("gui.camera_controller", level="WARNING") as captured:
+            depth, source = CameraController._read_sensor_bit_depth(
+                camera, nncam.NNCAM_FLAG_RAW12
+            )
+        self.assertEqual((12, "CapabilityFlagFallback"), (depth, source))
+        self.assertIn("MaxBitDepth() failed", "\n".join(captured.output))
+
+    def test_unknown_sensor_depth_is_not_assumed_to_be_16(self) -> None:
+        camera = _FakeMonoCamera(max_bit_depth=RuntimeError("readback failed"))
+        depth, source = CameraController._read_sensor_bit_depth(
+            camera, nncam.NNCAM_FLAG_MONO
+        )
+        self.assertIsNone(depth)
+        self.assertEqual("Unknown", source)
+
+        controller, errors = _open(camera, _mono_device(nncam.NNCAM_FLAG_MONO))
         try:
             self.assertTrue(controller.is_open, errors)
+            _install_frame(controller)
+            controller._pull_live_frame()
             metadata = controller.capture_metadata()
-            self.assertFalse(metadata["GammaOptionSupported"])
-            self.assertFalse(metadata["ScientificISPBypassed"])
-            self.assertFalse(metadata["ScientificMeasurementReady"])
+            self.assertIsNone(metadata["SensorBitDepth"])
+            self.assertEqual("Unknown", metadata["BitDepthSource"])
+            self.assertEqual(16, metadata["ContainerBitDepth"])
+            self.assertTrue(metadata["ScientificMeasurementReady"])
         finally:
             controller.close_camera()
+
+    def test_pull_failure_marks_not_ready_and_emits_error_only_once(self) -> None:
+        camera = _FakeMonoCamera(pull_error=_FakeHRESULT(nncam.E_FAIL))
+        controller, errors = _open(camera)
+        try:
+            self.assertTrue(controller.is_open, errors)
+            controller._pull_live_frame()
+            controller._pull_live_frame()
+
+            self.assertTrue(controller.is_open)
+            self.assertFalse(controller.capture_metadata()["ScientificFrameValidated"])
+            self.assertFalse(controller.capture_metadata()["ScientificMeasurementReady"])
+            self.assertEqual(1, len(errors))
+            self.assertIn("Stage: PullImageV4(bits=16)", errors[0])
+            self.assertIn("SDK HRESULT: 0x80004005", errors[0])
+        finally:
+            controller.close_camera()
+
+    def test_bitdepth_readback_mismatch_is_the_required_option_failure(self) -> None:
+        camera = _FakeMonoCamera(
+            readback_overrides={nncam.NNCAM_OPTION_BITDEPTH: 0}
+        )
+        controller, errors = _open(camera)
+        self.assertFalse(controller.is_open)
+        self.assertEqual(1, len(errors))
+        self.assertIn("Stage: NNCAM_OPTION_BITDEPTH readback", errors[0])
 
     def test_start_pull_failure_reports_exact_stage_and_hresult(self) -> None:
         camera = _FakeMonoCamera(start_error=_FakeHRESULT(nncam.E_INVALIDARG))
-        controller = CameraController()
-        errors: list[str] = []
-        controller.error_occurred.connect(errors.append)
-        with patch("gui.camera_controller.nncam.Nncam.Open", return_value=camera):
-            controller.open_device(_mono_device())
-
+        controller, errors = _open(camera)
         self.assertFalse(controller.is_open)
         self.assertEqual(1, len(errors))
         self.assertIn("Stage: StartPullModeWithCallback", errors[0])
@@ -259,16 +331,6 @@ class MonoScientificCameraTests(unittest.TestCase):
         self.assertEqual(np.uint8, display.dtype)
         np.testing.assert_array_equal(before, source)
         self.assertEqual(255, int(display[0, -1]))
-
-    def test_max_bit_depth_failure_logs_and_uses_capability_fallback(self) -> None:
-        camera = _FakeMonoCamera()
-        camera.MaxBitDepth = lambda: (_ for _ in ()).throw(RuntimeError("readback failed"))
-        with self.assertLogs("gui.camera_controller", level="WARNING") as captured:
-            depth, source = CameraController._read_sensor_bit_depth(
-                camera, nncam.NNCAM_FLAG_RAW12
-            )
-        self.assertEqual((12, "CapabilityFlagFallback"), (depth, source))
-        self.assertIn("MaxBitDepth() failed", "\n".join(captured.output))
 
 
 if __name__ == "__main__":

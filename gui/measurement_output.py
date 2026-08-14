@@ -245,9 +245,12 @@ def save_matrix_capture(
     # Derived formats branch from the same acquisition array; the QImage is
     # accepted only for live-view reporting and is never used as save input.
     del preview_image
+    sensor_bit_depth = metadata.get("SensorBitDepth")
+    if sensor_bit_depth is None:
+        sensor_bit_depth = metadata.get("ContainerBitDepth", 16)
     preview = scientific_to_visualization(
         scientific,
-        int(metadata.get("SensorBitDepth", metadata.get("BitDepth", 16))),
+        int(sensor_bit_depth),
         str(metadata.get("RawValueAlignment", "unknown")),
     )
 

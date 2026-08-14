@@ -79,20 +79,10 @@ def collect_preflight_errors(
 
     if not camera_connected:
         errors.append("Camera 未連線")
-    if current_camera.get("ScientificMeasurementReady") is False:
-        unsupported = [
-            name
-            for name, key in (
-                ("LINEAR", "LINEAROptionSupported"),
-                ("CURVE", "CURVEOptionSupported"),
-                ("Gamma", "GammaOptionSupported"),
-            )
-            if current_camera.get(key) is False
-        ]
-        detail = f"（unsupported: {', '.join(unsupported)}）" if unsupported else ""
+    if current_camera.get("ScientificMeasurementReady") is not True:
         errors.append(
-            "Camera scientific MONO16 尚未通過 frame/ISP safety 驗證"
-            f"{detail}；Live View 可用，但正式量測已阻擋"
+            "Camera scientific MONO16 尚未通過實際 uint16 H×W frame 驗證；"
+            "正式量測已阻擋"
         )
     exposure_range = current_camera.get("exposure_range_us")
     gain_range = current_camera.get("gain_range")

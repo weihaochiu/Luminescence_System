@@ -264,6 +264,7 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
             "RepeatIndex": 1, "RepeatTotal": 1, "MeasuredCurrentMa": 1.198,
             "MeasuredVoltage": 1.24, "CameraTemperature": 39.8,
             "Timestamp": "2026-08-14 06:44:12", "ApplicableChannels": [],
+            "SensorBitDepth": None, "ContainerBitDepth": 16,
         }
         with tempfile.TemporaryDirectory() as directory:
             saved = save_matrix_capture(
