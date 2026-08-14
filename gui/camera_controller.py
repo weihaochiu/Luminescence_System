@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import numpy as np
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
@@ -14,6 +15,17 @@ from .sdk import nncam
 
 
 LOG = logging.getLogger(__name__)
+_T = TypeVar("_T")
+
+
+class CameraStartupError(RuntimeError):
+    """Preserve the exact SDK startup stage while retaining its HRESULT."""
+
+    def __init__(self, stage: str, original: Exception) -> None:
+        super().__init__(str(original))
+        self.stage = stage
+        self.original = original
+        self.hr = getattr(original, "hr", None)
 
 
 class CameraController(QObject):
@@ -52,6 +64,13 @@ class CameraController(QObject):
         self._scientific_channels = 0
         self._scientific_pull_bits = 0
         self._raw_value_alignment = "unknown"
+        self._scientific_format_negotiation = "Unconfigured"
+        self._rgb_option_4_supported: bool | None = None
+        self._linear_option_supported: bool | None = None
+        self._curve_option_supported: bool | None = None
+        self._gamma_supported: bool | None = None
+        self._scientific_isp_bypassed = False
+        self._scientific_frame_validated = False
 
         self._sdk_event.connect(self._handle_sdk_event)
         self._fps_timer = QTimer(self)
@@ -95,30 +114,66 @@ class CameraController(QObject):
     def open_device(self, device: Any) -> None:
         self.close_camera()
         try:
-            camera = nncam.Nncam.Open(device.id)
+            camera = self._apply_camera_startup_setting(
+                "Nncam.Open", lambda: nncam.Nncam.Open(device.id)
+            )
             if not camera:
-                raise RuntimeError("SDK 未回傳有效的相機控制代碼")
+                raise CameraStartupError(
+                    "Nncam.Open", RuntimeError("SDK 未回傳有效的相機控制代碼")
+                )
 
             self._camera = camera
             self._device = device
-            resolution_index = camera.get_eSize()
+            resolution_index = self._apply_camera_startup_setting(
+                "get_eSize", camera.get_eSize
+            )
             resolution = device.model.res[resolution_index]
             self._width, self._height = resolution.width, resolution.height
             self._camera_is_mono = bool(device.model.flag & nncam.NNCAM_FLAG_MONO)
             if not self._camera_is_mono:
-                raise RuntimeError(
-                    "Formal scientific capture currently supports monochrome cameras only"
+                raise CameraStartupError(
+                    "MONO capability check",
+                    RuntimeError(
+                        "Formal scientific capture currently supports monochrome cameras only"
+                    ),
                 )
 
             # The scientific stream owns its SDK format. Live View is derived later
             # and never feeds the scientific TIFF/CSV path.
-            camera.put_Option(nncam.NNCAM_OPTION_BYTEORDER, 0)
-            camera.put_Option(nncam.NNCAM_OPTION_BITDEPTH, 1)
-            camera.put_Option(nncam.NNCAM_OPTION_LINEAR, 0)
-            camera.put_Option(nncam.NNCAM_OPTION_CURVE, 0)
-            camera.put_Gamma(100)
-            # Bundled SDK: RGB option 4 = 16-bit Grey when BITDEPTH is enabled.
-            camera.put_Option(nncam.NNCAM_OPTION_RGB, 4)
+            self._set_required_option(
+                camera, "NNCAM_OPTION_BYTEORDER", nncam.NNCAM_OPTION_BYTEORDER, 0
+            )
+            self._set_required_option(
+                camera, "NNCAM_OPTION_BITDEPTH", nncam.NNCAM_OPTION_BITDEPTH, 1
+            )
+            self._linear_option_supported = self._set_optional_isp_option(
+                camera, "NNCAM_OPTION_LINEAR", nncam.NNCAM_OPTION_LINEAR, 0
+            )
+            self._curve_option_supported = self._set_optional_isp_option(
+                camera, "NNCAM_OPTION_CURVE", nncam.NNCAM_OPTION_CURVE, 0
+            )
+            self._gamma_supported = self._set_optional_gamma(camera, 100)
+
+            # RGB=4 remains the preferred documented Grey16 mode. Some MONO
+            # models reject it despite advertising >8-bit capability, so the
+            # documented PullImageV4(bits=16) path is the compatibility fallback.
+            try:
+                self._set_required_option(
+                    camera, "NNCAM_OPTION_RGB", nncam.NNCAM_OPTION_RGB, 4
+                )
+                self._rgb_option_4_supported = True
+                self._scientific_format_negotiation = "RGBOption4"
+            except CameraStartupError as exc:
+                if not self._is_unsupported_sdk_error(exc):
+                    raise
+                self._rgb_option_4_supported = False
+                self._scientific_format_negotiation = "PullBits16Fallback"
+                LOG.warning(
+                    "Camera startup compatibility fallback: RGB option 4 is unsupported; "
+                    "using PullImageV4(bits=16): %s",
+                    exc.original,
+                )
+
             self._scientific_pixel_format = "MONO16"
             self._scientific_channels = 1
             self._scientific_pull_bits = 16
@@ -128,7 +183,16 @@ class CameraController(QObject):
             # The bundled wrapper documents the uint16 container but does not
             # guarantee whether effective DN bits are right- or left-aligned.
             self._raw_value_alignment = "unknown"
-            camera.put_AutoExpoEnable(1)
+            raw_mode = self._read_diagnostic_option(
+                camera, "NNCAM_OPTION_RAW", nncam.NNCAM_OPTION_RAW
+            )
+            isp_mode = self._read_diagnostic_option(
+                camera, "NNCAM_OPTION_ISP", nncam.NNCAM_OPTION_ISP
+            )
+            self._scientific_isp_bypassed = raw_mode == 1 or isp_mode == -1
+            self._apply_camera_startup_setting(
+                "put_AutoExpoEnable(1)", lambda: camera.put_AutoExpoEnable(1)
+            )
             self._auto_mode = 1
             self._start_stream()
 
@@ -161,6 +225,24 @@ class CameraController(QObject):
                 "scientific_channels": self._scientific_channels,
                 "bit_depth_source": self._bit_depth_source,
                 "raw_value_alignment": self._raw_value_alignment,
+                "scientific_format_negotiation": self._scientific_format_negotiation,
+                "rgb_option_4_supported": self._rgb_option_4_supported,
+                "linear_option_supported": self._linear_option_supported,
+                "curve_option_supported": self._curve_option_supported,
+                "gamma_supported": self._gamma_supported,
+                "scientific_isp_bypassed": self._scientific_isp_bypassed,
+                "camera_flags": int(device.model.flag),
+                "raw10": bool(device.model.flag & nncam.NNCAM_FLAG_RAW10),
+                "raw11": bool(
+                    device.model.flag & getattr(nncam, "NNCAM_FLAG_RAW11", 0)
+                ),
+                "raw12": bool(device.model.flag & nncam.NNCAM_FLAG_RAW12),
+                "raw14": bool(device.model.flag & nncam.NNCAM_FLAG_RAW14),
+                "raw16": bool(device.model.flag & nncam.NNCAM_FLAG_RAW16),
+                "raw_mode": raw_mode,
+                "isp_mode": isp_mode,
+                "pull_bits": self._scientific_pull_bits,
+                "start_pull_mode_status": "OK",
             }
             self._log_camera_capabilities(info)
             self.camera_opened.emit(info)
@@ -202,6 +284,13 @@ class CameraController(QObject):
         self._scientific_channels = 0
         self._scientific_pull_bits = 0
         self._raw_value_alignment = "unknown"
+        self._scientific_format_negotiation = "Unconfigured"
+        self._rgb_option_4_supported = None
+        self._linear_option_supported = None
+        self._curve_option_supported = None
+        self._gamma_supported = None
+        self._scientific_isp_bypassed = False
+        self._scientific_frame_validated = False
         if was_open:
             self.camera_closed.emit()
             self.status_changed.emit("相機已中斷連線")
@@ -338,6 +427,15 @@ class CameraController(QObject):
             "RawValueAlignment": self._raw_value_alignment,
             "ScientificGammaApplied": False,
             "ScientificToneMappingApplied": False,
+            "ScientificPixelFormat": self._scientific_pixel_format,
+            "ScientificFormatNegotiation": self._scientific_format_negotiation,
+            "RGBOption4Supported": self._rgb_option_4_supported,
+            "LINEAROptionSupported": self._linear_option_supported,
+            "CURVEOptionSupported": self._curve_option_supported,
+            "GammaOptionSupported": self._gamma_supported,
+            "ScientificISPBypassed": self._scientific_isp_bypassed,
+            "ScientificFrameValidated": self._scientific_frame_validated,
+            "ScientificMeasurementReady": self._scientific_measurement_ready(),
         }
 
     def read_temperature_c(self) -> float | None:
@@ -423,11 +521,24 @@ class CameraController(QObject):
         target = info.get("auto_target")
         LOG.info(
             "Camera Model: %s\n"
+            "Camera Serial: %s\n"
+            "Camera flags: 0x%X\n"
             "Mono: %s\n"
+            "RAW10/11/12/14/16 flags: %s/%s/%s/%s/%s\n"
             "Resolution: %sx%s\n"
+            "SDK version: %s\n"
             "MaxBitDepth: %s\n"
+            "Sensor bit depth: %s\n"
             "BitDepthSource: %s\n"
             "ScientificPixelFormat: %s\n"
+            "ScientificFormatNegotiation: %s\n"
+            "RGB option 4 supported: %s\n"
+            "LINEAR/CURVE/Gamma supported: %s/%s/%s\n"
+            "ScientificISPBypassed: %s\n"
+            "RAW mode: %s\n"
+            "ISP mode: %s\n"
+            "Pull bits: %s\n"
+            "StartPullMode status: %s\n"
             "ScientificContainer: %s\n"
             "ScientificChannels: %s\n"
             "RawValueAlignment: %s\n"
@@ -437,15 +548,34 @@ class CameraController(QObject):
             "min gain = %s %%, max gain = %s %%\n"
             "Auto Exposure Target: %s /255",
             info.get("model") or info.get("name") or "--",
+            info.get("identifier", "--"),
+            info.get("camera_flags", 0),
             info.get("mono", "--"),
+            info.get("raw10", False),
+            info.get("raw11", False),
+            info.get("raw12", False),
+            info.get("raw14", False),
+            info.get("raw16", False),
             *(
                 info.get("resolutions", [("--", "--")])[info.get("resolution_index", 0)]
                 if info.get("resolutions")
                 else ("--", "--")
             ),
+            info.get("sdk_version", "--"),
             info.get("max_bit_depth") if info.get("max_bit_depth") is not None else "--",
+            info.get("scientific_bit_depth", "--"),
             info.get("bit_depth_source", "--"),
             info.get("scientific_pixel_format", "--"),
+            info.get("scientific_format_negotiation", "--"),
+            info.get("rgb_option_4_supported", "--"),
+            info.get("linear_option_supported", "--"),
+            info.get("curve_option_supported", "--"),
+            info.get("gamma_supported", "--"),
+            info.get("scientific_isp_bypassed", "--"),
+            info.get("raw_mode") if info.get("raw_mode") is not None else "unsupported",
+            info.get("isp_mode") if info.get("isp_mode") is not None else "unsupported",
+            info.get("pull_bits", "--"),
+            info.get("start_pull_mode_status", "--"),
             info.get("scientific_container", "--"),
             info.get("scientific_channels", "--"),
             info.get("raw_value_alignment", "--"),
@@ -482,6 +612,7 @@ class CameraController(QObject):
             bit_depth = int(camera.MaxBitDepth())
             if not 1 <= bit_depth <= 16:
                 raise ValueError(f"unexpected MaxBitDepth value: {bit_depth}")
+            LOG.info("Camera startup OK: MaxBitDepth() -> %s", bit_depth)
             return bit_depth, "MaxBitDepth"
         except Exception as exc:
             fallback = cls._native_sensor_bit_depth(flags)
@@ -492,14 +623,136 @@ class CameraController(QObject):
             )
             return fallback, "CapabilityFlagFallback"
 
+    @staticmethod
+    def _apply_camera_startup_setting(
+        name: str, operation: Callable[[], _T]
+    ) -> _T:
+        try:
+            result = operation()
+            if result is None:
+                LOG.info("Camera startup OK: %s", name)
+            else:
+                LOG.info("Camera startup OK: %s -> %r", name, result)
+            return result
+        except Exception as exc:
+            LOG.exception("Camera startup FAILED at %s: %s", name, exc)
+            raise CameraStartupError(name, exc) from exc
+
+    @staticmethod
+    def _is_unsupported_sdk_error(exc: Exception) -> bool:
+        hr = getattr(exc, "hr", None)
+        return hr is not None and (hr & 0xFFFFFFFF) in {
+            nncam.E_INVALIDARG,
+            nncam.E_NOTIMPL,
+        }
+
+    @classmethod
+    def _set_required_option(
+        cls, camera: Any, label: str, option: int, value: int
+    ) -> int:
+        cls._apply_camera_startup_setting(
+            f"{label}={value}", lambda: camera.put_Option(option, value)
+        )
+        readback = int(
+            cls._apply_camera_startup_setting(
+                f"{label} readback", lambda: camera.get_Option(option)
+            )
+        )
+        if readback != value:
+            mismatch = RuntimeError(f"requested {value}, read back {readback}")
+            LOG.error("Camera startup FAILED at %s readback: %s", label, mismatch)
+            raise CameraStartupError(f"{label} readback", mismatch)
+        return readback
+
+    @classmethod
+    def _set_optional_isp_option(
+        cls, camera: Any, label: str, option: int, value: int
+    ) -> bool:
+        try:
+            cls._set_required_option(camera, label, option, value)
+            return True
+        except CameraStartupError as exc:
+            if not cls._is_unsupported_sdk_error(exc):
+                raise
+            LOG.warning(
+                "Camera startup optional ISP setting unsupported at %s; "
+                "connection remains available but scientific measurement requires "
+                "an ISP-bypass proof: %s",
+                exc.stage,
+                exc.original,
+            )
+            return False
+
+    @classmethod
+    def _set_optional_gamma(cls, camera: Any, value: int) -> bool:
+        try:
+            cls._apply_camera_startup_setting(
+                f"Gamma={value}", lambda: camera.put_Gamma(value)
+            )
+            readback = int(
+                cls._apply_camera_startup_setting("Gamma readback", camera.get_Gamma)
+            )
+            if readback != value:
+                mismatch = RuntimeError(f"requested {value}, read back {readback}")
+                LOG.error("Camera startup FAILED at Gamma readback: %s", mismatch)
+                raise CameraStartupError("Gamma readback", mismatch)
+            return True
+        except CameraStartupError as exc:
+            if not cls._is_unsupported_sdk_error(exc):
+                raise
+            LOG.warning(
+                "Camera startup optional ISP setting unsupported at %s; "
+                "connection remains available but scientific measurement requires "
+                "an ISP-bypass proof: %s",
+                exc.stage,
+                exc.original,
+            )
+            return False
+
+    @classmethod
+    def _read_diagnostic_option(
+        cls, camera: Any, label: str, option: int
+    ) -> int | None:
+        try:
+            return int(
+                cls._apply_camera_startup_setting(
+                    f"{label} readback", lambda: camera.get_Option(option)
+                )
+            )
+        except CameraStartupError as exc:
+            if not cls._is_unsupported_sdk_error(exc):
+                raise
+            LOG.warning("Camera startup diagnostic unsupported at %s", exc.stage)
+            return None
+
+    def _scientific_measurement_ready(self) -> bool:
+        isp_neutral_verified = all((
+            self._linear_option_supported is True,
+            self._curve_option_supported is True,
+            self._gamma_supported is True,
+        ))
+        return bool(
+            self._scientific_frame_validated
+            and (isp_neutral_verified or self._scientific_isp_bypassed)
+        )
+
     def _start_stream(self) -> None:
         if self._camera is None:
             return
         if self._scientific_pull_bits != 16 or not self._camera_is_mono:
-            raise RuntimeError("Scientific camera format was not configured")
+            raise CameraStartupError(
+                "Scientific format validation",
+                RuntimeError("Scientific camera format was not configured"),
+            )
+        self._scientific_frame_validated = False
         self._pitch = nncam.TDIBWIDTHBYTES(self._width * self._scientific_pull_bits)
         self._buffer = bytes(self._pitch * self._height)
-        self._camera.StartPullModeWithCallback(self._camera_callback, self)
+        self._apply_camera_startup_setting(
+            "StartPullModeWithCallback",
+            lambda: self._camera.StartPullModeWithCallback(
+                self._camera_callback, self
+            ),
+        )
         self._fps_timer.start()
 
     @staticmethod
@@ -533,14 +786,42 @@ class CameraController(QObject):
         if self._camera is None or self._buffer is None:
             return
         try:
-            self._camera.PullImageV4(
-                self._buffer, 0, self._scientific_pull_bits, 0, None
-            )
+            try:
+                self._camera.PullImageV4(
+                    self._buffer, 0, self._scientific_pull_bits, 0, None
+                )
+            except Exception as exc:
+                LOG.exception(
+                    "Camera scientific frame FAILED at PullImageV4(bits=16): %s", exc
+                )
+                raise CameraStartupError("PullImageV4(bits=16)", exc) from exc
             row_words = self._pitch // 2
             rows = np.frombuffer(self._buffer, dtype="<u2").reshape(
                 self._height, row_words
             )
             scientific = rows[:, : self._width].copy()
+            if scientific.dtype != np.uint16 or scientific.shape != (
+                self._height,
+                self._width,
+            ):
+                raise CameraStartupError(
+                    "PullImageV4(bits=16) output validation",
+                    RuntimeError(
+                        "scientific frame must be a uint16 HxW single-channel array; "
+                        f"got dtype={scientific.dtype}, shape={scientific.shape}"
+                    ),
+                )
+            if not self._scientific_frame_validated:
+                LOG.info(
+                    "Camera scientific output validated: PixelFormat=%s, "
+                    "PullBits=%s, dtype=%s, shape=%s, negotiation=%s",
+                    self._scientific_pixel_format,
+                    self._scientific_pull_bits,
+                    scientific.dtype,
+                    scientific.shape,
+                    self._scientific_format_negotiation,
+                )
+            self._scientific_frame_validated = True
             if self._raw_value_alignment == "right":
                 display_source = scientific.astype(np.float64)
                 maximum_dn = float((1 << self._sensor_bit_depth) - 1)
@@ -617,6 +898,14 @@ class CameraController(QObject):
     @staticmethod
     def _format_error(prefix: str, exc: Exception) -> str:
         hr = getattr(exc, "hr", None)
+        stage = getattr(exc, "stage", None)
+        if stage is not None:
+            if hr is not None:
+                return (
+                    f"{prefix}\nStage: {stage}\n"
+                    f"SDK HRESULT: 0x{hr & 0xFFFFFFFF:08X}"
+                )
+            return f"{prefix}\nStage: {stage}\nError: {exc}"
         if hr is not None:
             return f"{prefix}（SDK HRESULT 0x{hr & 0xFFFFFFFF:08X}）"
         return f"{prefix}：{exc}"
