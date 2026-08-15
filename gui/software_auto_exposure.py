@@ -92,8 +92,12 @@ class SoftwareAutoExposure:
             )
 
         self._consecutive_converged = 0
-        exp_min, exp_max, exp_step = (int(value) for value in exposure_range)
-        gain_min, gain_max, gain_step = (int(value) for value in gain_range)
+        exp_min, exp_max, exp_default = (int(value) for value in exposure_range)
+        gain_min, gain_max, gain_default = (int(value) for value in gain_range)
+        # RisingCam range tuple item 3 is the factory default, not a step.
+        # Keep the names explicit so neither value can accidentally influence
+        # controller increments.
+        _ = exp_default, gain_default
         preferred_gain = min(max(100, gain_min), gain_max)
         ratio = min(max(target_dn / max(float(mean_dn), 1.0), 0.5), 2.0)
         new_exposure = current_exposure
@@ -101,26 +105,26 @@ class SoftwareAutoExposure:
 
         if mean_dn < target_dn:
             if current_exposure < exp_max:
-                new_exposure = min(
-                    exp_max,
-                    max(current_exposure + max(exp_step, 1), round(current_exposure * ratio)),
-                )
+                requested = round(current_exposure * ratio)
+                if requested == current_exposure:
+                    requested += 1
+                new_exposure = min(max(requested, exp_min), exp_max)
             elif current_gain < gain_max:
-                new_gain = min(
-                    gain_max,
-                    max(current_gain + max(gain_step, 1), round(current_gain * ratio)),
-                )
+                requested = round(current_gain * ratio)
+                if requested == current_gain:
+                    requested += 1
+                new_gain = min(max(requested, gain_min), gain_max)
         else:
             if current_gain > preferred_gain:
-                new_gain = max(
-                    preferred_gain,
-                    min(current_gain - max(gain_step, 1), round(current_gain * ratio)),
-                )
+                requested = round(current_gain * ratio)
+                if requested == current_gain:
+                    requested -= 1
+                new_gain = min(max(requested, preferred_gain), gain_max)
             elif current_exposure > exp_min:
-                new_exposure = max(
-                    exp_min,
-                    min(current_exposure - max(exp_step, 1), round(current_exposure * ratio)),
-                )
+                requested = round(current_exposure * ratio)
+                if requested == current_exposure:
+                    requested -= 1
+                new_exposure = min(max(requested, exp_min), exp_max)
 
         return SoftwareAutoExposureDecision(
             new_exposure,

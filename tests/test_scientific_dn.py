@@ -59,6 +59,13 @@ class ScientificDNTests(unittest.TestCase):
             mapped, np.array([[0, 128, 255]], dtype=np.uint8)
         )
 
+    def test_left_aligned_preview_shifts_before_mapping(self) -> None:
+        source = np.array([[0x0000, 0x8000, 0xFFF0]], dtype=np.uint16)
+        mapped = effective_dn_to_uint8(source, 12, 16, "left")
+        np.testing.assert_array_equal(
+            mapped, np.array([[0, 128, 255]], dtype=np.uint8)
+        )
+
     def test_unknown_alignment_is_rejected_without_guessing(self) -> None:
         source = np.array([[0, 4095]], dtype=np.uint16)
         with self.assertRaisesRegex(ValueError, "unknown"):

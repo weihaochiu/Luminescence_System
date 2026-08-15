@@ -16,6 +16,7 @@ from gui.camera_controller import CameraController
 from gui.camera_auto_exposure_settings_dialog import CameraAutoExposureSettingsDialog
 from gui.camera_exposure import ExposureMode
 from gui.software_auto_exposure import SoftwareAutoExposure, SoftwareAutoExposureMode
+from gui.scientific_dn_alignment import AlignmentVerifier
 from tests.qt_test_utils import ensure_qapplication
 
 
@@ -90,12 +91,22 @@ class FakeModeCamera:
         pass
 
 
+class QuantizingFakeModeCamera(FakeModeCamera):
+    def put_ExpoTime(self, value: int) -> None:
+        self.calls.append(("exposure", value))
+        self.exposure_us = round(value / 10) * 10
+
+    def put_ExpoAGain(self, value: int) -> None:
+        self.calls.append(("gain", value))
+        self.gain = round(value / 8) * 8
+
+
 def configured_controller(camera: FakeModeCamera) -> CameraController:
     controller = CameraController()
     controller._camera = camera
     controller._sensor_bit_depth = 12
     controller._raw_value_alignment = "right"
-    controller._exposure_range = (100, 1_000_000, 100)
+    controller._exposure_range = (100, 1_000_000, 10_000)
     controller._gain_range = (100, 800, 100)
     return controller
 
@@ -188,15 +199,59 @@ class CameraExposureTests(unittest.TestCase):
         self.assertEqual([], camera.calls)
         self.assertIn("alignment", errors[-1])
 
+    def test_pending_runtime_alignment_accepts_continuous_request(self) -> None:
+        camera = FakeModeCamera()
+        controller = configured_controller(camera)
+        controller._raw_value_alignment = "unknown"
+        controller._alignment_verifier = AlignmentVerifier(12, 16)
+        self.assertTrue(controller.enable_continuous_auto_exposure())
+        self.assertEqual([("sdk_auto", 0)], camera.calls)
+        self.assertTrue(controller._continuous_auto_exposure_requested)
+        self.assertEqual(
+            SoftwareAutoExposureMode.MANUAL,
+            controller._software_auto_exposure.mode,
+        )
+
     def test_alignment_is_known_only_when_sensor_fills_container(self) -> None:
         self.assertEqual(
             ("right", "SensorBitDepthEqualsContainerBitDepth"),
             CameraController._determine_raw_value_alignment(16, 16, 4),
         )
         self.assertEqual(
-            ("unknown", "SDKDoesNotReportGrey16Alignment"),
+            ("unknown", "RuntimeVerificationPending"),
             CameraController._determine_raw_value_alignment(12, 16, 2),
         )
+
+    def test_software_ae_write_reads_back_quantized_actual_value(self) -> None:
+        camera = QuantizingFakeModeCamera(exposure_us=1068, gain=100)
+        controller = configured_controller(camera)
+        controller._software_auto_exposure.start_continuous()
+        controller._latest_mean_effective_dn = 500.0
+        controller._effective_dn_max = 4095
+        with self.assertLogs("gui.camera_controller", level="INFO") as captured:
+            controller._apply_software_auto_exposure()
+        self.assertIn(("exposure", 2136), camera.calls)
+        self.assertEqual(2140, camera.exposure_us)
+        self.assertEqual(
+            [("read_exposure",), ("read_gain",)],
+            camera.calls[-2:],
+        )
+        self.assertIn("requested=2136 us actual=2140 us", "\n".join(captured.output))
+
+    def test_gain_readback_becomes_next_frame_control_baseline(self) -> None:
+        camera = QuantizingFakeModeCamera(exposure_us=1_000_000, gain=100)
+        controller = configured_controller(camera)
+        controller._software_auto_exposure.start_continuous()
+        controller._latest_mean_effective_dn = 2048 / 1.5
+        controller._effective_dn_max = 4095
+        with self.assertLogs("gui.camera_controller", level="INFO") as captured:
+            controller._apply_software_auto_exposure()
+        self.assertIn(("gain", 150), camera.calls)
+        self.assertEqual(152, camera.gain)
+        self.assertIn("requested=150 % actual=152 %", "\n".join(captured.output))
+
+        controller._apply_software_auto_exposure()
+        self.assertIn(("gain", 228), camera.calls)
 
     def test_resolution_restart_restores_continuous_software_mode_with_sdk_off(self) -> None:
         camera = FakeModeCamera()
@@ -279,7 +334,7 @@ class SoftwareAutoExposureTests(unittest.TestCase):
     def setUp(self) -> None:
         self.ae = SoftwareAutoExposure(50)
         self.ae.start_continuous()
-        self.exposure_range = (100, 10_000, 100)
+        self.exposure_range = (100, 10_000, 7_777)
         self.gain_range = (100, 800, 100)
 
     def decision(self, mean, exposure=1000, gain=100):
@@ -292,9 +347,20 @@ class SoftwareAutoExposureTests(unittest.TestCase):
             gain_range=self.gain_range,
         )
 
-    def test_dark_frames_increase_exposure_with_clamped_step(self) -> None:
+    def test_dark_frames_increase_exposure_without_fake_sdk_step(self) -> None:
         self.assertGreater(self.decision(500).exposure_us, 1000)
         self.assertGreater(self.decision(1500).exposure_us, 1000)
+
+    def test_range_default_is_not_used_as_exposure_step(self) -> None:
+        self.exposure_range = (30, 15_000_000, 10_000)
+        decision = self.decision(500, exposure=1000)
+        self.assertEqual(2000, decision.exposure_us)
+
+    def test_gain_uses_ratio_not_range_default_as_step(self) -> None:
+        self.exposure_range = (30, 15_000_000, 10_000)
+        self.gain_range = (100, 800, 100)
+        decision = self.decision(2048 / 1.5, exposure=15_000_000, gain=100)
+        self.assertEqual(150, decision.gain_percent)
 
     def test_deadband_and_exact_target_make_no_adjustment(self) -> None:
         self.assertFalse(self.decision(2000).adjusted)

@@ -10,6 +10,7 @@ from PySide6.QtGui import QImage
 from gui.camera_controller import CameraController
 from gui.measurement_output import scientific_to_visualization
 from gui.sdk import nncam
+from gui.software_auto_exposure import SoftwareAutoExposureMode
 from tests.qt_test_utils import ensure_qapplication
 
 
@@ -219,6 +220,7 @@ class MonoScientificCameraTests(unittest.TestCase):
             self.assertEqual((2, 3), scientific.shape)
             np.testing.assert_array_equal(expected, scientific)
             self.assertEqual(QImage.Format.Format_Grayscale8, preview.format())
+            self.assertEqual(16, preview.pixelColor(2, 0).red())
             self.assertEqual(1, sequence)
 
             metadata = controller.capture_metadata()
@@ -228,9 +230,10 @@ class MonoScientificCameraTests(unittest.TestCase):
             self.assertEqual(16, metadata["ContainerBitDepth"])
             self.assertEqual("unknown", metadata["RawValueAlignment"])
             self.assertEqual(
-                "SDKDoesNotReportGrey16Alignment",
+                "RuntimeVerificationPending",
                 metadata["RawValueAlignmentSource"],
             )
+            self.assertEqual("Collecting", metadata["AlignmentVerificationState"])
             self.assertIsNone(metadata["MeanEffectiveDN"])
             self.assertEqual("uint16", metadata["ContainerDtype"])
             self.assertEqual("RGBOption4", metadata["ScientificFormatNegotiation"])
@@ -296,6 +299,10 @@ class MonoScientificCameraTests(unittest.TestCase):
             self.assertFalse(metadata["LINEAROptionSupported"])
             self.assertFalse(metadata["CURVEOptionSupported"])
             self.assertFalse(metadata["GammaOptionSupported"])
+            self.assertIsNone(metadata["ScientificGammaApplied"])
+            self.assertIsNone(metadata["ScientificToneMappingApplied"])
+            self.assertFalse(metadata["ScientificGammaNeutralVerified"])
+            self.assertFalse(metadata["ScientificToneMappingNeutralVerified"])
             self.assertTrue(metadata["ScientificFrameValidated"])
             self.assertTrue(metadata["ScientificMeasurementReady"])
         finally:
@@ -400,6 +407,40 @@ class MonoScientificCameraTests(unittest.TestCase):
             self.assertEqual(4095, statuses[-1]["EffectiveDNMax"])
             np.testing.assert_array_equal(expected, frames[-1])
             self.assertEqual(500, int(frames[-1][0, 0]))
+        finally:
+            controller.close_camera()
+
+    def test_runtime_right_verification_starts_requested_continuous_dn_ae(self) -> None:
+        camera = _FakeMonoCamera(max_bit_depth=12)
+        controller, errors = _open(camera)
+        try:
+            self.assertTrue(controller.is_open, errors)
+            self.assertEqual("unknown", controller._raw_value_alignment)
+            self.assertFalse(controller._software_auto_exposure.is_active)
+            values = [0, 1, 2, 3, 15, 16, 31, 255, 1023, 2048, 4095]
+            alignment_frame = np.resize(
+                np.asarray(values, dtype=np.uint16), (200, 200)
+            )
+            for _ in range(5):
+                controller._update_alignment_verification(alignment_frame)
+
+            self.assertEqual("right", controller._raw_value_alignment)
+            self.assertEqual("RuntimeVerified", controller._raw_value_alignment_source)
+            self.assertEqual(4095, controller._effective_dn_max)
+            self.assertEqual(
+                SoftwareAutoExposureMode.CONTINUOUS_DN,
+                controller._software_auto_exposure.mode,
+            )
+            self.assertEqual(("enable", 0), camera.auto_exposure_calls[-1])
+
+            statuses = []
+            controller.effective_dn_status_changed.connect(statuses.append)
+            _install_frame(controller, np.full((2, 3), 2048, dtype=np.uint16))
+            controller._pull_live_frame()
+            self.assertEqual(2048.0, statuses[-1]["MeanEffectiveDN"])
+            self.assertEqual(4095, statuses[-1]["EffectiveDNMax"])
+            self.assertEqual("right", statuses[-1]["RawValueAlignment"])
+            self.assertEqual("RuntimeVerified", statuses[-1]["RawValueAlignmentSource"])
         finally:
             controller.close_camera()
 

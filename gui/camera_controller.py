@@ -19,6 +19,10 @@ from .scientific_dn import (
     effective_dn_to_uint8,
     mean_effective_dn,
 )
+from .scientific_dn_alignment import (
+    AlignmentVerificationState,
+    AlignmentVerifier,
+)
 from .sdk import nncam
 from .software_auto_exposure import (
     SoftwareAutoExposure,
@@ -89,6 +93,9 @@ class CameraController(QObject):
         self._scientific_pull_bits = 0
         self._raw_value_alignment = "unknown"
         self._raw_value_alignment_source = "Unknown"
+        self._alignment_verifier: AlignmentVerifier | None = None
+        self._alignment_warning_emitted = False
+        self._continuous_auto_exposure_requested = True
         self._pixel_format_readback: int | None = None
         self._pixel_format_name = "Unknown"
         self._scientific_format_negotiation = "Unconfigured"
@@ -235,6 +242,15 @@ class CameraController(QObject):
                 16,
                 self._pixel_format_readback,
             )
+            self._alignment_verifier = None
+            if (
+                self._sensor_bit_depth is not None
+                and self._sensor_bit_depth < 16
+            ):
+                self._alignment_verifier = AlignmentVerifier(
+                    self._sensor_bit_depth,
+                    16,
+                )
             raw_mode = self._read_nonblocking_setting(
                 "NNCAM_OPTION_RAW diagnostic",
                 lambda: camera.get_Option(nncam.NNCAM_OPTION_RAW),
@@ -250,7 +266,10 @@ class CameraController(QObject):
             # Software DN AE is the only automatic controller. RisingCam SDK AE
             # remains OFF so the two control loops cannot fight each other.
             camera.put_AutoExpoEnable(0)
-            if self._dn_auto_exposure_available():
+            if (
+                self._continuous_auto_exposure_requested
+                and self._dn_auto_exposure_available()
+            ):
                 self._software_auto_exposure.start_continuous()
             else:
                 self._software_auto_exposure.stop()
@@ -275,6 +294,9 @@ class CameraController(QObject):
                 "exposure_us": current[0] if current is not None else None,
                 "gain": current[1] if current is not None else None,
                 "auto_exposure_mode": self._software_auto_exposure.mode.value,
+                "continuous_auto_exposure_requested": (
+                    self._continuous_auto_exposure_requested
+                ),
                 "auto_exposure_target_percent": (
                     self._software_auto_exposure.target_percent
                 ),
@@ -338,7 +360,10 @@ class CameraController(QObject):
             if current is not None:
                 self.exposure_changed.emit(*current)
             self._camera_status_timer.start()
-            self.status_changed.emit(f"已連線：{device.displayname}")
+            if self._alignment_verifier is not None:
+                self.status_changed.emit("正在確認相機 DN alignment…")
+            else:
+                self.status_changed.emit(f"已連線：{device.displayname}")
         except Exception as exc:
             self.close_camera()
             self.error_occurred.emit(self._format_error("開啟相機失敗", exc))
@@ -379,6 +404,8 @@ class CameraController(QObject):
         self._scientific_pull_bits = 0
         self._raw_value_alignment = "unknown"
         self._raw_value_alignment_source = "Unknown"
+        self._alignment_verifier = None
+        self._alignment_warning_emitted = False
         self._pixel_format_readback = None
         self._pixel_format_name = "Unknown"
         self._scientific_format_negotiation = "Unconfigured"
@@ -426,6 +453,7 @@ class CameraController(QObject):
         if self._camera is None:
             return
         try:
+            self._continuous_auto_exposure_requested = False
             self._software_auto_exposure.stop()
             self._camera.put_AutoExpoEnable(0)
             self._camera.put_ExpoTime(int(exposure_us))
@@ -442,6 +470,7 @@ class CameraController(QObject):
             return False
         previous_mode = self._software_auto_exposure.mode
         try:
+            self._continuous_auto_exposure_requested = False
             self._software_auto_exposure.stop()
             self._camera.put_AutoExpoEnable(0)
             current = self._read_current_exposure(self._camera)
@@ -463,6 +492,22 @@ class CameraController(QObject):
 
         if self._camera is None:
             return False
+        self._continuous_auto_exposure_requested = True
+        if (
+            self._alignment_verifier is not None
+            and not self._alignment_verifier.is_final
+        ):
+            try:
+                self._camera.put_AutoExpoEnable(0)
+                self._software_auto_exposure.stop()
+                self.status_changed.emit("等待 DN alignment；正在收集 scientific frames…")
+                self._emit_effective_dn_status()
+                return True
+            except Exception as exc:
+                self.error_occurred.emit(
+                    self._format_error("等待 DN alignment 時停用 SDK AE 失敗", exc)
+                )
+                return False
         if not self._dn_auto_exposure_available():
             self.error_occurred.emit(self._dn_auto_exposure_unavailable_reason())
             return False
@@ -495,6 +540,7 @@ class CameraController(QObject):
         if self._camera is None:
             return
         try:
+            self._continuous_auto_exposure_requested = False
             self._software_auto_exposure.stop()
             self._camera.put_AutoExpoEnable(0)
             self._emit_exposure()
@@ -536,6 +582,14 @@ class CameraController(QObject):
         model = getattr(getattr(self._device, "model", None), "name", "")
         auto_mode = self._software_auto_exposure.mode.value
         auto_active = self._software_auto_exposure.is_active
+        tone_controls_neutral = bool(
+            self._scientific_isp_bypassed
+            or (
+                self._linear_readback == 0
+                and self._curve_readback == 0
+                and self._gamma_readback == 100
+            )
+        )
         return {
             "CameraModel": str(model or self.device_name),
             "CameraSerial": self._device_identifier(self._device) if self._device is not None else "",
@@ -556,6 +610,19 @@ class CameraController(QObject):
             "Channels": self._scientific_channels,
             "RawValueAlignment": self._raw_value_alignment,
             "RawValueAlignmentSource": self._raw_value_alignment_source,
+            "AlignmentVerificationState": (
+                self._alignment_verifier.state.value
+                if self._alignment_verifier is not None
+                else (
+                    AlignmentVerificationState.VERIFIED_RIGHT.value
+                    if self._raw_value_alignment == "right"
+                    else (
+                        AlignmentVerificationState.VERIFIED_LEFT.value
+                        if self._raw_value_alignment == "left"
+                        else AlignmentVerificationState.UNKNOWN.value
+                    )
+                )
+            ),
             "PixelFormatReadback": self._pixel_format_readback,
             "PixelFormatName": self._pixel_format_name,
             "EffectiveDNMax": self._effective_dn_max,
@@ -565,8 +632,10 @@ class CameraController(QObject):
                 if self._latest_effective_dn_fraction is not None
                 else None
             ),
-            "ScientificGammaApplied": False,
-            "ScientificToneMappingApplied": False,
+            "ScientificGammaApplied": False if tone_controls_neutral else None,
+            "ScientificToneMappingApplied": False if tone_controls_neutral else None,
+            "ScientificGammaNeutralVerified": tone_controls_neutral,
+            "ScientificToneMappingNeutralVerified": tone_controls_neutral,
             "ScientificPixelFormat": self._scientific_pixel_format,
             "ScientificFormatNegotiation": self._scientific_format_negotiation,
             "RGBOption4Supported": self._rgb_option_4_supported,
@@ -662,16 +731,19 @@ class CameraController(QObject):
         container_bit_depth: int,
         pixel_format_readback: int | None,
     ) -> tuple[str, str]:
-        """Use only documented facts; never infer alignment from frame values."""
+        """Return documented alignment or mark runtime verification pending."""
 
         if sensor_bit_depth == container_bit_depth:
             return "right", "SensorBitDepthEqualsContainerBitDepth"
-        # The bundled SDK exposes PixelFormat and MaxBitDepth, but neither API
-        # documents whether Grey16 effective bits are MSB- or LSB-aligned.
-        # PixelFormat is retained in diagnostics so an authoritative future SDK
-        # statement can be implemented without image-content heuristics.
+        # PixelFormat alone does not document whether Grey16 effective bits are
+        # MSB- or LSB-aligned. Multi-frame runtime evidence decides later.
         _ = pixel_format_readback
-        return "unknown", "SDKDoesNotReportGrey16Alignment"
+        if (
+            sensor_bit_depth is not None
+            and int(sensor_bit_depth) < int(container_bit_depth)
+        ):
+            return "unknown", "RuntimeVerificationPending"
+        return "unknown", "SensorBitDepthUnknown"
 
     def _dn_auto_exposure_available(self) -> bool:
         return bool(
@@ -1080,6 +1152,77 @@ class CameraController(QObject):
         elif event_code in (nncam.NNCAM_EVENT_ERROR, nncam.NNCAM_EVENT_NOFRAMETIMEOUT):
             self.error_occurred.emit(f"相機回報錯誤事件：0x{event_code:04X}")
 
+    def _update_alignment_verification(self, scientific: np.ndarray) -> None:
+        verifier = self._alignment_verifier
+        if verifier is None or verifier.is_final:
+            return
+        previous_state = verifier.state
+        state = verifier.add_frame(scientific)
+        evidence = verifier.evidence
+        if verifier.alignment == "unknown":
+            self._raw_value_alignment_source = verifier.source
+        LOG.info(
+            "DN alignment runtime evidence: state=%s frames=%s sampled=%s "
+            "nonzero=%s above_right_max=%s (%.6f) low_bits_zero_ratio=%.6f "
+            "nonzero_low_bits=%s patterns=%s",
+            state.value,
+            evidence.frames,
+            evidence.sampled_pixels,
+            evidence.nonzero_pixels,
+            evidence.above_right_max_pixels,
+            evidence.above_right_max_ratio,
+            evidence.low_bits_zero_ratio,
+            evidence.nonzero_low_bits_pixels,
+            evidence.nonzero_low_bit_patterns,
+        )
+        if state in {
+            AlignmentVerificationState.VERIFIED_RIGHT,
+            AlignmentVerificationState.VERIFIED_LEFT,
+        }:
+            self._raw_value_alignment = verifier.alignment
+            self._raw_value_alignment_source = verifier.source
+            self._effective_dn_max = effective_dn_max(self._sensor_bit_depth)
+            LOG.info(
+                "DN alignment runtime verified: alignment=%s source=%s",
+                self._raw_value_alignment,
+                self._raw_value_alignment_source,
+            )
+            if (
+                self._continuous_auto_exposure_requested
+                and self._dn_auto_exposure_available()
+                and self._camera is not None
+            ):
+                self._camera.put_AutoExpoEnable(0)
+                self._software_auto_exposure.start_continuous()
+                self.status_changed.emit(
+                    f"Alignment 已確認為 {self._raw_value_alignment.capitalize()}；"
+                    "持續 DN 自動曝光已開啟"
+                )
+            else:
+                self.status_changed.emit(
+                    f"Alignment 已確認為 {self._raw_value_alignment.capitalize()}"
+                )
+        elif state is AlignmentVerificationState.AMBIGUOUS:
+            self._raw_value_alignment = "unknown"
+            self._raw_value_alignment_source = verifier.source
+            if verifier.source == "InsufficientSignal":
+                self.status_changed.emit("相機 DN alignment 訊號不足；維持手動曝光")
+            else:
+                self.status_changed.emit("相機 DN alignment 無法判定；維持手動曝光")
+                if not self._alignment_warning_emitted:
+                    self._alignment_warning_emitted = True
+                    self.error_occurred.emit(
+                        "多張 scientific frames 的 DN alignment 證據仍互相矛盾；"
+                        "DN 自動曝光維持不可用，Live View 與手動曝光仍可使用。"
+                    )
+        elif verifier.source == "InsufficientSignal":
+            self._raw_value_alignment_source = verifier.source
+            self.status_changed.emit(
+                "相機 DN alignment 訊號不足；等待更多 scientific signal…"
+            )
+        elif previous_state is AlignmentVerificationState.UNKNOWN:
+            self.status_changed.emit("正在確認相機 DN alignment…")
+
     def _pull_live_frame(self) -> None:
         if self._camera is None or self._buffer is None:
             return
@@ -1145,6 +1288,7 @@ class CameraController(QObject):
                     self._scientific_format_negotiation,
                     self._scientific_measurement_ready(),
                 )
+            self._update_alignment_verification(scientific)
             auto_once_converged = False
             if (
                 self._raw_value_alignment in {"right", "left"}
@@ -1230,8 +1374,34 @@ class CameraController(QObject):
         if decision.adjusted:
             if decision.gain_percent != current[1]:
                 self._camera.put_ExpoAGain(decision.gain_percent)
+                actual = self._read_current_exposure(self._camera)
+                if actual is None:
+                    raise RuntimeError("SoftwareDN AE Gain write readback unavailable")
+                if not self._gain_range[0] <= actual[1] <= self._gain_range[1]:
+                    raise RuntimeError(
+                        f"SoftwareDN AE Gain readback {actual[1]} is outside "
+                        f"legal range {self._gain_range[0]}–{self._gain_range[1]}"
+                    )
+                LOG.info(
+                    "SoftwareDN AE gain requested=%s %% actual=%s %%",
+                    decision.gain_percent,
+                    actual[1],
+                )
             elif decision.exposure_us != current[0]:
                 self._camera.put_ExpoTime(decision.exposure_us)
+                actual = self._read_current_exposure(self._camera)
+                if actual is None:
+                    raise RuntimeError("SoftwareDN AE Exposure write readback unavailable")
+                if not self._exposure_range[0] <= actual[0] <= self._exposure_range[1]:
+                    raise RuntimeError(
+                        f"SoftwareDN AE Exposure readback {actual[0]} is outside "
+                        f"legal range {self._exposure_range[0]}–{self._exposure_range[1]}"
+                    )
+                LOG.info(
+                    "SoftwareDN AE exposure requested=%s us actual=%s us",
+                    decision.exposure_us,
+                    actual[0],
+                )
             LOG.info(
                 "SoftwareDN AE mean=%.3f target=%s exposure=%s->%s gain=%s->%s",
                 self._latest_mean_effective_dn,
@@ -1256,6 +1426,20 @@ class CameraController(QObject):
             "SensorBitDepth": self._sensor_bit_depth,
             "ContainerBitDepth": 16,
             "RawValueAlignment": self._raw_value_alignment,
+            "RawValueAlignmentSource": self._raw_value_alignment_source,
+            "AlignmentVerificationState": (
+                self._alignment_verifier.state.value
+                if self._alignment_verifier is not None
+                else (
+                    AlignmentVerificationState.VERIFIED_RIGHT.value
+                    if self._raw_value_alignment == "right"
+                    else (
+                        AlignmentVerificationState.VERIFIED_LEFT.value
+                        if self._raw_value_alignment == "left"
+                        else AlignmentVerificationState.UNKNOWN.value
+                    )
+                )
+            ),
             "EffectiveDNMax": self._effective_dn_max,
             "MeanEffectiveDN": self._latest_mean_effective_dn,
             "MeanEffectiveDNPercent": (
@@ -1267,6 +1451,9 @@ class CameraController(QObject):
             "AutoExposureTargetDN": target_dn,
             "DNSoftwareAEAvailable": self._dn_auto_exposure_available(),
             "AutoExposureMode": self._software_auto_exposure.mode.value,
+            "ContinuousAutoExposureRequested": (
+                self._continuous_auto_exposure_requested
+            ),
         }
 
     def _emit_effective_dn_status(self) -> None:

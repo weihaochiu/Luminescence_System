@@ -266,13 +266,24 @@ class MainWindowDeviceMixin:
 
         dn_available = bool(info.get("dn_auto_exposure_available", False))
         initial_mode = (
-            ExposureMode.CONTINUOUS_AUTO if dn_available else ExposureMode.MANUAL
+            ExposureMode.CONTINUOUS_AUTO
+            if info.get("continuous_auto_exposure_requested", dn_available)
+            else ExposureMode.MANUAL
         )
         self._active_exposure_mode = initial_mode
         self._set_exposure_mode_ui(initial_mode)
         self.on_effective_dn_status_changed({
             "SensorBitDepth": info.get("scientific_bit_depth"),
             "RawValueAlignment": info.get("raw_value_alignment", "unknown"),
+            "RawValueAlignmentSource": info.get(
+                "raw_value_alignment_source", "Unknown"
+            ),
+            "AlignmentVerificationState": (
+                "Collecting"
+                if info.get("raw_value_alignment_source")
+                == "RuntimeVerificationPending"
+                else "Unknown"
+            ),
             "EffectiveDNMax": None,
             "MeanEffectiveDN": None,
             "MeanEffectiveDNPercent": None,
@@ -288,13 +299,6 @@ class MainWindowDeviceMixin:
             camera_model=str(info.get("model", "")),
             camera_identifier=str(info.get("identifier", "")),
         )
-        if not dn_available:
-            QMessageBox.warning(
-                self,
-                "DN 自動曝光不可用",
-                str(info.get("dn_auto_exposure_unavailable_reason", ""))
-                + "\nLive View 與手動曝光仍可使用。",
-            )
 
     def on_camera_closed(self) -> None:
         self.connect_action.setText("相機連線")
@@ -404,6 +408,8 @@ class MainWindowDeviceMixin:
     def on_effective_dn_status_changed(self, status: dict[str, Any]) -> None:
         sensor_bits = status.get("SensorBitDepth")
         alignment = str(status.get("RawValueAlignment", "unknown"))
+        alignment_source = str(status.get("RawValueAlignmentSource", "Unknown"))
+        verification_state = str(status.get("AlignmentVerificationState", "Unknown"))
         maximum = status.get("EffectiveDNMax")
         mean_dn = status.get("MeanEffectiveDN")
         percent = status.get("MeanEffectiveDNPercent")
@@ -421,9 +427,20 @@ class MainWindowDeviceMixin:
         self.sensor_bit_depth_value.setText(
             f"{sensor_bits}-bit" if sensor_bits is not None else "Unknown"
         )
-        self.raw_value_alignment_value.setText(
-            alignment.capitalize() if alignment != "unknown" else "Unknown"
-        )
+        if alignment in {"right", "left"}:
+            alignment_text = alignment.capitalize()
+        elif alignment_source == "InsufficientSignal":
+            alignment_text = "訊號不足"
+        elif alignment_source == "AmbiguousRuntimeEvidence":
+            alignment_text = "無法判定"
+        elif (
+            verification_state in {"Unknown", "Collecting"}
+            and alignment_source == "RuntimeVerificationPending"
+        ):
+            alignment_text = "確認中"
+        else:
+            alignment_text = "Unknown"
+        self.raw_value_alignment_value.setText(alignment_text)
         self.mean_effective_dn_value.setText(
             f"{round(float(mean_dn))} /{int(maximum)}"
             if mean_dn is not None and maximum is not None
@@ -433,11 +450,15 @@ class MainWindowDeviceMixin:
             f"{float(percent):.1f} %" if percent is not None else "--"
         )
         self.auto_exposure_target_percent_value.setText(f"{target_percent} %")
-        self.auto_exposure_target_dn_value.setText(
-            f"{int(target_dn)} /{int(maximum)}"
-            if target_dn is not None and maximum is not None
-            else "無法判定"
-        )
+        if target_dn is not None and maximum is not None:
+            target_text = f"{int(target_dn)} /{int(maximum)}"
+        elif alignment_source == "RuntimeVerificationPending":
+            target_text = "等待 DN alignment"
+        elif alignment_source == "InsufficientSignal":
+            target_text = "Alignment 訊號不足"
+        else:
+            target_text = "無法判定"
+        self.auto_exposure_target_dn_value.setText(target_text)
 
     def on_frame_ready(self, image: QImage) -> None:
         self.last_image = image.copy()
