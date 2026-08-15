@@ -10,6 +10,10 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMessageBox
 
 from . import __version__
+from .camera_auto_exposure_settings import load_auto_exposure_target_percent
+from .camera_auto_exposure_settings_dialog import (
+    CameraAutoExposureSettingsDialog,
+)
 from .camera_controller import CameraController
 from .camera_temperature_chart import CameraTemperatureChart
 from .camera_temperature_monitor import CameraTemperatureMonitor
@@ -40,7 +44,13 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.resize(1500, 900)
         self.setMinimumSize(800, 600)
 
-        self.controller = CameraController(self)
+        self.settings = QSettings()
+        self.controller = CameraController(
+            self,
+            auto_exposure_target_percent=load_auto_exposure_target_percent(
+                self.settings
+            ),
+        )
         app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
         application_directory = Path(app_data) if app_data else Path.cwd()
         self.temperature_monitor = CameraTemperatureMonitor(
@@ -55,7 +65,6 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             self.smu_manager.control, parent=self
         )
         self.smu_monitor = SMUMonitor(self.smu_manager.control, parent=self)
-        self.settings = QSettings()
         limits, self.max_recipe_time_s, self.max_output_time_s = load_global_safety(
             self.settings
         )
@@ -167,6 +176,16 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.status_message.setText(
                 "極性確認共用設定已更新；後續手動輸出與 Recipe 將使用新設定"
+            )
+
+    def open_camera_auto_exposure_settings(self) -> None:
+        dialog = CameraAutoExposureSettingsDialog(self.settings, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.controller.set_auto_exposure_target_percent(
+                dialog.target_percent
+            )
+            self.status_message.setText(
+                f"相機 DN 自動曝光目標已更新為 {dialog.target_percent}%"
             )
 
     def open_smu_safety_settings(self) -> None:

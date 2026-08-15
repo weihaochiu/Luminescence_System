@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .camera_exposure import ExposureMode, PREVIEW_BRIGHTNESS_8BIT_MAX
+from .camera_exposure import ExposureMode
 from .device_panel import DevicePanel
 from .measurement_control_bar import MeasurementControlBar
 from .responsive_layout import LayoutMode, ResponsiveLayoutManager
@@ -75,6 +75,12 @@ class MainWindowUIMixin:
         self.recipe_manager_action.setShortcut(QKeySequence("Ctrl+R"))
         self.recipe_manager_action.setToolTip("建立、編輯、驗證或匯入／匯出 Recipe（Ctrl+R）")
         self.polarity_settings_action = QAction("極性確認…", self)
+        self.camera_auto_exposure_settings_action = QAction(
+            "自動曝光設定…", self
+        )
+        self.camera_auto_exposure_settings_action.setToolTip(
+            "設定 Scientific Effective DN 全畫面平均值的 Software AE 目標"
+        )
         self.polarity_settings_action.setToolTip("設定手動輸出與 Recipe 共用的 Jsc / Voc 極性確認條件")
         self.relay_settings_action = QAction("Relay 設定…", self)
         self.smu_safety_settings_action = QAction("安全 / SMU…", self)
@@ -104,6 +110,9 @@ class MainWindowUIMixin:
         self.about_action.triggered.connect(self.show_about)
         self.recipe_manager_action.triggered.connect(self.open_recipe_manager)
         self.polarity_settings_action.triggered.connect(self.open_polarity_settings)
+        self.camera_auto_exposure_settings_action.triggered.connect(
+            self.open_camera_auto_exposure_settings
+        )
         self.smu_safety_settings_action.triggered.connect(self.open_smu_safety_settings)
         self.relay_settings_action.triggered.connect(self.open_relay_settings)
         self.sidebar_settings_action.triggered.connect(self.open_sidebar_settings)
@@ -131,6 +140,8 @@ class MainWindowUIMixin:
         settings_menu = self.menuBar().addMenu("設定(&S)")
         interface_menu = settings_menu.addMenu("介面")
         interface_menu.addAction(self.sidebar_settings_action)
+        camera_settings_menu = settings_menu.addMenu("相機")
+        camera_settings_menu.addAction(self.camera_auto_exposure_settings_action)
         settings_menu.addSeparator()
         settings_menu.addAction(self.recipe_manager_action)
         settings_menu.addAction(self.polarity_settings_action)
@@ -235,6 +246,12 @@ class MainWindowUIMixin:
         auto_form.setContentsMargins(0, 0, 0, 0)
         auto_form.addRow("目前曝光時間", self.current_exposure_value)
         auto_form.addRow("目前 Gain", self.current_gain_value)
+        self.auto_exposure_target_percent_value = QLabel(
+            f"{self.controller.auto_exposure_target_percent} %"
+        )
+        self.auto_exposure_target_dn_value = QLabel("無法判定")
+        auto_form.addRow("AE 目標", self.auto_exposure_target_percent_value)
+        auto_form.addRow("目標 DN", self.auto_exposure_target_dn_value)
 
         manual_page = QWidget()
         manual_layout = QVBoxLayout(manual_page)
@@ -248,13 +265,15 @@ class MainWindowUIMixin:
         self.exposure_stack = QStackedWidget()
         self.exposure_stack.addWidget(auto_page)
         self.exposure_stack.addWidget(manual_page)
-        self.preview_brightness_value = QLabel(
-            f"-- /{PREVIEW_BRIGHTNESS_8BIT_MAX}"
+        self.mean_effective_dn_value = QLabel("無法判定")
+        self.mean_effective_dn_value.setToolTip(
+            "由 Scientific MONO16 frame 換算出的全畫面平均 Effective DN。\n"
+            "分母依實際 SensorBitDepth 決定。\n"
+            "此數值不是 8-bit Preview brightness。"
         )
-        self.preview_brightness_value.setToolTip(
-            "由目前 Live View 8-bit 預覽影像計算的平均亮度，\n"
-            "僅供畫面觀察，不代表 RisingCam SDK 自動曝光演算法內部的亮度值。"
-        )
+        self.effective_dn_percent_value = QLabel("--")
+        self.sensor_bit_depth_value = QLabel("--")
+        self.raw_value_alignment_value = QLabel("Unknown")
         self.camera_connection_hint = QLabel("請先連線相機")
         self.camera_connection_hint.setStyleSheet("color: #a66a00;")
 
@@ -269,7 +288,10 @@ class MainWindowUIMixin:
         exposure_separator.setFrameShape(QFrame.Shape.HLine)
         exposure_layout.addWidget(exposure_separator)
         brightness_form = QFormLayout()
-        brightness_form.addRow("目前預覽亮度", self.preview_brightness_value)
+        brightness_form.addRow("目前平均 DN", self.mean_effective_dn_value)
+        brightness_form.addRow("訊號比例", self.effective_dn_percent_value)
+        brightness_form.addRow("Sensor", self.sensor_bit_depth_value)
+        brightness_form.addRow("Alignment", self.raw_value_alignment_value)
         exposure_layout.addLayout(brightness_form)
         exposure_layout.addWidget(self.camera_connection_hint)
 
@@ -502,6 +524,9 @@ class MainWindowUIMixin:
         self.controller.camera_closed.connect(self._update_measurement_controls)
         self.controller.exposure_changed.connect(self.on_exposure_changed)
         self.controller.exposure_status_changed.connect(self.on_exposure_status_changed)
+        self.controller.effective_dn_status_changed.connect(
+            self.on_effective_dn_status_changed
+        )
         self.controller.auto_exposure_result.connect(self.on_auto_exposure_result)
         self.controller.fps_changed.connect(
             lambda fps, total: self.fps_status.setText(f"FPS {fps:.1f}｜幀 {total}")

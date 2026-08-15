@@ -17,6 +17,8 @@ import tifffile
 from PIL import Image, ImageDraw, ImageFont
 from PySide6.QtGui import QImage
 
+from .scientific_dn import effective_dn_to_uint8
+
 
 INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
@@ -196,19 +198,29 @@ def scientific_to_visualization(
     if not 1 <= bit_depth <= 16:
         raise ValueError("SensorBitDepth must be between 1 and 16")
     alignment = str(raw_value_alignment).strip().lower()
-    if alignment == "right":
-        working = source.astype(np.float64, copy=True)
-        scale_max = float((1 << bit_depth) - 1)
-    elif alignment == "left":
-        working = np.right_shift(source, 16 - bit_depth).astype(np.float64)
-        scale_max = float((1 << bit_depth) - 1)
+    if alignment in {"right", "left"} and source.ndim == 2:
+        mapped = effective_dn_to_uint8(source, bit_depth, 16, alignment)
     elif alignment == "unknown":
         # Do not infer alignment or bit depth from the brightness of one frame.
         working = source.astype(np.float64, copy=True)
         scale_max = 65535.0
+        mapped = np.clip(
+            np.rint(working * (255.0 / scale_max)), 0, 255
+        ).astype(np.uint8)
+    elif alignment in {"right", "left"}:
+        # Legacy RGB scientific products are outside the current MONO16 camera
+        # path but retain equivalent, non-mutating behavior.
+        working = (
+            source.astype(np.float64, copy=True)
+            if alignment == "right"
+            else np.right_shift(source, 16 - bit_depth).astype(np.float64)
+        )
+        scale_max = float((1 << bit_depth) - 1)
+        mapped = np.clip(
+            np.rint(working * (255.0 / scale_max)), 0, 255
+        ).astype(np.uint8)
     else:
         raise ValueError("RawValueAlignment must be 'right', 'left', or 'unknown'")
-    mapped = np.clip(np.rint(working * (255.0 / scale_max)), 0, 255).astype(np.uint8)
     if mapped.ndim == 2:
         return Image.fromarray(mapped, mode="L")
     if mapped.ndim == 3 and mapped.shape[2] == 3:

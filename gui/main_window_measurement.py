@@ -10,6 +10,7 @@ from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QMessageBox
 
 from .camera_capture_bridge import CameraCaptureBridge
+from .camera_exposure import ExposureMode
 from .el_matrix_hardware import ELMatrixHardwareAdapter
 from .el_matrix_plan import ELMatrixPlan, format_duration, format_finish_time
 from .el_matrix_preflight import collect_preflight_errors
@@ -367,6 +368,17 @@ def begin_el_matrix_measurement(self: Any) -> None:
     )
     if answer != QMessageBox.StandardButton.Ok:
         return
+    # Formal Recipe capture owns Exposure/Gain. Stop operator Live View DN AE
+    # before the snapshot and before any measurement camera configuration.
+    if not self.controller.stop_software_auto_exposure():
+        QMessageBox.warning(
+            self,
+            "EL Matrix 無法開始",
+            "無法確認相機自動曝光已停止；正式量測未啟動。",
+        )
+        return
+    self._active_exposure_mode = ExposureMode.MANUAL
+    self._set_exposure_mode_ui(ExposureMode.MANUAL)
     camera_snapshot = dict(self.controller.capture_metadata())
     exposure_us, gain = self.controller.current_exposure()
     camera_snapshot.update({

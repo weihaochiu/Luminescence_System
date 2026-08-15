@@ -43,6 +43,7 @@ class _FakeMonoCamera:
             nncam.NNCAM_OPTION_RGB: 0,
             nncam.NNCAM_OPTION_RAW: 0,
             nncam.NNCAM_OPTION_ISP: 0,
+            nncam.NNCAM_OPTION_PIXEL_FORMAT: nncam.NNCAM_PIXELFORMAT_RAW12,
         }
         self.unsupported_options = set(unsupported_options or ())
         self.readback_overrides = dict(readback_overrides or {})
@@ -53,6 +54,10 @@ class _FakeMonoCamera:
         self.pull_bits: list[int] = []
         self.auto_exposure_calls: list[tuple[str, int] | tuple[str]] = []
         self.auto_exposure_target = 99
+        self.exposure_us = 1000
+        self.gain_percent = 100
+        self.exposure_writes: list[int] = []
+        self.gain_writes: list[int] = []
 
     def get_eSize(self) -> int:
         return 0
@@ -84,6 +89,26 @@ class _FakeMonoCamera:
 
     def put_AutoExpoEnable(self, enabled: int) -> None:
         self.auto_exposure_calls.append(("enable", enabled))
+
+    def get_ExpTimeRange(self):
+        return 100, 10_000, 100
+
+    def get_ExpoAGainRange(self):
+        return 100, 800, 100
+
+    def get_ExpoTime(self) -> int:
+        return self.exposure_us
+
+    def get_ExpoAGain(self) -> int:
+        return self.gain_percent
+
+    def put_ExpoTime(self, value: int) -> None:
+        self.exposure_writes.append(value)
+        self.exposure_us = value
+
+    def put_ExpoAGain(self, value: int) -> None:
+        self.gain_writes.append(value)
+        self.gain_percent = value
 
     def put_Gamma(self, gamma: int) -> None:
         if self.gamma_unsupported:
@@ -154,10 +179,7 @@ class MonoScientificCameraTests(unittest.TestCase):
         controller, errors = _open(camera)
         try:
             self.assertTrue(controller.is_open, errors)
-            self.assertEqual(
-                [("target", 120), ("target_readback",), ("enable", 1)],
-                camera.auto_exposure_calls,
-            )
+            self.assertEqual([("enable", 0)], camera.auto_exposure_calls)
             self.assertNotIn((nncam.NNCAM_OPTION_BYTEORDER, 0), camera.options)
             metadata = controller.capture_metadata()
             self.assertEqual(1, metadata["ByteOrderReadback"])
@@ -204,6 +226,12 @@ class MonoScientificCameraTests(unittest.TestCase):
             self.assertEqual("MaxBitDepth", metadata["BitDepthSource"])
             self.assertEqual(16, metadata["BitDepth"])
             self.assertEqual(16, metadata["ContainerBitDepth"])
+            self.assertEqual("unknown", metadata["RawValueAlignment"])
+            self.assertEqual(
+                "SDKDoesNotReportGrey16Alignment",
+                metadata["RawValueAlignmentSource"],
+            )
+            self.assertIsNone(metadata["MeanEffectiveDN"])
             self.assertEqual("uint16", metadata["ContainerDtype"])
             self.assertEqual("RGBOption4", metadata["ScientificFormatNegotiation"])
             self.assertTrue(metadata["ScientificFrameValidated"])
@@ -345,6 +373,35 @@ class MonoScientificCameraTests(unittest.TestCase):
         self.assertEqual(np.uint8, display.dtype)
         np.testing.assert_array_equal(before, source)
         self.assertEqual(255, int(display[0, -1]))
+
+    def test_known_alignment_frame_drives_mean_and_software_ae(self) -> None:
+        camera = _FakeMonoCamera(max_bit_depth=12)
+        controller, errors = _open(camera)
+        try:
+            self.assertTrue(controller.is_open, errors)
+            controller._raw_value_alignment = "right"
+            controller._raw_value_alignment_source = "TestAuthoritative"
+            controller._software_auto_exposure.start_continuous()
+            expected = _install_frame(
+                controller, np.full((2, 3), 500, dtype=np.uint16)
+            )
+            statuses = []
+            frames = []
+            controller.effective_dn_status_changed.connect(statuses.append)
+            controller.scientific_frame_ready.connect(
+                lambda scientific, _image, _sequence: frames.append(scientific)
+            )
+
+            controller._pull_live_frame()
+
+            self.assertEqual([2000], camera.exposure_writes)
+            self.assertEqual([], camera.gain_writes)
+            self.assertEqual(500.0, statuses[-1]["MeanEffectiveDN"])
+            self.assertEqual(4095, statuses[-1]["EffectiveDNMax"])
+            np.testing.assert_array_equal(expected, frames[-1])
+            self.assertEqual(500, int(frames[-1][0, 0]))
+        finally:
+            controller.close_camera()
 
 
 if __name__ == "__main__":

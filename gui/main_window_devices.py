@@ -11,11 +11,8 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from . import __version__
-from .camera_exposure import (
-    DEFAULT_AUTO_EXPOSURE_TARGET,
-    PREVIEW_BRIGHTNESS_8BIT_MAX,
-    ExposureMode,
-)
+from .camera_auto_exposure_settings import target_effective_dn
+from .camera_exposure import ExposureMode
 from .camera_temperature_monitor import TemperatureSample, format_temperature_c
 from .image_io import save_image_and_metadata
 from .instrument_state_manager import SMUUIState
@@ -230,7 +227,7 @@ class MainWindowDeviceMixin:
 
     def on_camera_opened(self, info: dict[str, Any]) -> None:
         self.camera_info = info
-        self._preview_brightness_8bit = None
+        self._mean_effective_dn = None
         self.connect_action.setText("中斷連線")
         self.view_title.setText(f"即時影像 [{info['name']}]")
         self.model_value.setText(str(info["model"]))
@@ -267,14 +264,37 @@ class MainWindowDeviceMixin:
         if info.get("exposure_us") is not None and info.get("gain") is not None:
             self.on_exposure_changed(info["exposure_us"], info["gain"])
 
-        self._active_exposure_mode = ExposureMode.CONTINUOUS_AUTO
-        self._set_exposure_mode_ui(ExposureMode.CONTINUOUS_AUTO)
+        dn_available = bool(info.get("dn_auto_exposure_available", False))
+        initial_mode = (
+            ExposureMode.CONTINUOUS_AUTO if dn_available else ExposureMode.MANUAL
+        )
+        self._active_exposure_mode = initial_mode
+        self._set_exposure_mode_ui(initial_mode)
+        self.on_effective_dn_status_changed({
+            "SensorBitDepth": info.get("scientific_bit_depth"),
+            "RawValueAlignment": info.get("raw_value_alignment", "unknown"),
+            "EffectiveDNMax": None,
+            "MeanEffectiveDN": None,
+            "MeanEffectiveDNPercent": None,
+            "AutoExposureTargetPercent": info.get(
+                "auto_exposure_target_percent",
+                self.controller.auto_exposure_target_percent,
+            ),
+            "AutoExposureTargetDN": None,
+        })
         self._set_camera_controls_enabled(True)
         self.temperature_monitor.start(
             supported=bool(info.get("temperature_supported", False)),
             camera_model=str(info.get("model", "")),
             camera_identifier=str(info.get("identifier", "")),
         )
+        if not dn_available:
+            QMessageBox.warning(
+                self,
+                "DN 自動曝光不可用",
+                str(info.get("dn_auto_exposure_unavailable_reason", ""))
+                + "\nLive View 與手動曝光仍可使用。",
+            )
 
     def on_camera_closed(self) -> None:
         self.connect_action.setText("相機連線")
@@ -293,10 +313,12 @@ class MainWindowDeviceMixin:
         self.camera_status.setText("相機 —")
         self.current_exposure_value.setText("--")
         self.current_gain_value.setText("--")
-        self._preview_brightness_8bit = None
-        self.preview_brightness_value.setText(
-            f"-- /{PREVIEW_BRIGHTNESS_8BIT_MAX}"
-        )
+        self._mean_effective_dn = None
+        self.mean_effective_dn_value.setText("無法判定")
+        self.effective_dn_percent_value.setText("--")
+        self.sensor_bit_depth_value.setText("--")
+        self.raw_value_alignment_value.setText("Unknown")
+        self.auto_exposure_target_dn_value.setText("無法判定")
 
     def change_resolution(self, index: int) -> None:
         if index >= 0 and self.controller.is_open:
@@ -366,7 +388,7 @@ class MainWindowDeviceMixin:
         self,
         exposure_us: int | None,
         gain: int | None,
-        preview_brightness_8bit: int | None,
+        _legacy_brightness: int | None,
     ) -> None:
         if exposure_us is None or gain is None:
             self.current_exposure_value.setText("--")
@@ -378,11 +400,43 @@ class MainWindowDeviceMixin:
             self.current_gain_value.setText(f"{gain} %")
             self.exposure_status.setText(f"曝光 {self._format_exposure(exposure_us)}")
             self.gain_status.setText(f"Gain {gain}%")
-        self._preview_brightness_8bit = preview_brightness_8bit
-        self.preview_brightness_value.setText(
-            f"{preview_brightness_8bit} /{PREVIEW_BRIGHTNESS_8BIT_MAX}"
-            if preview_brightness_8bit is not None
-            else f"-- /{PREVIEW_BRIGHTNESS_8BIT_MAX}"
+
+    def on_effective_dn_status_changed(self, status: dict[str, Any]) -> None:
+        sensor_bits = status.get("SensorBitDepth")
+        alignment = str(status.get("RawValueAlignment", "unknown"))
+        maximum = status.get("EffectiveDNMax")
+        mean_dn = status.get("MeanEffectiveDN")
+        percent = status.get("MeanEffectiveDNPercent")
+        target_percent = int(
+            status.get(
+                "AutoExposureTargetPercent",
+                self.controller.auto_exposure_target_percent,
+            )
+        )
+        target_dn = status.get("AutoExposureTargetDN")
+        if target_dn is None and maximum is not None:
+            target_dn = target_effective_dn(int(maximum), target_percent)
+
+        self._mean_effective_dn = float(mean_dn) if mean_dn is not None else None
+        self.sensor_bit_depth_value.setText(
+            f"{sensor_bits}-bit" if sensor_bits is not None else "Unknown"
+        )
+        self.raw_value_alignment_value.setText(
+            alignment.capitalize() if alignment != "unknown" else "Unknown"
+        )
+        self.mean_effective_dn_value.setText(
+            f"{round(float(mean_dn))} /{int(maximum)}"
+            if mean_dn is not None and maximum is not None
+            else "無法判定"
+        )
+        self.effective_dn_percent_value.setText(
+            f"{float(percent):.1f} %" if percent is not None else "--"
+        )
+        self.auto_exposure_target_percent_value.setText(f"{target_percent} %")
+        self.auto_exposure_target_dn_value.setText(
+            f"{int(target_dn)} /{int(maximum)}"
+            if target_dn is not None and maximum is not None
+            else "無法判定"
         )
 
     def on_frame_ready(self, image: QImage) -> None:
@@ -492,12 +546,15 @@ class MainWindowDeviceMixin:
             return
         exposure_us, gain = self.controller.current_exposure()
         if capture_mode.startswith("auto_once"):
-            auto_exposure_mode = "auto_once"
+            auto_exposure_mode = "AutoOnceDN"
         elif capture_mode == "auto_continuous":
-            auto_exposure_mode = "continuous"
+            auto_exposure_mode = "ContinuousDN"
         else:
-            auto_exposure_mode = "manual"
-        metadata = {
+            auto_exposure_mode = "Manual"
+        metadata = dict(self.controller.capture_metadata())
+        maximum_dn = metadata.get("EffectiveDNMax")
+        target_percent = self.controller.auto_exposure_target_percent
+        metadata.update({
             "captured_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "application": "EL Measurement Equipment Control",
             "application_version": __version__,
@@ -512,14 +569,18 @@ class MainWindowDeviceMixin:
             "gain_percent": gain,
             "capture_mode": capture_mode,
             "AutoExposureMode": auto_exposure_mode,
-            "AutoExposureTarget": (
-                DEFAULT_AUTO_EXPOSURE_TARGET
-                if auto_exposure_mode != "manual"
+            "AutoExposureController": (
+                "SoftwareDN" if auto_exposure_mode != "Manual" else None
+            ),
+            "AutoExposureTargetPercent": (
+                target_percent if auto_exposure_mode != "Manual" else None
+            ),
+            "AutoExposureTargetDN": (
+                target_effective_dn(int(maximum_dn), target_percent)
+                if auto_exposure_mode != "Manual" and maximum_dn is not None
                 else None
             ),
-            "PreviewBrightness8bit": getattr(
-                self, "_preview_brightness_8bit", None
-            ),
+            "MeanEffectiveDN": getattr(self, "_mean_effective_dn", None),
             "auto_converged": auto_converged,
             "selected_recipe": self.selected_recipe.to_dict() if self.selected_recipe else None,
             "smu": self.smu_manager.connection_metadata(
@@ -530,7 +591,7 @@ class MainWindowDeviceMixin:
             "polarity_measurement_settings_snapshot": self.polarity_settings_store.settings.snapshot(),
             "last_manual_polarity_measurement": self.smu_manager.control.last_manual_polarity_snapshot,
             "manual_smu_routing": self.smu_manager.control.manual_routing_snapshot,
-        }
+        })
         metadata.update(self.temperature_monitor.metadata_fields())
         try:
             image_path, sidecar_path = save_image_and_metadata(self.last_image, path, metadata)
