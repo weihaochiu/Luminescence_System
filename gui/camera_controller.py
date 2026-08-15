@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from time import monotonic
 from typing import Any, TypeVar
 
@@ -13,9 +14,18 @@ from PySide6.QtGui import QImage
 
 from .camera_auto_exposure_settings import (
     DEFAULT_AUTO_EXPOSURE_TARGET_PERCENT,
-    effective_percent_to_sdk_ae_target,
+    default_sdk_target_guess,
     target_effective_dn,
     validate_auto_exposure_target_percent,
+)
+from .camera_ae_calibration import (
+    AECalibrationIdentity,
+    AECalibrationPoint,
+    AECalibrationProfile,
+    AECalibrationProfileStore,
+    AECalibrationRun,
+    CALIBRATION_POINT_TIMEOUT_SECONDS,
+    calibration_candidates,
 )
 from .camera_temperature_monitor import CameraTemperatureUnsupportedError
 from .scientific_dn import (
@@ -64,6 +74,9 @@ class CameraController(QObject):
     exposure_status_changed = Signal(object, object, object)
     effective_dn_status_changed = Signal(object)
     auto_exposure_result = Signal(bool, str)
+    ae_calibration_progress = Signal(object)
+    ae_calibration_finished = Signal(bool, str)
+    ae_calibration_profile_changed = Signal(object)
     fps_changed = Signal(float, int)
     status_changed = Signal(str)
     error_occurred = Signal(str)
@@ -73,6 +86,7 @@ class CameraController(QObject):
         self,
         parent: QObject | None = None,
         auto_exposure_target_percent: int = DEFAULT_AUTO_EXPOSURE_TARGET_PERCENT,
+        ae_calibration_store_path: str | Path | None = None,
     ) -> None:
         super().__init__(parent)
         self._camera: Any | None = None
@@ -86,7 +100,7 @@ class CameraController(QObject):
         )
         self._sdk_auto_exposure_mode = SDKAutoExposureMode.MANUAL
         self._sdk_auto_exposure_enable_readback: int | None = None
-        self._sdk_auto_exposure_target = effective_percent_to_sdk_ae_target(
+        self._sdk_auto_exposure_target = default_sdk_target_guess(
             self._auto_exposure_target_percent
         )
         self._sdk_auto_exposure_target_readback: int | None = None
@@ -97,6 +111,12 @@ class CameraController(QObject):
         self._sdk_overexposure_policy_readback: int | None = None
         self._auto_exposure_range: tuple[int, int, int, int] | None = None
         self._last_sdk_ae_calibration_log_monotonic = 0.0
+        self._ae_calibration_store = AECalibrationProfileStore(
+            ae_calibration_store_path
+        )
+        self._ae_calibration_profile: AECalibrationProfile | None = None
+        self._ae_calibration_run: AECalibrationRun | None = None
+        self._ae_calibration_previous_mode = SDKAutoExposureMode.MANUAL
         self._exposure_range: tuple[int, int, int] | None = None
         self._gain_range: tuple[int, int, int] | None = None
         self._latest_mean_effective_dn: float | None = None
@@ -140,6 +160,12 @@ class CameraController(QObject):
         self._camera_status_timer = QTimer(self)
         self._camera_status_timer.setInterval(300)
         self._camera_status_timer.timeout.connect(self._poll_camera_status)
+        self._ae_calibration_timer = QTimer(self)
+        self._ae_calibration_timer.setSingleShot(True)
+        self._ae_calibration_timer.setInterval(
+            round(CALIBRATION_POINT_TIMEOUT_SECONDS * 1000)
+        )
+        self._ae_calibration_timer.timeout.connect(self._on_ae_calibration_timeout)
 
     @property
     def is_open(self) -> bool:
@@ -284,6 +310,7 @@ class CameraController(QObject):
             self._exposure_range = capabilities.get("exposure_range_us")
             self._gain_range = capabilities.get("gain_range")
             self._auto_exposure_range = capabilities.get("auto_exposure_range")
+            self._refresh_ae_calibration_profile()
             self._configure_sdk_auto_exposure_parameters(camera)
             if self._continuous_auto_exposure_requested:
                 self._enable_sdk_auto_exposure(SDKAutoExposureMode.CONTINUOUS)
@@ -311,6 +338,14 @@ class CameraController(QObject):
                 "sdk_auto_exposure_target": self._sdk_auto_exposure_target,
                 "sdk_auto_exposure_target_readback": (
                     self._sdk_auto_exposure_target_readback
+                ),
+                "auto_exposure_calibration_applied": (
+                    self._ae_calibration_profile is not None
+                ),
+                "auto_exposure_calibration_profile_id": (
+                    self._ae_calibration_profile.profile_id
+                    if self._ae_calibration_profile is not None
+                    else None
                 ),
                 "sdk_auto_exposure_policy": (
                     self._sdk_auto_exposure_policy_readback
@@ -393,6 +428,14 @@ class CameraController(QObject):
 
     def close_camera(self) -> None:
         was_open = self._camera is not None
+        calibration_was_running = self._ae_calibration_run is not None
+        self._ae_calibration_timer.stop()
+        if calibration_was_running and self._camera is not None:
+            try:
+                self._disable_sdk_auto_exposure(require_readback=False)
+            except Exception:
+                LOG.exception("Failed to disable SDK AE while closing calibration")
+        self._ae_calibration_run = None
         if was_open:
             # Direct Qt slots stop telemetry and close its CSV before the SDK
             # handle can be destroyed.
@@ -420,6 +463,7 @@ class CameraController(QObject):
         self._sdk_overexposure_policy_readback = None
         self._auto_exposure_range = None
         self._last_sdk_ae_calibration_log_monotonic = 0.0
+        self._ae_calibration_profile = None
         self._exposure_range = None
         self._gain_range = None
         self._latest_mean_effective_dn = None
@@ -457,6 +501,8 @@ class CameraController(QObject):
         if was_open:
             self.camera_closed.emit()
             self.status_changed.emit("相機已中斷連線")
+        if calibration_was_running:
+            self.ae_calibration_finished.emit(False, "相機已中斷，AE Calibration 已取消")
 
     def set_resolution(self, index: int) -> None:
         if self._camera is None or self._device is None:
@@ -472,6 +518,7 @@ class CameraController(QObject):
             resolution = self._device.model.res[index]
             self._width, self._height = resolution.width, resolution.height
             self._start_stream()
+            self._refresh_ae_calibration_profile()
             if previous_mode is not SDKAutoExposureMode.MANUAL:
                 self._configure_sdk_auto_exposure_parameters(self._camera)
                 self._enable_sdk_auto_exposure(previous_mode)
@@ -573,11 +620,369 @@ class CameraController(QObject):
     def auto_exposure_target_percent(self) -> int:
         return self._auto_exposure_target_percent
 
+    @property
+    def sdk_auto_exposure_mode(self) -> SDKAutoExposureMode:
+        return self._sdk_auto_exposure_mode
+
+    @property
+    def ae_calibration_running(self) -> bool:
+        return self._ae_calibration_run is not None
+
+    def _current_ae_calibration_identity(self) -> AECalibrationIdentity | None:
+        if (
+            self._device is None
+            or self._width <= 0
+            or self._height <= 0
+            or self._sensor_bit_depth is None
+            or self._raw_value_alignment not in {"right", "left"}
+        ):
+            return None
+        model = str(getattr(getattr(self._device, "model", None), "name", ""))
+        return AECalibrationIdentity(
+            camera_model=model or str(getattr(self._device, "displayname", "")),
+            camera_serial=self._device_identifier(self._device),
+            width=self._width,
+            height=self._height,
+            sensor_bit_depth=self._sensor_bit_depth,
+            raw_value_alignment=self._raw_value_alignment,
+            sdk_ae_policy=1,
+            sdk_autoexposure_percent=100,
+        )
+
+    def _refresh_ae_calibration_profile(self) -> None:
+        identity = self._current_ae_calibration_identity()
+        self._ae_calibration_profile = self._ae_calibration_store.matching(identity)
+        self._sdk_auto_exposure_target = self._runtime_sdk_target(
+            self._auto_exposure_target_percent
+        )
+        self.ae_calibration_profile_changed.emit(self.ae_calibration_status())
+
+    def _runtime_sdk_target(self, target_percent: int) -> int:
+        if self._ae_calibration_profile is not None:
+            calibrated = self._ae_calibration_profile.calibrated_sdk_target(
+                target_percent
+            )
+            if calibrated is not None:
+                return int(calibrated)
+        return default_sdk_target_guess(target_percent)
+
+    def calibrated_sdk_target(self, target_percent: int) -> tuple[int, bool]:
+        percent = validate_auto_exposure_target_percent(target_percent)
+        target = self._runtime_sdk_target(percent)
+        return target, self._ae_calibration_profile is not None
+
+    def ae_calibration_status(self) -> dict[str, Any]:
+        identity = self._current_ae_calibration_identity()
+        profile = self._ae_calibration_profile
+        ready = bool(identity is not None and self._camera is not None)
+        if self._sensor_bit_depth is None:
+            unavailable_reason = "SensorBitDepth 尚未確認"
+        elif self._raw_value_alignment not in {"right", "left"}:
+            unavailable_reason = "等待 DN alignment 確認完成後才能執行 AE calibration。"
+        elif self._camera is None:
+            unavailable_reason = "請先連線相機"
+        else:
+            unavailable_reason = ""
+        return {
+            "ready": ready,
+            "running": self._ae_calibration_run is not None,
+            "unavailable_reason": unavailable_reason,
+            "calibrated": profile is not None,
+            "camera_model": (
+                identity.camera_model
+                if identity is not None
+                else str(getattr(getattr(self._device, "model", None), "name", ""))
+            ),
+            "camera_serial": (
+                identity.camera_serial
+                if identity is not None
+                else (
+                    self._device_identifier(self._device)
+                    if self._device is not None
+                    else ""
+                )
+            ),
+            "resolution": identity.resolution if identity is not None else (
+                f"{self._width}x{self._height}" if self._width and self._height else ""
+            ),
+            "sensor_bit_depth": self._sensor_bit_depth,
+            "raw_value_alignment": self._raw_value_alignment,
+            "profile_id": profile.profile_id if profile is not None else None,
+            "created_at": profile.created_at if profile is not None else None,
+            "target_mapping": dict(profile.target_mapping) if profile is not None else {},
+            "store_path": (
+                str(self._ae_calibration_store.path)
+                if self._ae_calibration_store.path is not None
+                else None
+            ),
+        }
+
+    def clear_current_ae_calibration(self) -> bool:
+        if self._ae_calibration_run is not None:
+            return False
+        identity = self._current_ae_calibration_identity()
+        if identity is None:
+            return False
+        changed = self._ae_calibration_store.clear(identity)
+        self._refresh_ae_calibration_profile()
+        if changed and self._camera is not None:
+            self._write_sdk_auto_exposure_target(self._camera)
+            self._emit_effective_dn_status()
+        return changed
+
+    def start_ae_calibration(self) -> bool:
+        if self._ae_calibration_run is not None:
+            return False
+        identity = self._current_ae_calibration_identity()
+        if self._camera is None or identity is None:
+            self.ae_calibration_finished.emit(
+                False, self.ae_calibration_status()["unavailable_reason"]
+            )
+            return False
+        self._ae_calibration_previous_mode = self._sdk_auto_exposure_mode
+        self._ae_calibration_run = AECalibrationRun(
+            identity=identity,
+            candidates=calibration_candidates(
+                nncam.NNCAM_AETARGET_MIN, nncam.NNCAM_AETARGET_MAX
+            ),
+            sdk_minimum=nncam.NNCAM_AETARGET_MIN,
+            sdk_maximum=nncam.NNCAM_AETARGET_MAX,
+        )
+        try:
+            self._disable_sdk_auto_exposure(require_readback=True)
+            self._configure_sdk_auto_exposure_parameters(self._camera)
+            if self._sdk_auto_exposure_policy_readback != 1:
+                raise RuntimeError(
+                    "NNCAM_OPTION_AUTOEXP_POLICY must read back Exposure Preferred (1)"
+                )
+            if self._sdk_auto_exposure_percent_readback != 100:
+                raise RuntimeError(
+                    "NNCAM_OPTION_AUTOEXPOSURE_PERCENT must read back full-frame average (100)"
+                )
+            self._start_next_ae_calibration_point()
+            return True
+        except Exception as exc:
+            self._abort_ae_calibration(
+                self._format_error("無法啟動 AE Calibration", exc)
+            )
+            return False
+
+    def cancel_ae_calibration(self) -> None:
+        if self._ae_calibration_run is None:
+            return
+        self._abort_ae_calibration("AE Calibration 已由使用者取消")
+
+    def _start_next_ae_calibration_point(self) -> None:
+        run = self._ae_calibration_run
+        if run is None or self._camera is None:
+            return
+        candidate = run.next_candidate()
+        if candidate is None:
+            self._finish_ae_calibration()
+            return
+        self._disable_sdk_auto_exposure(require_readback=True)
+        readback = self._write_sdk_auto_exposure_target_value(
+            self._camera, candidate
+        )
+        run.start_point(readback)
+        self._enable_sdk_auto_exposure(SDKAutoExposureMode.ONCE)
+        self._ae_calibration_timer.start()
+        self._emit_ae_calibration_progress("等待 SDK AE 收斂…")
+
+    def _emit_ae_calibration_progress(self, state: str) -> None:
+        run = self._ae_calibration_run
+        if run is None:
+            return
+        current = (
+            self._read_current_exposure(self._camera)
+            if self._camera is not None
+            else None
+        )
+        self.ae_calibration_progress.emit({
+            "point": run.index + 1,
+            "total": len(run.candidates),
+            "sdk_target": run.current_target,
+            "sdk_target_readback": run.current_readback,
+            "state": state,
+            "exposure_us": current[0] if current is not None else None,
+            "gain_percent": current[1] if current is not None else None,
+            "mean_effective_dn": self._latest_mean_effective_dn,
+            "effective_dn_max": self._effective_dn_max,
+            "mean_effective_dn_percent": (
+                self._latest_effective_dn_fraction * 100.0
+                if self._latest_effective_dn_fraction is not None
+                else None
+            ),
+            "estimated_remaining_seconds": run.estimated_remaining_seconds(),
+        })
+
+    def _mark_ae_calibration_converged(self, source: str) -> None:
+        run = self._ae_calibration_run
+        if run is None or run.state != "waiting_convergence":
+            return
+        self._ae_calibration_timer.stop()
+        try:
+            self._disable_sdk_auto_exposure(require_readback=True)
+            run.mark_converged(self._frame_sequence, source)
+            self._ae_calibration_timer.start()
+            self._emit_ae_calibration_progress("已收斂，等待 fresh scientific frame…")
+        except Exception as exc:
+            self._abort_ae_calibration(
+                self._format_error("AE Calibration 收斂後關閉 AE 失敗", exc)
+            )
+
+    @Slot()
+    def _on_ae_calibration_timeout(self) -> None:
+        run = self._ae_calibration_run
+        if run is None or self._camera is None:
+            return
+        try:
+            self._disable_sdk_auto_exposure(require_readback=True)
+        except Exception as exc:
+            self._abort_ae_calibration(
+                self._format_error("AE Calibration timeout 後無法關閉 AE", exc)
+            )
+            return
+        current = self._read_current_exposure(self._camera)
+        point = run.record_point(
+            mean_effective_dn=self._latest_mean_effective_dn,
+            mean_effective_dn_percent=(
+                self._latest_effective_dn_fraction * 100.0
+                if self._latest_effective_dn_fraction is not None
+                else None
+            ),
+            exposure_us=current[0] if current is not None else None,
+            gain_percent=current[1] if current is not None else None,
+            converged=False,
+            convergence_source="Timeout",
+        )
+        self._log_ae_calibration_point(point)
+        self._emit_ae_calibration_progress("此點 15 秒 timeout，繼續下一點")
+        QTimer.singleShot(0, self._start_next_ae_calibration_point)
+
+    def _record_ae_calibration_fresh_frame(self) -> None:
+        run = self._ae_calibration_run
+        if run is None or self._camera is None:
+            return
+        self._ae_calibration_timer.stop()
+        current = self._read_current_exposure(self._camera)
+        point = run.record_point(
+            mean_effective_dn=self._latest_mean_effective_dn,
+            mean_effective_dn_percent=(
+                self._latest_effective_dn_fraction * 100.0
+                if self._latest_effective_dn_fraction is not None
+                else None
+            ),
+            exposure_us=current[0] if current is not None else None,
+            gain_percent=current[1] if current is not None else None,
+            converged=True,
+        )
+        self._log_ae_calibration_point(point)
+        self._emit_ae_calibration_progress("已記錄 calibration point")
+        QTimer.singleShot(0, self._start_next_ae_calibration_point)
+
+    def _log_ae_calibration_point(self, point: AECalibrationPoint) -> None:
+        identity = (
+            self._ae_calibration_run.identity
+            if self._ae_calibration_run is not None
+            else self._current_ae_calibration_identity()
+        )
+        LOG.info(
+            "SDK_AE_CAL_POINT timestamp=%s camera_serial=%s resolution=%s "
+            "sdk_target=%s target_readback=%s converged=%s exposure_us=%s "
+            "gain_percent=%s mean_dn=%s dn_max=%s dn_percent=%s saturated=%s "
+            "low_signal=%s convergence_source=%s",
+            datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            identity.camera_serial if identity is not None else "",
+            identity.resolution if identity is not None else "",
+            point.sdk_target,
+            point.sdk_target_readback,
+            point.converged,
+            point.exposure_us,
+            point.gain_percent,
+            point.mean_effective_dn,
+            self._effective_dn_max,
+            point.mean_effective_dn_percent,
+            point.saturated,
+            point.low_signal,
+            point.convergence_source,
+        )
+
+    def _finish_ae_calibration(self) -> None:
+        run = self._ae_calibration_run
+        if run is None:
+            return
+        profile = run.build_profile()
+        if not profile.valid:
+            self._abort_ae_calibration(profile.invalid_reason)
+            return
+        previous_profile = self._ae_calibration_profile
+        self._ae_calibration_timer.stop()
+        self._ae_calibration_run = None
+        self._ae_calibration_profile = profile
+        try:
+            self._restore_ae_after_calibration()
+            self._ae_calibration_store.replace(profile)
+            mappings = " ".join(
+                f"{percent}% -> target {target}"
+                for percent, target in sorted(profile.target_mapping.items())
+            )
+            LOG.info(
+                "SDK_AE_CAL_RESULT timestamp=%s camera_serial=%s resolution=%s "
+                "profile_id=%s %s",
+                datetime.now().astimezone().isoformat(timespec="milliseconds"),
+                profile.camera_serial,
+                profile.resolution,
+                profile.profile_id,
+                mappings,
+            )
+        except Exception as exc:
+            self._ae_calibration_profile = previous_profile
+            try:
+                self._restore_ae_after_calibration()
+            except Exception:
+                LOG.exception("Failed to restore prior AE profile after calibration failure")
+            self._emit_effective_dn_status()
+            self.ae_calibration_finished.emit(
+                False,
+                self._format_error("AE Calibration 完成處理失敗；舊 profile 已保留", exc),
+            )
+            return
+        self.ae_calibration_profile_changed.emit(self.ae_calibration_status())
+        self._emit_effective_dn_status()
+        self.ae_calibration_finished.emit(True, "AE Calibration 已完成並套用")
+
+    def _abort_ae_calibration(self, message: str) -> None:
+        self._ae_calibration_timer.stop()
+        self._ae_calibration_run = None
+        try:
+            self._refresh_ae_calibration_profile()
+            self._continuous_auto_exposure_requested = False
+            self._disable_sdk_auto_exposure(require_readback=True)
+            if self._camera is not None:
+                self._write_sdk_auto_exposure_target(self._camera)
+        except Exception:
+            LOG.exception("Failed to leave SDK AE off after calibration abort")
+        self._emit_effective_dn_status()
+        self.ae_calibration_finished.emit(False, message)
+
+    def _restore_ae_after_calibration(self) -> None:
+        if self._camera is None:
+            return
+        self._write_sdk_auto_exposure_target(self._camera)
+        if self._ae_calibration_previous_mode is SDKAutoExposureMode.CONTINUOUS:
+            self._continuous_auto_exposure_requested = True
+            self._configure_sdk_auto_exposure_parameters(self._camera)
+            self._enable_sdk_auto_exposure(SDKAutoExposureMode.CONTINUOUS)
+        else:
+            self._continuous_auto_exposure_requested = False
+            self._disable_sdk_auto_exposure(require_readback=True)
+
     def set_auto_exposure_target_percent(self, target_percent: int) -> None:
         self._auto_exposure_target_percent = validate_auto_exposure_target_percent(
             target_percent
         )
-        self._sdk_auto_exposure_target = effective_percent_to_sdk_ae_target(
+        self._sdk_auto_exposure_target = self._runtime_sdk_target(
             self._auto_exposure_target_percent
         )
         if (
@@ -645,8 +1050,15 @@ class CameraController(QObject):
             )
 
     def _write_sdk_auto_exposure_target(self, camera: Any) -> None:
-        requested = effective_percent_to_sdk_ae_target(
-            self._auto_exposure_target_percent
+        requested = self._runtime_sdk_target(self._auto_exposure_target_percent)
+        self._write_sdk_auto_exposure_target_value(camera, requested)
+
+    def _write_sdk_auto_exposure_target_value(
+        self, camera: Any, requested: int
+    ) -> int:
+        requested = min(
+            max(int(requested), nncam.NNCAM_AETARGET_MIN),
+            nncam.NNCAM_AETARGET_MAX,
         )
         camera.put_AutoExpoTarget(requested)
         readback = int(camera.get_AutoExpoTarget())
@@ -660,6 +1072,7 @@ class CameraController(QObject):
             )
         else:
             LOG.info("SDK AutoExpoTarget requested/readback=%s/%s", requested, readback)
+        return readback
 
     def _enable_sdk_auto_exposure(self, mode: SDKAutoExposureMode) -> None:
         if self._camera is None:
@@ -720,6 +1133,7 @@ class CameraController(QObject):
             "SDK_AE_CALIBRATION timestamp=%s reason=%s UserTargetPercent=%s%% "
             "EffectiveDNTarget=%s/%s SDKAutoExposureTarget=%s "
             "SDKAutoExposureTargetReadback=%s SDKAutoExposureMode=%s "
+            "AutoExposureCalibrationApplied=%s CalibrationProfileId=%s "
             "ExposureReadbackUs=%s GainReadback=%s MeanEffectiveDN=%s "
             "MeanEffectiveDNPercent=%s Alignment=%s",
             datetime.now().astimezone().isoformat(timespec="milliseconds"),
@@ -730,6 +1144,12 @@ class CameraController(QObject):
             self._sdk_auto_exposure_target,
             self._sdk_auto_exposure_target_readback,
             self._sdk_auto_exposure_mode.value,
+            self._ae_calibration_profile is not None,
+            (
+                self._ae_calibration_profile.profile_id
+                if self._ae_calibration_profile is not None
+                else None
+            ),
             current[0] if current is not None else None,
             current[1] if current is not None else None,
             self._latest_mean_effective_dn,
@@ -853,6 +1273,22 @@ class CameraController(QObject):
             ),
             "SDKAutoExposureTargetReadback": (
                 self._sdk_auto_exposure_target_readback
+            ),
+            "AutoExposureCalibrationApplied": self._ae_calibration_profile is not None,
+            "AutoExposureCalibrationProfileId": (
+                self._ae_calibration_profile.profile_id
+                if self._ae_calibration_profile is not None
+                else None
+            ),
+            "AutoExposureCalibrationDate": (
+                self._ae_calibration_profile.created_at
+                if self._ae_calibration_profile is not None
+                else None
+            ),
+            "AutoExposureCalibrationResolution": (
+                self._ae_calibration_profile.resolution
+                if self._ae_calibration_profile is not None
+                else None
             ),
             "SDKAutoExposurePolicy": self._sdk_auto_exposure_policy_readback,
             "SDKAutoExposurePercent": self._sdk_auto_exposure_percent_readback,
@@ -1342,7 +1778,9 @@ class CameraController(QObject):
         elif event_code == nncam.NNCAM_EVENT_EXPOSURE:
             self._emit_exposure()
         elif event_code == nncam.NNCAM_EVENT_AUTOEXPO_CONV:
-            if self._sdk_auto_exposure_mode is SDKAutoExposureMode.ONCE:
+            if self._ae_calibration_run is not None:
+                self._mark_ae_calibration_converged("NNCAM_EVENT_AUTOEXPO_CONV")
+            elif self._sdk_auto_exposure_mode is SDKAutoExposureMode.ONCE:
                 try:
                     self._disable_sdk_auto_exposure(require_readback=True)
                     current = self._read_current_exposure(self._camera)
@@ -1361,7 +1799,31 @@ class CameraController(QObject):
             else:
                 self._log_sdk_ae_calibration("ContinuousConverged")
         elif event_code == nncam.NNCAM_EVENT_AUTOEXPO_CONVFAIL:
-            if self._sdk_auto_exposure_mode is SDKAutoExposureMode.ONCE:
+            if self._ae_calibration_run is not None:
+                self._ae_calibration_timer.stop()
+                try:
+                    self._disable_sdk_auto_exposure(require_readback=True)
+                    run = self._ae_calibration_run
+                    current = self._read_current_exposure(self._camera)
+                    point = run.record_point(
+                        mean_effective_dn=self._latest_mean_effective_dn,
+                        mean_effective_dn_percent=(
+                            self._latest_effective_dn_fraction * 100.0
+                            if self._latest_effective_dn_fraction is not None
+                            else None
+                        ),
+                        exposure_us=current[0] if current is not None else None,
+                        gain_percent=current[1] if current is not None else None,
+                        converged=False,
+                        convergence_source="NNCAM_EVENT_AUTOEXPO_CONVFAIL",
+                    )
+                    self._log_ae_calibration_point(point)
+                    QTimer.singleShot(0, self._start_next_ae_calibration_point)
+                except Exception as exc:
+                    self._abort_ae_calibration(
+                        self._format_error("AE Calibration convergence failure", exc)
+                    )
+            elif self._sdk_auto_exposure_mode is SDKAutoExposureMode.ONCE:
                 try:
                     self._disable_sdk_auto_exposure(require_readback=True)
                 except Exception:
@@ -1407,6 +1869,13 @@ class CameraController(QObject):
             self._raw_value_alignment = verifier.alignment
             self._raw_value_alignment_source = verifier.source
             self._effective_dn_max = effective_dn_max(self._sensor_bit_depth)
+            self._refresh_ae_calibration_profile()
+            if (
+                self._camera is not None
+                and self._sdk_auto_exposure_mode is not SDKAutoExposureMode.MANUAL
+                and self._ae_calibration_run is None
+            ):
+                self._write_sdk_auto_exposure_target(self._camera)
             LOG.info(
                 "DN alignment runtime verified: alignment=%s source=%s",
                 self._raw_value_alignment,
@@ -1545,6 +2014,30 @@ class CameraController(QObject):
                     0,
                     255,
                 ).astype(np.uint8)
+            calibration_run = self._ae_calibration_run
+            calibration_state = (
+                calibration_run.state if calibration_run is not None else ""
+            )
+            if (
+                calibration_run is not None
+                and calibration_state == "waiting_convergence"
+                and self._latest_effective_dn_fraction is not None
+            ):
+                current = self._read_current_exposure(self._camera)
+                if current is not None and calibration_run.observe_stability(
+                    current[0],
+                    current[1],
+                    self._latest_effective_dn_fraction * 100.0,
+                ):
+                    self._mark_ae_calibration_converged("StableFrameFallback")
+                else:
+                    self._emit_ae_calibration_progress("等待 SDK AE 收斂…")
+            elif (
+                calibration_run is not None
+                and calibration_state == "waiting_fresh_frame"
+                and self._frame_sequence + 1 > calibration_run.fresh_after_sequence
+            ):
+                self._record_ae_calibration_fresh_frame()
             self._log_sdk_ae_calibration("ScientificFrame")
             image = QImage(
                 display.data,
@@ -1605,6 +2098,22 @@ class CameraController(QObject):
             "SDKAutoExposureTarget": self._sdk_auto_exposure_target,
             "SDKAutoExposureTargetReadback": (
                 self._sdk_auto_exposure_target_readback
+            ),
+            "AutoExposureCalibrationApplied": self._ae_calibration_profile is not None,
+            "AutoExposureCalibrationProfileId": (
+                self._ae_calibration_profile.profile_id
+                if self._ae_calibration_profile is not None
+                else None
+            ),
+            "AutoExposureCalibrationDate": (
+                self._ae_calibration_profile.created_at
+                if self._ae_calibration_profile is not None
+                else None
+            ),
+            "AutoExposureCalibrationResolution": (
+                self._ae_calibration_profile.resolution
+                if self._ae_calibration_profile is not None
+                else None
             ),
             "AutoExposureController": "RisingCamSDK",
             "AutoExposureMode": self._sdk_auto_exposure_mode.value,

@@ -8,7 +8,7 @@ from gui.camera_auto_exposure_settings import (
     AUTO_EXPOSURE_TARGET_PERCENT_KEY,
     AUTO_EXPOSURE_TARGET_PERCENT_OPTIONS,
     DEFAULT_AUTO_EXPOSURE_TARGET_PERCENT,
-    effective_percent_to_sdk_ae_target,
+    default_sdk_target_guess,
     load_auto_exposure_target_percent,
     save_auto_exposure_target_percent,
     target_effective_dn,
@@ -165,11 +165,11 @@ class CameraExposureTests(unittest.TestCase):
             with self.subTest(maximum=maximum, percent=percent):
                 self.assertEqual(expected, target_effective_dn(maximum, percent))
 
-    def test_operator_percent_maps_to_deterministic_sdk_targets(self) -> None:
+    def test_uncalibrated_initial_guess_is_deterministic_and_clamped(self) -> None:
         expected = {20: 51, 30: 77, 40: 102, 50: 128, 60: 153, 70: 179, 80: 204}
         for percent, target in expected.items():
             with self.subTest(percent=percent):
-                self.assertEqual(target, effective_percent_to_sdk_ae_target(percent))
+                self.assertEqual(target, default_sdk_target_guess(percent))
                 self.assertGreaterEqual(target, nncam.NNCAM_AETARGET_MIN)
                 self.assertLessEqual(target, nncam.NNCAM_AETARGET_MAX)
 
@@ -368,6 +368,10 @@ class CameraExposureTests(unittest.TestCase):
         self.assertEqual(40, metadata["AutoExposureMinExposure"])
         self.assertEqual(400_000, metadata["AutoExposureMaxExposure"])
         self.assertEqual(1875.3, metadata["MeanEffectiveDN"])
+        self.assertFalse(metadata["AutoExposureCalibrationApplied"])
+        self.assertIsNone(metadata["AutoExposureCalibrationProfileId"])
+        self.assertIsNone(metadata["AutoExposureCalibrationDate"])
+        self.assertIsNone(metadata["AutoExposureCalibrationResolution"])
         self.assertTrue(metadata["SDKAutoExposureEnabled"])
         self.assertNotIn("AutoExposureTarget", metadata)
 

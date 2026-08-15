@@ -45,14 +45,17 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.setMinimumSize(800, 600)
 
         self.settings = QSettings()
+        app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+        application_directory = Path(app_data) if app_data else Path.cwd()
         self.controller = CameraController(
             self,
             auto_exposure_target_percent=load_auto_exposure_target_percent(
                 self.settings
             ),
+            ae_calibration_store_path=(
+                application_directory / "camera_ae_calibration.json"
+            ),
         )
-        app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
-        application_directory = Path(app_data) if app_data else Path.cwd()
         self.temperature_monitor = CameraTemperatureMonitor(
             self.controller.read_temperature_c,
             lambda: self.controller.is_open,
@@ -179,7 +182,12 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             )
 
     def open_camera_auto_exposure_settings(self) -> None:
-        dialog = CameraAutoExposureSettingsDialog(self.settings, self)
+        dialog = CameraAutoExposureSettingsDialog(
+            self.settings,
+            self,
+            controller=self.controller,
+            measurement_running=lambda: self._measurement_worker is not None,
+        )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.controller.set_auto_exposure_target_percent(
                 dialog.target_percent

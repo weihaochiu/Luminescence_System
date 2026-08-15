@@ -47,8 +47,8 @@ def target_effective_dn(maximum_dn: int, target_percent: int) -> int:
     return round(maximum * (percent / 100.0))
 
 
-def effective_percent_to_sdk_ae_target(target_percent: int) -> int:
-    """Map an operator percent to the SDK 0–255 AE target deterministically."""
+def default_sdk_target_guess(target_percent: int) -> int:
+    """Return the legacy uncalibrated SDK target guess used only as fallback."""
 
     percent = validate_auto_exposure_target_percent(target_percent)
     # Integer half-up rounding avoids platform or language tie-breaking

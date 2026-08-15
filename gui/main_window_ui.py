@@ -528,6 +528,9 @@ class MainWindowUIMixin:
             self.on_effective_dn_status_changed
         )
         self.controller.auto_exposure_result.connect(self.on_auto_exposure_result)
+        self.controller.ae_calibration_finished.connect(
+            self.on_ae_calibration_finished
+        )
         self.controller.fps_changed.connect(
             lambda fps, total: self.fps_status.setText(f"FPS {fps:.1f}｜幀 {total}")
         )

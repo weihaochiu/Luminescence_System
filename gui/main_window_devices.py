@@ -452,6 +452,8 @@ class MainWindowDeviceMixin:
         self.auto_exposure_target_percent_value.setText(f"{target_percent} %")
         if target_dn is not None and maximum is not None:
             target_text = f"{int(target_dn)} /{int(maximum)}"
+            if not bool(status.get("AutoExposureCalibrationApplied")):
+                target_text += "（參考）"
         elif alignment_source == "RuntimeVerificationPending":
             target_text = "等待 DN alignment"
         elif alignment_source == "InsufficientSignal":
@@ -460,10 +462,16 @@ class MainWindowDeviceMixin:
             target_text = "無法判定"
         self.auto_exposure_target_dn_value.setText(target_text)
         sdk_target = status.get("SDKAutoExposureTargetReadback")
+        calibration_applied = bool(status.get("AutoExposureCalibrationApplied"))
+        if calibration_applied:
+            calibration_text = f"Calibrated SDK Target = {sdk_target}"
+        else:
+            calibration_text = (
+                f"目前使用未校正 SDK Target guess = {sdk_target}。\n"
+                "尚未進行 SDK AE ↔ Effective DN 校正"
+            )
         self.auto_exposure_target_dn_value.setToolTip(
-            f"AE 控制器：RisingCam SDK\nSDK AE Target = {sdk_target}"
-            if sdk_target is not None
-            else "AE 控制器：RisingCam SDK"
+            f"AE 控制器：RisingCam SDK\n{calibration_text}"
         )
 
     def on_frame_ready(self, image: QImage) -> None:
@@ -531,6 +539,16 @@ class MainWindowDeviceMixin:
             self._set_exposure_mode_ui(ExposureMode.MANUAL)
             self._cancel_auto_capture()
             QMessageBox.warning(self, "自動曝光失敗", message)
+
+    def on_ae_calibration_finished(self, _success: bool, _message: str) -> None:
+        mode = (
+            ExposureMode.CONTINUOUS_AUTO
+            if self.controller.sdk_auto_exposure_mode.value == "Continuous"
+            else ExposureMode.MANUAL
+        )
+        self._active_exposure_mode = mode
+        self._set_exposure_mode_ui(mode)
+        self._update_exposure_control_state()
 
     def _on_auto_capture_timeout(self) -> None:
         if self._pending_auto_path is None:
