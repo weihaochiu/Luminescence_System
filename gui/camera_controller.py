@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import datetime
+from enum import Enum
+from time import monotonic
 from typing import Any, TypeVar
 
 import numpy as np
@@ -10,7 +13,9 @@ from PySide6.QtGui import QImage
 
 from .camera_auto_exposure_settings import (
     DEFAULT_AUTO_EXPOSURE_TARGET_PERCENT,
+    effective_percent_to_sdk_ae_target,
     target_effective_dn,
+    validate_auto_exposure_target_percent,
 )
 from .camera_temperature_monitor import CameraTemperatureUnsupportedError
 from .scientific_dn import (
@@ -24,10 +29,6 @@ from .scientific_dn_alignment import (
     AlignmentVerifier,
 )
 from .sdk import nncam
-from .software_auto_exposure import (
-    SoftwareAutoExposure,
-    SoftwareAutoExposureMode,
-)
 
 
 LOG = logging.getLogger(__name__)
@@ -42,6 +43,12 @@ class CameraStartupError(RuntimeError):
         self.stage = stage
         self.original = original
         self.hr = getattr(original, "hr", None)
+
+
+class SDKAutoExposureMode(str, Enum):
+    MANUAL = "Manual"
+    CONTINUOUS = "Continuous"
+    ONCE = "Once"
 
 
 class CameraController(QObject):
@@ -74,9 +81,22 @@ class CameraController(QObject):
         self._width = 0
         self._height = 0
         self._pitch = 0
-        self._software_auto_exposure = SoftwareAutoExposure(
+        self._auto_exposure_target_percent = validate_auto_exposure_target_percent(
             auto_exposure_target_percent
         )
+        self._sdk_auto_exposure_mode = SDKAutoExposureMode.MANUAL
+        self._sdk_auto_exposure_enable_readback: int | None = None
+        self._sdk_auto_exposure_target = effective_percent_to_sdk_ae_target(
+            self._auto_exposure_target_percent
+        )
+        self._sdk_auto_exposure_target_readback: int | None = None
+        self._sdk_auto_exposure_policy_readback: int | None = None
+        self._sdk_auto_exposure_percent_readback: int | None = None
+        self._sdk_auto_exposure_exposure_damping_readback: int | None = None
+        self._sdk_auto_exposure_gain_damping_readback: int | None = None
+        self._sdk_overexposure_policy_readback: int | None = None
+        self._auto_exposure_range: tuple[int, int, int, int] | None = None
+        self._last_sdk_ae_calibration_log_monotonic = 0.0
         self._exposure_range: tuple[int, int, int] | None = None
         self._gain_range: tuple[int, int, int] | None = None
         self._latest_mean_effective_dn: float | None = None
@@ -263,23 +283,12 @@ class CameraController(QObject):
             capabilities = self._query_camera_capabilities(camera)
             self._exposure_range = capabilities.get("exposure_range_us")
             self._gain_range = capabilities.get("gain_range")
-            # Software DN AE is the only automatic controller. RisingCam SDK AE
-            # remains OFF so the two control loops cannot fight each other.
-            camera.put_AutoExpoEnable(0)
-            if (
-                self._continuous_auto_exposure_requested
-                and self._dn_auto_exposure_available()
-            ):
-                self._software_auto_exposure.start_continuous()
+            self._auto_exposure_range = capabilities.get("auto_exposure_range")
+            self._configure_sdk_auto_exposure_parameters(camera)
+            if self._continuous_auto_exposure_requested:
+                self._enable_sdk_auto_exposure(SDKAutoExposureMode.CONTINUOUS)
             else:
-                self._software_auto_exposure.stop()
-                LOG.warning(
-                    "DN-based auto exposure unavailable: SensorBitDepth=%s, "
-                    "RawValueAlignment=%s, PixelFormat=%s",
-                    self._sensor_bit_depth,
-                    self._raw_value_alignment,
-                    self._pixel_format_name,
-                )
+                self._disable_sdk_auto_exposure(require_readback=True)
             self._start_stream()
 
             current = self._read_current_exposure(camera)
@@ -293,16 +302,30 @@ class CameraController(QObject):
                 **capabilities,
                 "exposure_us": current[0] if current is not None else None,
                 "gain": current[1] if current is not None else None,
-                "auto_exposure_mode": self._software_auto_exposure.mode.value,
+                "auto_exposure_mode": self._sdk_auto_exposure_mode.value,
                 "continuous_auto_exposure_requested": (
                     self._continuous_auto_exposure_requested
                 ),
-                "auto_exposure_target_percent": (
-                    self._software_auto_exposure.target_percent
+                "auto_exposure_target_percent": self._auto_exposure_target_percent,
+                "sdk_auto_exposure_available": True,
+                "sdk_auto_exposure_target": self._sdk_auto_exposure_target,
+                "sdk_auto_exposure_target_readback": (
+                    self._sdk_auto_exposure_target_readback
                 ),
-                "dn_auto_exposure_available": self._dn_auto_exposure_available(),
-                "dn_auto_exposure_unavailable_reason": (
-                    self._dn_auto_exposure_unavailable_reason()
+                "sdk_auto_exposure_policy": (
+                    self._sdk_auto_exposure_policy_readback
+                ),
+                "sdk_auto_exposure_percent": (
+                    self._sdk_auto_exposure_percent_readback
+                ),
+                "sdk_auto_exposure_exposure_damping": (
+                    self._sdk_auto_exposure_exposure_damping_readback
+                ),
+                "sdk_auto_exposure_gain_damping": (
+                    self._sdk_auto_exposure_gain_damping_readback
+                ),
+                "sdk_overexposure_policy": (
+                    self._sdk_overexposure_policy_readback
                 ),
                 "mono": self._camera_is_mono,
                 "temperature_supported": bool(
@@ -387,7 +410,16 @@ class CameraController(QObject):
         self._width = 0
         self._height = 0
         self._pitch = 0
-        self._software_auto_exposure.stop()
+        self._sdk_auto_exposure_mode = SDKAutoExposureMode.MANUAL
+        self._sdk_auto_exposure_enable_readback = None
+        self._sdk_auto_exposure_target_readback = None
+        self._sdk_auto_exposure_policy_readback = None
+        self._sdk_auto_exposure_percent_readback = None
+        self._sdk_auto_exposure_exposure_damping_readback = None
+        self._sdk_auto_exposure_gain_damping_readback = None
+        self._sdk_overexposure_policy_readback = None
+        self._auto_exposure_range = None
+        self._last_sdk_ae_calibration_log_monotonic = 0.0
         self._exposure_range = None
         self._gain_range = None
         self._latest_mean_effective_dn = None
@@ -433,18 +465,16 @@ class CameraController(QObject):
             return
 
         try:
-            previous_mode = self._software_auto_exposure.mode
-            self._software_auto_exposure.stop()
-            self._camera.put_AutoExpoEnable(0)
+            previous_mode = self._sdk_auto_exposure_mode
+            self._disable_sdk_auto_exposure(require_readback=True)
             self._camera.Stop()
             self._camera.put_eSize(index)
             resolution = self._device.model.res[index]
             self._width, self._height = resolution.width, resolution.height
             self._start_stream()
-            if previous_mode is SoftwareAutoExposureMode.CONTINUOUS_DN:
-                self._software_auto_exposure.start_continuous()
-            elif previous_mode is SoftwareAutoExposureMode.AUTO_ONCE_DN:
-                self._software_auto_exposure.start_once()
+            if previous_mode is not SDKAutoExposureMode.MANUAL:
+                self._configure_sdk_auto_exposure_parameters(self._camera)
+                self._enable_sdk_auto_exposure(previous_mode)
             self.status_changed.emit(f"解析度：{self._width} × {self._height}")
         except Exception as exc:
             self.error_occurred.emit(self._format_error("切換解析度失敗", exc))
@@ -454,8 +484,7 @@ class CameraController(QObject):
             return
         try:
             self._continuous_auto_exposure_requested = False
-            self._software_auto_exposure.stop()
-            self._camera.put_AutoExpoEnable(0)
+            self._disable_sdk_auto_exposure(require_readback=True)
             self._camera.put_ExpoTime(int(exposure_us))
             self._camera.put_ExpoAGain(int(gain))
             self._emit_exposure()
@@ -468,11 +497,10 @@ class CameraController(QObject):
 
         if self._camera is None:
             return False
-        previous_mode = self._software_auto_exposure.mode
+        previous_mode = self._sdk_auto_exposure_mode
         try:
             self._continuous_auto_exposure_requested = False
-            self._software_auto_exposure.stop()
-            self._camera.put_AutoExpoEnable(0)
+            self._disable_sdk_auto_exposure(require_readback=True)
             current = self._read_current_exposure(self._camera)
             if current is None:
                 raise RuntimeError("SDK 無法讀回目前 Exposure/Gain")
@@ -480,41 +508,26 @@ class CameraController(QObject):
             self.status_changed.emit("已切換為手動曝光並保留目前 Exposure/Gain")
             return True
         except Exception as exc:
-            if previous_mode is SoftwareAutoExposureMode.CONTINUOUS_DN:
-                self._software_auto_exposure.start_continuous()
-            elif previous_mode is SoftwareAutoExposureMode.AUTO_ONCE_DN:
-                self._software_auto_exposure.start_once()
+            if previous_mode is not SDKAutoExposureMode.MANUAL:
+                try:
+                    self._configure_sdk_auto_exposure_parameters(self._camera)
+                    self._enable_sdk_auto_exposure(previous_mode)
+                except Exception:
+                    LOG.exception("Failed to restore SDK AE after manual switch failure")
             self.error_occurred.emit(self._format_error("切換手動曝光失敗", exc))
             return False
 
     def enable_continuous_auto_exposure(self) -> bool:
-        """Enable whole-frame Effective-DN software AE with SDK AE kept OFF."""
+        """Enable native RisingCam continuous AE, independent of DN alignment."""
 
         if self._camera is None:
             return False
         self._continuous_auto_exposure_requested = True
-        if (
-            self._alignment_verifier is not None
-            and not self._alignment_verifier.is_final
-        ):
-            try:
-                self._camera.put_AutoExpoEnable(0)
-                self._software_auto_exposure.stop()
-                self.status_changed.emit("等待 DN alignment；正在收集 scientific frames…")
-                self._emit_effective_dn_status()
-                return True
-            except Exception as exc:
-                self.error_occurred.emit(
-                    self._format_error("等待 DN alignment 時停用 SDK AE 失敗", exc)
-                )
-                return False
-        if not self._dn_auto_exposure_available():
-            self.error_occurred.emit(self._dn_auto_exposure_unavailable_reason())
-            return False
         try:
-            self._camera.put_AutoExpoEnable(0)
-            self._software_auto_exposure.start_continuous()
-            self.status_changed.emit("持續 DN 自動曝光已開啟")
+            self._configure_sdk_auto_exposure_parameters(self._camera)
+            self._enable_sdk_auto_exposure(SDKAutoExposureMode.CONTINUOUS)
+            self.status_changed.emit("RisingCam SDK 持續自動曝光已開啟")
+            self._emit_effective_dn_status()
             return True
         except Exception as exc:
             self.error_occurred.emit(self._format_error("切換持續自動曝光失敗", exc))
@@ -523,16 +536,11 @@ class CameraController(QObject):
     def start_auto_exposure_once(self) -> None:
         if self._camera is None:
             return
-        if not self._dn_auto_exposure_available():
-            self.auto_exposure_result.emit(
-                False,
-                self._dn_auto_exposure_unavailable_reason(),
-            )
-            return
         try:
-            self._camera.put_AutoExpoEnable(0)
-            self._software_auto_exposure.start_once()
-            self.status_changed.emit("正在等待 DN 自動曝光收斂…")
+            self._continuous_auto_exposure_requested = False
+            self._configure_sdk_auto_exposure_parameters(self._camera)
+            self._enable_sdk_auto_exposure(SDKAutoExposureMode.ONCE)
+            self.status_changed.emit("正在等待 RisingCam SDK 自動曝光收斂…")
         except Exception as exc:
             self.auto_exposure_result.emit(False, self._format_error("無法啟動單次自動曝光", exc))
 
@@ -541,34 +549,197 @@ class CameraController(QObject):
             return
         try:
             self._continuous_auto_exposure_requested = False
-            self._software_auto_exposure.stop()
-            self._camera.put_AutoExpoEnable(0)
+            self._disable_sdk_auto_exposure(require_readback=True)
             self._emit_exposure()
         except Exception as exc:
             self.error_occurred.emit(self._format_error("鎖定曝光失敗", exc))
 
-    def stop_software_auto_exposure(self) -> bool:
-        """Stop software and SDK AE before formal or manual camera control."""
+    def disable_auto_exposure_for_formal_measurement(self) -> bool:
+        """Disable SDK AE and verify OFF before Recipe owns Exposure/Gain."""
 
-        self._software_auto_exposure.stop()
+        self._continuous_auto_exposure_requested = False
         if self._camera is None:
             return True
         try:
-            self._camera.put_AutoExpoEnable(0)
+            self._disable_sdk_auto_exposure(require_readback=True)
             return True
         except Exception as exc:
             self.error_occurred.emit(
-                self._format_error("停止 DN 自動曝光失敗", exc)
+                self._format_error("停止 RisingCam SDK 自動曝光失敗", exc)
             )
             return False
 
     @property
     def auto_exposure_target_percent(self) -> int:
-        return self._software_auto_exposure.target_percent
+        return self._auto_exposure_target_percent
 
     def set_auto_exposure_target_percent(self, target_percent: int) -> None:
-        self._software_auto_exposure.set_target_percent(target_percent)
+        self._auto_exposure_target_percent = validate_auto_exposure_target_percent(
+            target_percent
+        )
+        self._sdk_auto_exposure_target = effective_percent_to_sdk_ae_target(
+            self._auto_exposure_target_percent
+        )
+        if (
+            self._camera is not None
+            and self._sdk_auto_exposure_mode is not SDKAutoExposureMode.MANUAL
+        ):
+            self._write_sdk_auto_exposure_target(self._camera)
+            self._log_sdk_ae_calibration("TargetChanged")
         self._emit_effective_dn_status()
+
+    def _configure_sdk_auto_exposure_parameters(self, camera: Any) -> None:
+        self._sdk_auto_exposure_policy_readback = self._write_nonblocking_sdk_option(
+            camera,
+            "NNCAM_OPTION_AUTOEXP_POLICY",
+            nncam.NNCAM_OPTION_AUTOEXP_POLICY,
+            1,
+        )
+        self._sdk_auto_exposure_percent_readback = self._write_nonblocking_sdk_option(
+            camera,
+            "NNCAM_OPTION_AUTOEXPOSURE_PERCENT",
+            nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT,
+            100,
+        )
+        self._sdk_auto_exposure_exposure_damping_readback = (
+            self._read_nonblocking_setting(
+                "NNCAM_OPTION_AUTOEXP_EXPOTIME_DAMP readback",
+                lambda: camera.get_Option(nncam.NNCAM_OPTION_AUTOEXP_EXPOTIME_DAMP),
+            )
+        )
+        self._sdk_auto_exposure_gain_damping_readback = self._read_nonblocking_setting(
+            "NNCAM_OPTION_AUTOEXP_GAIN_DAMP readback",
+            lambda: camera.get_Option(nncam.NNCAM_OPTION_AUTOEXP_GAIN_DAMP),
+        )
+        self._sdk_overexposure_policy_readback = self._read_nonblocking_setting(
+            "NNCAM_OPTION_OVEREXP_POLICY readback",
+            lambda: camera.get_Option(nncam.NNCAM_OPTION_OVEREXP_POLICY),
+        )
+        self._write_sdk_auto_exposure_target(camera)
+
+    @staticmethod
+    def _write_nonblocking_sdk_option(
+        camera: Any,
+        label: str,
+        option: int,
+        requested: int,
+    ) -> int | None:
+        try:
+            camera.put_Option(option, int(requested))
+            readback = int(camera.get_Option(option))
+            if readback != int(requested):
+                LOG.warning(
+                    "%s readback mismatch: requested=%s actual=%s",
+                    label,
+                    requested,
+                    readback,
+                )
+            else:
+                LOG.info("%s requested/readback=%s/%s", label, requested, readback)
+            return readback
+        except Exception as exc:
+            LOG.warning("%s unsupported or unavailable: %s", label, exc)
+            return CameraController._read_nonblocking_setting(
+                f"{label} diagnostic after configuration failure",
+                lambda: camera.get_Option(option),
+            )
+
+    def _write_sdk_auto_exposure_target(self, camera: Any) -> None:
+        requested = effective_percent_to_sdk_ae_target(
+            self._auto_exposure_target_percent
+        )
+        camera.put_AutoExpoTarget(requested)
+        readback = int(camera.get_AutoExpoTarget())
+        self._sdk_auto_exposure_target = requested
+        self._sdk_auto_exposure_target_readback = readback
+        if readback != requested:
+            LOG.warning(
+                "SDK AutoExpoTarget readback mismatch: requested=%s actual=%s",
+                requested,
+                readback,
+            )
+        else:
+            LOG.info("SDK AutoExpoTarget requested/readback=%s/%s", requested, readback)
+
+    def _enable_sdk_auto_exposure(self, mode: SDKAutoExposureMode) -> None:
+        if self._camera is None:
+            raise RuntimeError("Camera is not connected")
+        if mode not in {SDKAutoExposureMode.CONTINUOUS, SDKAutoExposureMode.ONCE}:
+            raise ValueError("SDK AE enable mode must be Continuous or Once")
+        enable_value = 1 if mode is SDKAutoExposureMode.CONTINUOUS else 2
+        self._camera.put_AutoExpoEnable(enable_value)
+        readback = int(self._camera.get_AutoExpoEnable())
+        self._sdk_auto_exposure_enable_readback = readback
+        if readback != enable_value:
+            raise RuntimeError(
+                f"SDK AutoExpoEnable requested {enable_value}, read back {readback}"
+            )
+        self._sdk_auto_exposure_mode = mode
+        self._log_sdk_ae_calibration("AEStateChanged")
+
+    def _disable_sdk_auto_exposure(self, *, require_readback: bool) -> None:
+        if self._camera is None:
+            self._sdk_auto_exposure_mode = SDKAutoExposureMode.MANUAL
+            self._sdk_auto_exposure_enable_readback = 0
+            return
+        self._camera.put_AutoExpoEnable(0)
+        try:
+            readback = int(self._camera.get_AutoExpoEnable())
+        except Exception:
+            if require_readback:
+                raise
+            readback = None
+        self._sdk_auto_exposure_enable_readback = readback
+        if require_readback and readback != 0:
+            raise RuntimeError(
+                f"SDK AutoExpoEnable requested 0, read back {readback}"
+            )
+        self._sdk_auto_exposure_mode = SDKAutoExposureMode.MANUAL
+        self._log_sdk_ae_calibration("AEStateChanged")
+
+    def _log_sdk_ae_calibration(self, reason: str) -> None:
+        now = monotonic()
+        if (
+            reason == "ScientificFrame"
+            and now - self._last_sdk_ae_calibration_log_monotonic < 1.0
+        ):
+            return
+        self._last_sdk_ae_calibration_log_monotonic = now
+        maximum = self._effective_dn_max
+        effective_target = (
+            target_effective_dn(maximum, self._auto_exposure_target_percent)
+            if maximum is not None
+            else None
+        )
+        current = (
+            self._read_current_exposure(self._camera)
+            if self._camera is not None
+            else None
+        )
+        LOG.info(
+            "SDK_AE_CALIBRATION timestamp=%s reason=%s UserTargetPercent=%s%% "
+            "EffectiveDNTarget=%s/%s SDKAutoExposureTarget=%s "
+            "SDKAutoExposureTargetReadback=%s SDKAutoExposureMode=%s "
+            "ExposureReadbackUs=%s GainReadback=%s MeanEffectiveDN=%s "
+            "MeanEffectiveDNPercent=%s Alignment=%s",
+            datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            reason,
+            self._auto_exposure_target_percent,
+            effective_target,
+            maximum,
+            self._sdk_auto_exposure_target,
+            self._sdk_auto_exposure_target_readback,
+            self._sdk_auto_exposure_mode.value,
+            current[0] if current is not None else None,
+            current[1] if current is not None else None,
+            self._latest_mean_effective_dn,
+            (
+                self._latest_effective_dn_fraction * 100.0
+                if self._latest_effective_dn_fraction is not None
+                else None
+            ),
+            self._raw_value_alignment,
+        )
 
     def current_exposure(self) -> tuple[int, int]:
         if self._camera is None:
@@ -580,8 +751,13 @@ class CameraController(QObject):
         """Stable identity/format fields for a frame already pulled by this controller."""
 
         model = getattr(getattr(self._device, "model", None), "name", "")
-        auto_mode = self._software_auto_exposure.mode.value
-        auto_active = self._software_auto_exposure.is_active
+        auto_mode = self._sdk_auto_exposure_mode.value
+        auto_active = self._sdk_auto_exposure_mode is not SDKAutoExposureMode.MANUAL
+        current = (
+            self._read_current_exposure(self._camera)
+            if self._camera is not None
+            else None
+        )
         tone_controls_neutral = bool(
             self._scientific_isp_bypassed
             or (
@@ -656,20 +832,51 @@ class CameraController(QObject):
             "CURVEReadback": self._curve_readback,
             "GammaReadback": self._gamma_readback,
             "AutoExposureMode": auto_mode,
-            "AutoExposureController": "SoftwareDN" if auto_active else None,
+            "AutoExposureController": "RisingCamSDK" if auto_active else None,
             "AutoExposureTargetPercent": (
-                self._software_auto_exposure.target_percent if auto_active else None
+                self._auto_exposure_target_percent if auto_active else None
             ),
-            "AutoExposureTargetDN": (
+            "EffectiveDNTarget": (
                 target_effective_dn(
                     self._effective_dn_max,
-                    self._software_auto_exposure.target_percent,
+                    self._auto_exposure_target_percent,
                 )
                 if auto_active and self._effective_dn_max is not None
                 else None
             ),
-            "SDKAutoExposureEnabled": False,
-            "SDKAutoExposureTarget": None,
+            "SDKAutoExposureEnabled": auto_active,
+            "SDKAutoExposureEnableReadback": (
+                self._sdk_auto_exposure_enable_readback
+            ),
+            "SDKAutoExposureTarget": (
+                self._sdk_auto_exposure_target
+            ),
+            "SDKAutoExposureTargetReadback": (
+                self._sdk_auto_exposure_target_readback
+            ),
+            "SDKAutoExposurePolicy": self._sdk_auto_exposure_policy_readback,
+            "SDKAutoExposurePercent": self._sdk_auto_exposure_percent_readback,
+            "SDKAutoExposureExposureDamping": (
+                self._sdk_auto_exposure_exposure_damping_readback
+            ),
+            "SDKAutoExposureGainDamping": (
+                self._sdk_auto_exposure_gain_damping_readback
+            ),
+            "SDKOverexposurePolicy": self._sdk_overexposure_policy_readback,
+            "AutoExposureMinExposure": (
+                self._auto_exposure_range[0] if self._auto_exposure_range else None
+            ),
+            "AutoExposureMaxExposure": (
+                self._auto_exposure_range[1] if self._auto_exposure_range else None
+            ),
+            "AutoExposureMinGain": (
+                self._auto_exposure_range[2] if self._auto_exposure_range else None
+            ),
+            "AutoExposureMaxGain": (
+                self._auto_exposure_range[3] if self._auto_exposure_range else None
+            ),
+            "ExposureReadbackUs": current[0] if current is not None else None,
+            "GainReadback": current[1] if current is not None else None,
         }
 
     def read_temperature_c(self) -> float | None:
@@ -744,24 +951,6 @@ class CameraController(QObject):
         ):
             return "unknown", "RuntimeVerificationPending"
         return "unknown", "SensorBitDepthUnknown"
-
-    def _dn_auto_exposure_available(self) -> bool:
-        return bool(
-            self._camera is not None
-            and self._sensor_bit_depth is not None
-            and self._raw_value_alignment in {"right", "left"}
-            and self._exposure_range is not None
-            and self._gain_range is not None
-        )
-
-    def _dn_auto_exposure_unavailable_reason(self) -> str:
-        if self._sensor_bit_depth is None:
-            return "無法確認相機 SensorBitDepth，因此無法安全執行 DN-based 自動曝光。"
-        if self._raw_value_alignment not in {"right", "left"}:
-            return "無法確認相機 DN alignment，因此無法安全執行 DN-based 自動曝光。"
-        if self._exposure_range is None or self._gain_range is None:
-            return "無法取得相機 Exposure/Gain 範圍，因此無法安全執行 DN-based 自動曝光。"
-        return "DN-based 自動曝光目前不可用。"
 
     @classmethod
     def _query_camera_capabilities(cls, camera: Any) -> dict[str, Any]:
@@ -838,8 +1027,11 @@ class CameraController(QObject):
             "Camera Gain Hardware Range: min = %s %%, max = %s %%, default = %s %%\n"
             "Auto Exposure Range: min exposure = %s us, max exposure = %s us, "
             "min gain = %s %%, max gain = %s %%\n"
-            "Auto Exposure Controller/mode/target: SoftwareDN/%s/%s %%\n"
-            "SDK Auto Exposure Enabled: False",
+            "Auto Exposure Controller/mode/user target: RisingCamSDK/%s/%s %%\n"
+            "SDK Auto Exposure target requested/readback: %s/%s\n"
+            "SDK Auto Exposure policy/full-frame percent: %s/%s\n"
+            "SDK Auto Exposure exposure/gain damping: %s/%s\n"
+            "SDK Overexposure policy: %s",
             info.get("model") or info.get("name") or "--",
             info.get("identifier", "--"),
             info.get("camera_flags", 0),
@@ -897,6 +1089,13 @@ class CameraController(QObject):
             *(auto_range or ("--", "--", "--", "--")),
             info.get("auto_exposure_mode", "--"),
             info.get("auto_exposure_target_percent", "--"),
+            info.get("sdk_auto_exposure_target", "--"),
+            info.get("sdk_auto_exposure_target_readback", "--"),
+            info.get("sdk_auto_exposure_policy", "unsupported"),
+            info.get("sdk_auto_exposure_percent", "unsupported"),
+            info.get("sdk_auto_exposure_exposure_damping", "unsupported"),
+            info.get("sdk_auto_exposure_gain_damping", "unsupported"),
+            info.get("sdk_overexposure_policy", "unsupported"),
         )
 
     @staticmethod
@@ -1143,9 +1342,35 @@ class CameraController(QObject):
         elif event_code == nncam.NNCAM_EVENT_EXPOSURE:
             self._emit_exposure()
         elif event_code == nncam.NNCAM_EVENT_AUTOEXPO_CONV:
-            LOG.debug("Ignoring SDK AE convergence event because SDK AE is disabled")
+            if self._sdk_auto_exposure_mode is SDKAutoExposureMode.ONCE:
+                try:
+                    self._disable_sdk_auto_exposure(require_readback=True)
+                    current = self._read_current_exposure(self._camera)
+                    if current is None:
+                        raise RuntimeError("SDK AE convergence Exposure/Gain readback failed")
+                    self.exposure_changed.emit(*current)
+                    self._log_sdk_ae_calibration("AutoOnceConverged")
+                    self.auto_exposure_result.emit(
+                        True, "RisingCam SDK 自動曝光已收斂"
+                    )
+                except Exception as exc:
+                    self.auto_exposure_result.emit(
+                        False,
+                        self._format_error("SDK 自動曝光收斂後鎖定失敗", exc),
+                    )
+            else:
+                self._log_sdk_ae_calibration("ContinuousConverged")
         elif event_code == nncam.NNCAM_EVENT_AUTOEXPO_CONVFAIL:
-            LOG.debug("Ignoring SDK AE failure event because SDK AE is disabled")
+            if self._sdk_auto_exposure_mode is SDKAutoExposureMode.ONCE:
+                try:
+                    self._disable_sdk_auto_exposure(require_readback=True)
+                except Exception:
+                    LOG.exception("Failed to disable SDK AE after convergence failure")
+                self.auto_exposure_result.emit(
+                    False, "RisingCam SDK 單次自動曝光無法收斂"
+                )
+            else:
+                LOG.warning("RisingCam SDK reported auto exposure convergence failure")
         elif event_code == nncam.NNCAM_EVENT_DISCONNECTED:
             self.close_camera()
             self.error_occurred.emit("相機連線中斷，請檢查 USB 線與供電。")
@@ -1187,16 +1412,10 @@ class CameraController(QObject):
                 self._raw_value_alignment,
                 self._raw_value_alignment_source,
             )
-            if (
-                self._continuous_auto_exposure_requested
-                and self._dn_auto_exposure_available()
-                and self._camera is not None
-            ):
-                self._camera.put_AutoExpoEnable(0)
-                self._software_auto_exposure.start_continuous()
+            if self._sdk_auto_exposure_mode is SDKAutoExposureMode.CONTINUOUS:
                 self.status_changed.emit(
                     f"Alignment 已確認為 {self._raw_value_alignment.capitalize()}；"
-                    "持續 DN 自動曝光已開啟"
+                    "RisingCam SDK 持續自動曝光維持開啟"
                 )
             else:
                 self.status_changed.emit(
@@ -1206,14 +1425,15 @@ class CameraController(QObject):
             self._raw_value_alignment = "unknown"
             self._raw_value_alignment_source = verifier.source
             if verifier.source == "InsufficientSignal":
-                self.status_changed.emit("相機 DN alignment 訊號不足；維持手動曝光")
+                self.status_changed.emit("相機 DN alignment 訊號不足；SDK AE 不受影響")
             else:
-                self.status_changed.emit("相機 DN alignment 無法判定；維持手動曝光")
+                self.status_changed.emit("相機 DN alignment 無法判定；SDK AE 不受影響")
                 if not self._alignment_warning_emitted:
                     self._alignment_warning_emitted = True
                     self.error_occurred.emit(
                         "多張 scientific frames 的 DN alignment 證據仍互相矛盾；"
-                        "DN 自動曝光維持不可用，Live View 與手動曝光仍可使用。"
+                        "Effective DN 維持無法判定，RisingCam SDK AE、Live View "
+                        "與手動曝光仍可使用。"
                     )
         elif verifier.source == "InsufficientSignal":
             self._raw_value_alignment_source = verifier.source
@@ -1289,7 +1509,6 @@ class CameraController(QObject):
                     self._scientific_measurement_ready(),
                 )
             self._update_alignment_verification(scientific)
-            auto_once_converged = False
             if (
                 self._raw_value_alignment in {"right", "left"}
                 and self._sensor_bit_depth is not None
@@ -1311,7 +1530,6 @@ class CameraController(QObject):
                     16,
                     self._raw_value_alignment,
                 )
-                auto_once_converged = self._apply_software_auto_exposure()
             else:
                 self._effective_dn_max = (
                     effective_dn_max(self._sensor_bit_depth)
@@ -1327,6 +1545,7 @@ class CameraController(QObject):
                     0,
                     255,
                 ).astype(np.uint8)
+            self._log_sdk_ae_calibration("ScientificFrame")
             image = QImage(
                 display.data,
                 self._width,
@@ -1340,8 +1559,6 @@ class CameraController(QObject):
             self.frame_ready_sequenced.emit(image, self._frame_sequence)
             self.scientific_frame_ready.emit(scientific, image, self._frame_sequence)
             self._emit_effective_dn_status()
-            if auto_once_converged:
-                self.auto_exposure_result.emit(True, "DN 自動曝光已連續 2 張收斂")
         except Exception as exc:
             self._scientific_frame_validated = False
             if not self._scientific_pull_error_reported:
@@ -1349,75 +1566,11 @@ class CameraController(QObject):
                 LOG.exception("Camera scientific frame validation failed: %s", exc)
                 self.error_occurred.emit(self._format_error("讀取影像失敗", exc))
 
-    def _apply_software_auto_exposure(self) -> bool:
-        if (
-            not self._software_auto_exposure.is_active
-            or self._camera is None
-            or self._latest_mean_effective_dn is None
-            or self._effective_dn_max is None
-            or self._exposure_range is None
-            or self._gain_range is None
-        ):
-            return False
-        current = self._read_current_exposure(self._camera)
-        if current is None:
-            LOG.warning("Software DN AE skipped: Exposure/Gain readback unavailable")
-            return False
-        decision = self._software_auto_exposure.update(
-            mean_dn=self._latest_mean_effective_dn,
-            maximum_dn=self._effective_dn_max,
-            exposure_us=current[0],
-            gain_percent=current[1],
-            exposure_range=self._exposure_range,
-            gain_range=self._gain_range,
-        )
-        if decision.adjusted:
-            if decision.gain_percent != current[1]:
-                self._camera.put_ExpoAGain(decision.gain_percent)
-                actual = self._read_current_exposure(self._camera)
-                if actual is None:
-                    raise RuntimeError("SoftwareDN AE Gain write readback unavailable")
-                if not self._gain_range[0] <= actual[1] <= self._gain_range[1]:
-                    raise RuntimeError(
-                        f"SoftwareDN AE Gain readback {actual[1]} is outside "
-                        f"legal range {self._gain_range[0]}–{self._gain_range[1]}"
-                    )
-                LOG.info(
-                    "SoftwareDN AE gain requested=%s %% actual=%s %%",
-                    decision.gain_percent,
-                    actual[1],
-                )
-            elif decision.exposure_us != current[0]:
-                self._camera.put_ExpoTime(decision.exposure_us)
-                actual = self._read_current_exposure(self._camera)
-                if actual is None:
-                    raise RuntimeError("SoftwareDN AE Exposure write readback unavailable")
-                if not self._exposure_range[0] <= actual[0] <= self._exposure_range[1]:
-                    raise RuntimeError(
-                        f"SoftwareDN AE Exposure readback {actual[0]} is outside "
-                        f"legal range {self._exposure_range[0]}–{self._exposure_range[1]}"
-                    )
-                LOG.info(
-                    "SoftwareDN AE exposure requested=%s us actual=%s us",
-                    decision.exposure_us,
-                    actual[0],
-                )
-            LOG.info(
-                "SoftwareDN AE mean=%.3f target=%s exposure=%s->%s gain=%s->%s",
-                self._latest_mean_effective_dn,
-                decision.target_dn,
-                current[0],
-                decision.exposure_us,
-                current[1],
-                decision.gain_percent,
-            )
-        return decision.converged
-
     def _effective_dn_status(self) -> dict[str, Any]:
         target_dn = (
             target_effective_dn(
                 self._effective_dn_max,
-                self._software_auto_exposure.target_percent,
+                self._auto_exposure_target_percent,
             )
             if self._effective_dn_max is not None
             else None
@@ -1447,10 +1600,14 @@ class CameraController(QObject):
                 if self._latest_effective_dn_fraction is not None
                 else None
             ),
-            "AutoExposureTargetPercent": self._software_auto_exposure.target_percent,
+            "AutoExposureTargetPercent": self._auto_exposure_target_percent,
             "AutoExposureTargetDN": target_dn,
-            "DNSoftwareAEAvailable": self._dn_auto_exposure_available(),
-            "AutoExposureMode": self._software_auto_exposure.mode.value,
+            "SDKAutoExposureTarget": self._sdk_auto_exposure_target,
+            "SDKAutoExposureTargetReadback": (
+                self._sdk_auto_exposure_target_readback
+            ),
+            "AutoExposureController": "RisingCamSDK",
+            "AutoExposureMode": self._sdk_auto_exposure_mode.value,
             "ContinuousAutoExposureRequested": (
                 self._continuous_auto_exposure_requested
             ),

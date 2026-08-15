@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Persistent operator settings for Effective-DN software auto exposure."""
+"""Persistent operator settings shared by SDK AE and Effective-DN monitoring."""
 
 from typing import Any
 
@@ -45,3 +45,15 @@ def target_effective_dn(maximum_dn: int, target_percent: int) -> int:
         raise ValueError("EffectiveDNMax must be positive")
     percent = validate_auto_exposure_target_percent(target_percent)
     return round(maximum * (percent / 100.0))
+
+
+def effective_percent_to_sdk_ae_target(target_percent: int) -> int:
+    """Map an operator percent to the SDK 0–255 AE target deterministically."""
+
+    percent = validate_auto_exposure_target_percent(target_percent)
+    # Integer half-up rounding avoids platform or language tie-breaking
+    # differences (30% -> 77 and 70% -> 179).
+    target = (255 * percent + 50) // 100
+    from .sdk import nncam
+
+    return min(max(target, nncam.NNCAM_AETARGET_MIN), nncam.NNCAM_AETARGET_MAX)

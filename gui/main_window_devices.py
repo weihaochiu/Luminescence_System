@@ -264,10 +264,10 @@ class MainWindowDeviceMixin:
         if info.get("exposure_us") is not None and info.get("gain") is not None:
             self.on_exposure_changed(info["exposure_us"], info["gain"])
 
-        dn_available = bool(info.get("dn_auto_exposure_available", False))
+        sdk_ae_available = bool(info.get("sdk_auto_exposure_available", False))
         initial_mode = (
             ExposureMode.CONTINUOUS_AUTO
-            if info.get("continuous_auto_exposure_requested", dn_available)
+            if info.get("continuous_auto_exposure_requested", sdk_ae_available)
             else ExposureMode.MANUAL
         )
         self._active_exposure_mode = initial_mode
@@ -459,6 +459,12 @@ class MainWindowDeviceMixin:
         else:
             target_text = "無法判定"
         self.auto_exposure_target_dn_value.setText(target_text)
+        sdk_target = status.get("SDKAutoExposureTargetReadback")
+        self.auto_exposure_target_dn_value.setToolTip(
+            f"AE 控制器：RisingCam SDK\nSDK AE Target = {sdk_target}"
+            if sdk_target is not None
+            else "AE 控制器：RisingCam SDK"
+        )
 
     def on_frame_ready(self, image: QImage) -> None:
         self.last_image = image.copy()
@@ -567,9 +573,9 @@ class MainWindowDeviceMixin:
             return
         exposure_us, gain = self.controller.current_exposure()
         if capture_mode.startswith("auto_once"):
-            auto_exposure_mode = "AutoOnceDN"
+            auto_exposure_mode = "Once"
         elif capture_mode == "auto_continuous":
-            auto_exposure_mode = "ContinuousDN"
+            auto_exposure_mode = "Continuous"
         else:
             auto_exposure_mode = "Manual"
         metadata = dict(self.controller.capture_metadata())
@@ -591,12 +597,12 @@ class MainWindowDeviceMixin:
             "capture_mode": capture_mode,
             "AutoExposureMode": auto_exposure_mode,
             "AutoExposureController": (
-                "SoftwareDN" if auto_exposure_mode != "Manual" else None
+                "RisingCamSDK" if auto_exposure_mode != "Manual" else None
             ),
             "AutoExposureTargetPercent": (
                 target_percent if auto_exposure_mode != "Manual" else None
             ),
-            "AutoExposureTargetDN": (
+            "EffectiveDNTarget": (
                 target_effective_dn(int(maximum_dn), target_percent)
                 if auto_exposure_mode != "Manual" and maximum_dn is not None
                 else None

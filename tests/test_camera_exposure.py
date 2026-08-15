@@ -8,15 +8,16 @@ from gui.camera_auto_exposure_settings import (
     AUTO_EXPOSURE_TARGET_PERCENT_KEY,
     AUTO_EXPOSURE_TARGET_PERCENT_OPTIONS,
     DEFAULT_AUTO_EXPOSURE_TARGET_PERCENT,
+    effective_percent_to_sdk_ae_target,
     load_auto_exposure_target_percent,
     save_auto_exposure_target_percent,
     target_effective_dn,
 )
-from gui.camera_controller import CameraController
+from gui.camera_controller import CameraController, SDKAutoExposureMode
 from gui.camera_auto_exposure_settings_dialog import CameraAutoExposureSettingsDialog
 from gui.camera_exposure import ExposureMode
-from gui.software_auto_exposure import SoftwareAutoExposure, SoftwareAutoExposureMode
 from gui.scientific_dn_alignment import AlignmentVerifier
+from gui.sdk import nncam
 from tests.qt_test_utils import ensure_qapplication
 
 
@@ -55,9 +56,39 @@ class FakeModeCamera:
         self.calls: list[tuple] = []
         self.exposure_us = exposure_us
         self.gain = gain
+        self.auto_exposure_enable = 0
+        self.auto_exposure_target = 120
+        self.options = {
+            nncam.NNCAM_OPTION_AUTOEXP_POLICY: 1,
+            nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT: 100,
+            nncam.NNCAM_OPTION_AUTOEXP_EXPOTIME_DAMP: 0,
+            nncam.NNCAM_OPTION_AUTOEXP_GAIN_DAMP: 0,
+            nncam.NNCAM_OPTION_OVEREXP_POLICY: 0,
+        }
 
     def put_AutoExpoEnable(self, mode: int) -> None:
         self.calls.append(("sdk_auto", mode))
+        self.auto_exposure_enable = mode
+
+    def get_AutoExpoEnable(self) -> int:
+        self.calls.append(("read_sdk_auto",))
+        return self.auto_exposure_enable
+
+    def put_AutoExpoTarget(self, target: int) -> None:
+        self.calls.append(("sdk_target", target))
+        self.auto_exposure_target = target
+
+    def get_AutoExpoTarget(self) -> int:
+        self.calls.append(("read_sdk_target",))
+        return self.auto_exposure_target
+
+    def put_Option(self, option: int, value: int) -> None:
+        self.calls.append(("option", option, value))
+        self.options[option] = value
+
+    def get_Option(self, option: int) -> int:
+        self.calls.append(("read_option", option))
+        return self.options[option]
 
     def get_ExpoTime(self) -> int:
         self.calls.append(("read_exposure",))
@@ -91,14 +122,10 @@ class FakeModeCamera:
         pass
 
 
-class QuantizingFakeModeCamera(FakeModeCamera):
-    def put_ExpoTime(self, value: int) -> None:
-        self.calls.append(("exposure", value))
-        self.exposure_us = round(value / 10) * 10
-
-    def put_ExpoAGain(self, value: int) -> None:
-        self.calls.append(("gain", value))
-        self.gain = round(value / 8) * 8
+class StickyAutoExposureCamera(FakeModeCamera):
+    def get_AutoExpoEnable(self) -> int:
+        self.calls.append(("read_sdk_auto",))
+        return 1
 
 
 def configured_controller(camera: FakeModeCamera) -> CameraController:
@@ -108,6 +135,7 @@ def configured_controller(camera: FakeModeCamera) -> CameraController:
     controller._raw_value_alignment = "right"
     controller._exposure_range = (100, 1_000_000, 10_000)
     controller._gain_range = (100, 800, 100)
+    controller._auto_exposure_range = (40, 400_000, 110, 600)
     return controller
 
 
@@ -136,6 +164,14 @@ class CameraExposureTests(unittest.TestCase):
         for maximum, percent, expected in cases:
             with self.subTest(maximum=maximum, percent=percent):
                 self.assertEqual(expected, target_effective_dn(maximum, percent))
+
+    def test_operator_percent_maps_to_deterministic_sdk_targets(self) -> None:
+        expected = {20: 51, 30: 77, 40: 102, 50: 128, 60: 153, 70: 179, 80: 204}
+        for percent, target in expected.items():
+            with self.subTest(percent=percent):
+                self.assertEqual(target, effective_percent_to_sdk_ae_target(percent))
+                self.assertGreaterEqual(target, nncam.NNCAM_AETARGET_MIN)
+                self.assertLessEqual(target, nncam.NNCAM_AETARGET_MAX)
 
     def test_settings_store_integer_percent_and_invalid_falls_back(self) -> None:
         settings = FakeSettings()
@@ -174,43 +210,40 @@ class CameraExposureTests(unittest.TestCase):
     def test_continuous_to_manual_disables_sdk_ae_and_preserves_readback(self) -> None:
         camera = FakeModeCamera()
         controller = configured_controller(camera)
-        controller._software_auto_exposure.start_continuous()
+        controller._sdk_auto_exposure_mode = SDKAutoExposureMode.CONTINUOUS
+        camera.auto_exposure_enable = 1
         observed = []
         controller.exposure_changed.connect(lambda exposure, gain: observed.append((exposure, gain)))
         self.assertTrue(controller.switch_to_manual_exposure())
-        self.assertEqual([("sdk_auto", 0), ("read_exposure",), ("read_gain",)], camera.calls)
+        self.assertEqual(("sdk_auto", 0), camera.calls[0])
+        self.assertEqual(("read_sdk_auto",), camera.calls[1])
         self.assertEqual([(842_500, 120)], observed)
-        self.assertEqual(SoftwareAutoExposureMode.MANUAL, controller._software_auto_exposure.mode)
+        self.assertEqual(SDKAutoExposureMode.MANUAL, controller._sdk_auto_exposure_mode)
 
-    def test_manual_to_continuous_keeps_sdk_ae_off(self) -> None:
+    def test_manual_to_continuous_configures_native_sdk_ae_in_order(self) -> None:
         camera = FakeModeCamera()
         controller = configured_controller(camera)
         self.assertTrue(controller.enable_continuous_auto_exposure())
-        self.assertEqual([("sdk_auto", 0)], camera.calls)
-        self.assertEqual(SoftwareAutoExposureMode.CONTINUOUS_DN, controller._software_auto_exposure.mode)
+        policy = ("option", nncam.NNCAM_OPTION_AUTOEXP_POLICY, 1)
+        full_average = ("option", nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT, 100)
+        target = ("sdk_target", 128)
+        enabled = ("sdk_auto", 1)
+        self.assertLess(camera.calls.index(policy), camera.calls.index(target))
+        self.assertLess(camera.calls.index(full_average), camera.calls.index(target))
+        self.assertLess(camera.calls.index(target), camera.calls.index(enabled))
+        self.assertNotIn(("exposure", 0), camera.calls)
+        self.assertFalse(any(call[0] in {"exposure", "gain"} for call in camera.calls))
+        self.assertEqual(SDKAutoExposureMode.CONTINUOUS, controller._sdk_auto_exposure_mode)
 
-    def test_unknown_alignment_fails_closed(self) -> None:
-        camera = FakeModeCamera()
-        controller = configured_controller(camera)
-        controller._raw_value_alignment = "unknown"
-        errors = []
-        controller.error_occurred.connect(errors.append)
-        self.assertFalse(controller.enable_continuous_auto_exposure())
-        self.assertEqual([], camera.calls)
-        self.assertIn("alignment", errors[-1])
-
-    def test_pending_runtime_alignment_accepts_continuous_request(self) -> None:
+    def test_unknown_alignment_does_not_block_native_sdk_ae(self) -> None:
         camera = FakeModeCamera()
         controller = configured_controller(camera)
         controller._raw_value_alignment = "unknown"
         controller._alignment_verifier = AlignmentVerifier(12, 16)
         self.assertTrue(controller.enable_continuous_auto_exposure())
-        self.assertEqual([("sdk_auto", 0)], camera.calls)
+        self.assertIn(("sdk_auto", 1), camera.calls)
         self.assertTrue(controller._continuous_auto_exposure_requested)
-        self.assertEqual(
-            SoftwareAutoExposureMode.MANUAL,
-            controller._software_auto_exposure.mode,
-        )
+        self.assertEqual(SDKAutoExposureMode.CONTINUOUS, controller._sdk_auto_exposure_mode)
 
     def test_alignment_is_known_only_when_sensor_fills_container(self) -> None:
         self.assertEqual(
@@ -222,45 +255,35 @@ class CameraExposureTests(unittest.TestCase):
             CameraController._determine_raw_value_alignment(12, 16, 2),
         )
 
-    def test_software_ae_write_reads_back_quantized_actual_value(self) -> None:
-        camera = QuantizingFakeModeCamera(exposure_us=1068, gain=100)
+    def test_target_change_only_updates_sdk_target(self) -> None:
+        camera = FakeModeCamera()
         controller = configured_controller(camera)
-        controller._software_auto_exposure.start_continuous()
-        controller._latest_mean_effective_dn = 500.0
         controller._effective_dn_max = 4095
+        controller.enable_continuous_auto_exposure()
+        camera.calls.clear()
         with self.assertLogs("gui.camera_controller", level="INFO") as captured:
-            controller._apply_software_auto_exposure()
-        self.assertIn(("exposure", 2136), camera.calls)
-        self.assertEqual(2140, camera.exposure_us)
-        self.assertEqual(
-            [("read_exposure",), ("read_gain",)],
-            camera.calls[-2:],
-        )
-        self.assertIn("requested=2136 us actual=2140 us", "\n".join(captured.output))
+            controller.set_auto_exposure_target_percent(40)
+        self.assertEqual(("sdk_target", 102), camera.calls[0])
+        self.assertEqual(("read_sdk_target",), camera.calls[1])
+        self.assertFalse(any(call[0] in {"exposure", "gain"} for call in camera.calls))
+        self.assertEqual(1638, controller._effective_dn_status()["AutoExposureTargetDN"])
+        calibration = "\n".join(captured.output)
+        self.assertIn("UserTargetPercent=40%", calibration)
+        self.assertIn("EffectiveDNTarget=1638/4095", calibration)
+        self.assertIn("SDKAutoExposureTarget=102", calibration)
 
-    def test_gain_readback_becomes_next_frame_control_baseline(self) -> None:
-        camera = QuantizingFakeModeCamera(exposure_us=1_000_000, gain=100)
-        controller = configured_controller(camera)
-        controller._software_auto_exposure.start_continuous()
-        controller._latest_mean_effective_dn = 2048 / 1.5
-        controller._effective_dn_max = 4095
-        with self.assertLogs("gui.camera_controller", level="INFO") as captured:
-            controller._apply_software_auto_exposure()
-        self.assertIn(("gain", 150), camera.calls)
-        self.assertEqual(152, camera.gain)
-        self.assertIn("requested=150 % actual=152 %", "\n".join(captured.output))
-
-        controller._apply_software_auto_exposure()
-        self.assertIn(("gain", 228), camera.calls)
-
-    def test_resolution_restart_restores_continuous_software_mode_with_sdk_off(self) -> None:
+    def test_resolution_restart_restores_native_continuous_mode(self) -> None:
         camera = FakeModeCamera()
         controller = resolution_controller(camera)
-        controller._software_auto_exposure.start_continuous()
+        controller._sdk_auto_exposure_mode = SDKAutoExposureMode.CONTINUOUS
+        camera.auto_exposure_enable = 1
         try:
             controller.set_resolution(0)
-            self.assertEqual([("sdk_auto", 0), ("stop",), ("size", 0), ("start",)], camera.calls)
-            self.assertEqual(SoftwareAutoExposureMode.CONTINUOUS_DN, controller._software_auto_exposure.mode)
+            self.assertIn(("sdk_auto", 0), camera.calls)
+            self.assertIn(("stop",), camera.calls)
+            self.assertIn(("start",), camera.calls)
+            self.assertIn(("sdk_auto", 1), camera.calls)
+            self.assertEqual(SDKAutoExposureMode.CONTINUOUS, controller._sdk_auto_exposure_mode)
         finally:
             controller.close_camera()
 
@@ -269,45 +292,83 @@ class CameraExposureTests(unittest.TestCase):
         controller = resolution_controller(camera)
         try:
             controller.set_resolution(0)
-            self.assertEqual([("sdk_auto", 0), ("stop",), ("size", 0), ("start",)], camera.calls)
-            self.assertEqual(SoftwareAutoExposureMode.MANUAL, controller._software_auto_exposure.mode)
+            self.assertIn(("sdk_auto", 0), camera.calls)
+            self.assertNotIn(("sdk_auto", 1), camera.calls)
+            self.assertEqual(SDKAutoExposureMode.MANUAL, controller._sdk_auto_exposure_mode)
         finally:
             controller.close_camera()
 
-    def test_auto_once_uses_software_dn_and_sdk_off(self) -> None:
+    def test_auto_once_uses_sdk_mode_two_and_convergence_locks_ae(self) -> None:
         camera = FakeModeCamera()
         controller = configured_controller(camera)
+        results = []
+        controller.auto_exposure_result.connect(
+            lambda success, message: results.append((success, message))
+        )
         controller.start_auto_exposure_once()
-        self.assertEqual([("sdk_auto", 0)], camera.calls)
-        self.assertEqual(SoftwareAutoExposureMode.AUTO_ONCE_DN, controller._software_auto_exposure.mode)
+        self.assertIn(("sdk_auto", 2), camera.calls)
+        self.assertEqual(SDKAutoExposureMode.ONCE, controller._sdk_auto_exposure_mode)
+        controller._handle_sdk_event(nncam.NNCAM_EVENT_AUTOEXPO_CONV)
+        self.assertIn(("sdk_auto", 0), camera.calls)
+        self.assertEqual(SDKAutoExposureMode.MANUAL, controller._sdk_auto_exposure_mode)
+        self.assertTrue(results[-1][0])
 
-    def test_formal_manual_configuration_stops_software_ae(self) -> None:
+    def test_formal_manual_configuration_verifies_sdk_ae_off_first(self) -> None:
         camera = FakeModeCamera(exposure_us=1000, gain=100)
         controller = configured_controller(camera)
-        controller._software_auto_exposure.start_continuous()
+        controller._sdk_auto_exposure_mode = SDKAutoExposureMode.CONTINUOUS
+        camera.auto_exposure_enable = 1
 
         controller.set_manual_exposure(2500, 300)
 
-        self.assertEqual(
-            [("sdk_auto", 0), ("exposure", 2500), ("gain", 300),
-             ("read_exposure",), ("read_gain",)],
-            camera.calls,
-        )
-        self.assertEqual(SoftwareAutoExposureMode.MANUAL, controller._software_auto_exposure.mode)
+        off_index = camera.calls.index(("sdk_auto", 0))
+        off_readback_index = camera.calls.index(("read_sdk_auto",))
+        exposure_index = camera.calls.index(("exposure", 2500))
+        gain_index = camera.calls.index(("gain", 300))
+        self.assertLess(off_index, off_readback_index)
+        self.assertLess(off_readback_index, exposure_index)
+        self.assertLess(exposure_index, gain_index)
+        self.assertEqual(SDKAutoExposureMode.MANUAL, controller._sdk_auto_exposure_mode)
+
+    def test_formal_measurement_is_blocked_when_sdk_ae_off_readback_fails(self) -> None:
+        camera = StickyAutoExposureCamera()
+        controller = configured_controller(camera)
+        errors = []
+        controller.error_occurred.connect(errors.append)
+        self.assertFalse(controller.disable_auto_exposure_for_formal_measurement())
+        self.assertIn(("sdk_auto", 0), camera.calls)
+        self.assertIn("read back 1", errors[-1])
 
     def test_metadata_uses_effective_dn_names(self) -> None:
-        controller = configured_controller(FakeModeCamera())
+        camera = FakeModeCamera()
+        controller = configured_controller(camera)
         controller._effective_dn_max = 4095
         controller._latest_mean_effective_dn = 1875.3
         controller._latest_effective_dn_fraction = 1875.3 / 4095
-        controller._software_auto_exposure.start_continuous()
+        controller._sdk_auto_exposure_mode = SDKAutoExposureMode.CONTINUOUS
+        controller._sdk_auto_exposure_enable_readback = 1
+        controller._sdk_auto_exposure_target_readback = 128
+        controller._sdk_auto_exposure_policy_readback = 1
+        controller._sdk_auto_exposure_percent_readback = 100
+        controller._sdk_auto_exposure_exposure_damping_readback = 0
+        controller._sdk_auto_exposure_gain_damping_readback = 0
+        controller._sdk_overexposure_policy_readback = 0
         metadata = controller.capture_metadata()
-        self.assertEqual("ContinuousDN", metadata["AutoExposureMode"])
-        self.assertEqual("SoftwareDN", metadata["AutoExposureController"])
+        self.assertEqual("Continuous", metadata["AutoExposureMode"])
+        self.assertEqual("RisingCamSDK", metadata["AutoExposureController"])
         self.assertEqual(50, metadata["AutoExposureTargetPercent"])
-        self.assertEqual(2048, metadata["AutoExposureTargetDN"])
+        self.assertEqual(2048, metadata["EffectiveDNTarget"])
+        self.assertEqual(128, metadata["SDKAutoExposureTarget"])
+        self.assertEqual(128, metadata["SDKAutoExposureTargetReadback"])
+        self.assertEqual(1, metadata["SDKAutoExposurePolicy"])
+        self.assertEqual(100, metadata["SDKAutoExposurePercent"])
+        self.assertEqual(0, metadata["SDKAutoExposureExposureDamping"])
+        self.assertEqual(0, metadata["SDKAutoExposureGainDamping"])
+        self.assertEqual(0, metadata["SDKOverexposurePolicy"])
+        self.assertEqual(40, metadata["AutoExposureMinExposure"])
+        self.assertEqual(400_000, metadata["AutoExposureMaxExposure"])
         self.assertEqual(1875.3, metadata["MeanEffectiveDN"])
-        self.assertFalse(metadata["SDKAutoExposureEnabled"])
+        self.assertTrue(metadata["SDKAutoExposureEnabled"])
         self.assertNotIn("AutoExposureTarget", metadata)
 
     def test_ui_uses_dn_terms_and_settings_submenu(self) -> None:
@@ -324,77 +385,15 @@ class CameraExposureTests(unittest.TestCase):
         self.assertNotIn("目前預覽亮度", ui_source)
         self.assertNotIn("PreviewBrightness8bit", device_source)
         self.assertNotIn("equivalent_brightness_8bit", controller_source)
-        self.assertNotIn("put_AutoExpoTarget", controller_source)
-        self.assertNotIn("put_AutoExpoEnable(1)", controller_source)
-        self.assertNotIn("put_AutoExpoEnable(2)", controller_source)
-        self.assertIn("self.controller.stop_software_auto_exposure()", measurement_source)
-
-
-class SoftwareAutoExposureTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.ae = SoftwareAutoExposure(50)
-        self.ae.start_continuous()
-        self.exposure_range = (100, 10_000, 7_777)
-        self.gain_range = (100, 800, 100)
-
-    def decision(self, mean, exposure=1000, gain=100):
-        return self.ae.update(
-            mean_dn=mean,
-            maximum_dn=4095,
-            exposure_us=exposure,
-            gain_percent=gain,
-            exposure_range=self.exposure_range,
-            gain_range=self.gain_range,
+        self.assertIn("put_AutoExpoTarget", controller_source)
+        self.assertIn("SDKAutoExposureMode.CONTINUOUS", controller_source)
+        self.assertIn("SDKAutoExposureMode.ONCE", controller_source)
+        self.assertNotIn("SoftwareAutoExposure", controller_source)
+        self.assertNotIn("_apply_software_auto_exposure", controller_source)
+        self.assertIn(
+            "self.controller.disable_auto_exposure_for_formal_measurement()",
+            measurement_source,
         )
-
-    def test_dark_frames_increase_exposure_without_fake_sdk_step(self) -> None:
-        self.assertGreater(self.decision(500).exposure_us, 1000)
-        self.assertGreater(self.decision(1500).exposure_us, 1000)
-
-    def test_range_default_is_not_used_as_exposure_step(self) -> None:
-        self.exposure_range = (30, 15_000_000, 10_000)
-        decision = self.decision(500, exposure=1000)
-        self.assertEqual(2000, decision.exposure_us)
-
-    def test_gain_uses_ratio_not_range_default_as_step(self) -> None:
-        self.exposure_range = (30, 15_000_000, 10_000)
-        self.gain_range = (100, 800, 100)
-        decision = self.decision(2048 / 1.5, exposure=15_000_000, gain=100)
-        self.assertEqual(150, decision.gain_percent)
-
-    def test_deadband_and_exact_target_make_no_adjustment(self) -> None:
-        self.assertFalse(self.decision(2000).adjusted)
-        self.assertFalse(self.decision(2048).adjusted)
-
-    def test_bright_frame_decreases_exposure_at_nominal_gain(self) -> None:
-        decision = self.decision(3000)
-        self.assertLess(decision.exposure_us, 1000)
-        self.assertEqual(100, decision.gain_percent)
-
-    def test_exposure_max_then_dark_increases_gain(self) -> None:
-        decision = self.decision(500, exposure=10_000, gain=100)
-        self.assertEqual(10_000, decision.exposure_us)
-        self.assertGreater(decision.gain_percent, 100)
-
-    def test_bright_frame_reduces_gain_before_exposure(self) -> None:
-        decision = self.decision(3000, exposure=5000, gain=200)
-        self.assertEqual(5000, decision.exposure_us)
-        self.assertLess(decision.gain_percent, 200)
-        self.assertGreaterEqual(decision.gain_percent, 100)
-
-    def test_auto_once_requires_two_consecutive_deadband_frames(self) -> None:
-        self.ae.start_once()
-        first = self.decision(2048)
-        second = self.decision(2000)
-        self.assertFalse(first.converged)
-        self.assertTrue(second.converged)
-        self.assertEqual(SoftwareAutoExposureMode.MANUAL, self.ae.mode)
-
-    def test_target_change_applies_to_next_decision(self) -> None:
-        self.ae.set_target_percent(40)
-        decision = self.decision(1638)
-        self.assertEqual(1638, decision.target_dn)
-        self.assertFalse(decision.adjusted)
 
 
 if __name__ == "__main__":

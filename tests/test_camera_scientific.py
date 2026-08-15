@@ -7,10 +7,9 @@ from unittest.mock import patch
 import numpy as np
 from PySide6.QtGui import QImage
 
-from gui.camera_controller import CameraController
+from gui.camera_controller import CameraController, SDKAutoExposureMode
 from gui.measurement_output import scientific_to_visualization
 from gui.sdk import nncam
-from gui.software_auto_exposure import SoftwareAutoExposureMode
 from tests.qt_test_utils import ensure_qapplication
 
 
@@ -45,6 +44,11 @@ class _FakeMonoCamera:
             nncam.NNCAM_OPTION_RAW: 0,
             nncam.NNCAM_OPTION_ISP: 0,
             nncam.NNCAM_OPTION_PIXEL_FORMAT: nncam.NNCAM_PIXELFORMAT_RAW12,
+            nncam.NNCAM_OPTION_AUTOEXP_POLICY: 1,
+            nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT: 100,
+            nncam.NNCAM_OPTION_AUTOEXP_EXPOTIME_DAMP: 0,
+            nncam.NNCAM_OPTION_AUTOEXP_GAIN_DAMP: 0,
+            nncam.NNCAM_OPTION_OVEREXP_POLICY: 0,
         }
         self.unsupported_options = set(unsupported_options or ())
         self.readback_overrides = dict(readback_overrides or {})
@@ -55,6 +59,7 @@ class _FakeMonoCamera:
         self.pull_bits: list[int] = []
         self.auto_exposure_calls: list[tuple[str, int] | tuple[str]] = []
         self.auto_exposure_target = 99
+        self.auto_exposure_enable = 0
         self.exposure_us = 1000
         self.gain_percent = 100
         self.exposure_writes: list[int] = []
@@ -90,12 +95,26 @@ class _FakeMonoCamera:
 
     def put_AutoExpoEnable(self, enabled: int) -> None:
         self.auto_exposure_calls.append(("enable", enabled))
+        self.auto_exposure_enable = enabled
+
+    def get_AutoExpoEnable(self) -> int:
+        self.auto_exposure_calls.append(("enable_readback",))
+        return self.auto_exposure_enable
 
     def get_ExpTimeRange(self):
         return 100, 10_000, 100
 
     def get_ExpoAGainRange(self):
         return 100, 800, 100
+
+    def get_AutoExpoRange(self):
+        return 350_000, 100, 500, 100
+
+    def get_MinAutoExpoTimeAGain(self):
+        return 100, 100
+
+    def get_MaxAutoExpoTimeAGain(self):
+        return 350_000, 500
 
     def get_ExpoTime(self) -> int:
         return self.exposure_us
@@ -180,7 +199,10 @@ class MonoScientificCameraTests(unittest.TestCase):
         controller, errors = _open(camera)
         try:
             self.assertTrue(controller.is_open, errors)
-            self.assertEqual([("enable", 0)], camera.auto_exposure_calls)
+            self.assertIn(("target", 128), camera.auto_exposure_calls)
+            self.assertIn(("target_readback",), camera.auto_exposure_calls)
+            self.assertIn(("enable", 1), camera.auto_exposure_calls)
+            self.assertIn(("enable_readback",), camera.auto_exposure_calls)
             self.assertNotIn((nncam.NNCAM_OPTION_BYTEORDER, 0), camera.options)
             metadata = controller.capture_metadata()
             self.assertEqual(1, metadata["ByteOrderReadback"])
@@ -308,6 +330,26 @@ class MonoScientificCameraTests(unittest.TestCase):
         finally:
             controller.close_camera()
 
+    def test_unsupported_sdk_ae_policy_is_nonfatal(self) -> None:
+        camera = _FakeMonoCamera(
+            unsupported_options={nncam.NNCAM_OPTION_AUTOEXP_POLICY}
+        )
+        controller, errors = _open(camera)
+        try:
+            self.assertTrue(controller.is_open, errors)
+            metadata = controller.capture_metadata()
+            self.assertIsNone(metadata["SDKAutoExposurePolicy"])
+            self.assertEqual(100, metadata["SDKAutoExposurePercent"])
+            self.assertEqual(0, metadata["SDKAutoExposureExposureDamping"])
+            self.assertEqual(0, metadata["SDKAutoExposureGainDamping"])
+            self.assertEqual(0, metadata["SDKOverexposurePolicy"])
+            self.assertEqual(100, metadata["AutoExposureMinExposure"])
+            self.assertEqual(350_000, metadata["AutoExposureMaxExposure"])
+            self.assertEqual(100, metadata["AutoExposureMinGain"])
+            self.assertEqual(500, metadata["AutoExposureMaxGain"])
+        finally:
+            controller.close_camera()
+
     def test_max_bit_depth_failure_uses_raw12_capability(self) -> None:
         camera = _FakeMonoCamera(max_bit_depth=RuntimeError("readback failed"))
         with self.assertLogs("gui.camera_controller", level="WARNING") as captured:
@@ -381,16 +423,15 @@ class MonoScientificCameraTests(unittest.TestCase):
         np.testing.assert_array_equal(before, source)
         self.assertEqual(255, int(display[0, -1]))
 
-    def test_known_alignment_frame_drives_mean_and_software_ae(self) -> None:
+    def test_severe_overexposure_is_monitored_without_software_actuation(self) -> None:
         camera = _FakeMonoCamera(max_bit_depth=12)
         controller, errors = _open(camera)
         try:
             self.assertTrue(controller.is_open, errors)
             controller._raw_value_alignment = "right"
             controller._raw_value_alignment_source = "TestAuthoritative"
-            controller._software_auto_exposure.start_continuous()
             expected = _install_frame(
-                controller, np.full((2, 3), 500, dtype=np.uint16)
+                controller, np.full((2, 3), 4080, dtype=np.uint16)
             )
             statuses = []
             frames = []
@@ -401,22 +442,26 @@ class MonoScientificCameraTests(unittest.TestCase):
 
             controller._pull_live_frame()
 
-            self.assertEqual([2000], camera.exposure_writes)
+            self.assertEqual([], camera.exposure_writes)
             self.assertEqual([], camera.gain_writes)
-            self.assertEqual(500.0, statuses[-1]["MeanEffectiveDN"])
+            self.assertEqual(4080.0, statuses[-1]["MeanEffectiveDN"])
             self.assertEqual(4095, statuses[-1]["EffectiveDNMax"])
             np.testing.assert_array_equal(expected, frames[-1])
-            self.assertEqual(500, int(frames[-1][0, 0]))
+            self.assertEqual(4080, int(frames[-1][0, 0]))
         finally:
             controller.close_camera()
 
-    def test_runtime_right_verification_starts_requested_continuous_dn_ae(self) -> None:
+    def test_runtime_alignment_is_decoupled_from_native_continuous_ae(self) -> None:
         camera = _FakeMonoCamera(max_bit_depth=12)
         controller, errors = _open(camera)
         try:
             self.assertTrue(controller.is_open, errors)
             self.assertEqual("unknown", controller._raw_value_alignment)
-            self.assertFalse(controller._software_auto_exposure.is_active)
+            self.assertEqual(
+                SDKAutoExposureMode.CONTINUOUS,
+                controller._sdk_auto_exposure_mode,
+            )
+            self.assertEqual(1, camera.auto_exposure_enable)
             values = [0, 1, 2, 3, 15, 16, 31, 255, 1023, 2048, 4095]
             alignment_frame = np.resize(
                 np.asarray(values, dtype=np.uint16), (200, 200)
@@ -428,10 +473,11 @@ class MonoScientificCameraTests(unittest.TestCase):
             self.assertEqual("RuntimeVerified", controller._raw_value_alignment_source)
             self.assertEqual(4095, controller._effective_dn_max)
             self.assertEqual(
-                SoftwareAutoExposureMode.CONTINUOUS_DN,
-                controller._software_auto_exposure.mode,
+                SDKAutoExposureMode.CONTINUOUS,
+                controller._sdk_auto_exposure_mode,
             )
-            self.assertEqual(("enable", 0), camera.auto_exposure_calls[-1])
+            self.assertEqual(1, camera.auto_exposure_enable)
+            self.assertNotIn(("enable", 0), camera.auto_exposure_calls)
 
             statuses = []
             controller.effective_dn_status_changed.connect(statuses.append)

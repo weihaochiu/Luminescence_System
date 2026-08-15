@@ -368,9 +368,9 @@ def begin_el_matrix_measurement(self: Any) -> None:
     )
     if answer != QMessageBox.StandardButton.Ok:
         return
-    # Formal Recipe capture owns Exposure/Gain. Stop operator Live View DN AE
-    # before the snapshot and before any measurement camera configuration.
-    if not self.controller.stop_software_auto_exposure():
+    # Formal Recipe capture owns Exposure/Gain. Disable native SDK AE and
+    # require an authoritative OFF readback before any camera configuration.
+    if not self.controller.disable_auto_exposure_for_formal_measurement():
         QMessageBox.warning(
             self,
             "EL Matrix 無法開始",
