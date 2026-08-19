@@ -33,6 +33,7 @@ from .scientific_dn import (
     effective_dn_max,
     effective_dn_to_uint8,
     mean_effective_dn,
+    mean_effective_dn_roi,
 )
 from .scientific_dn_alignment import (
     AlignmentVerificationState,
@@ -121,7 +122,15 @@ class CameraController(QObject):
         self._gain_range: tuple[int, int, int] | None = None
         self._latest_mean_effective_dn: float | None = None
         self._latest_effective_dn_fraction: float | None = None
+        self._latest_metering_mean_effective_dn: float | None = None
+        self._latest_metering_effective_dn_fraction: float | None = None
         self._effective_dn_max: int | None = None
+        self._auto_exposure_roi_requested: tuple[int, int, int, int] | None = None
+        self._auto_exposure_roi_readback: tuple[int, int, int, int] | None = None
+        self._auto_exposure_roi_mode = "Unavailable"
+        self._auto_exposure_roi_verified = False
+        self._auto_exposure_roi_verification_status = "Disconnected"
+        self._auto_exposure_roi_error = ""
         self._latest_image: QImage | None = None
         self._status_query_failed = False
         self._frame_sequence = 0
@@ -182,6 +191,32 @@ class CameraController(QObject):
     @property
     def frame_sequence(self) -> int:
         return self._frame_sequence
+
+    @property
+    def auto_exposure_roi(self) -> tuple[int, int, int, int] | None:
+        """Return the requested image-pixel AE metering rectangle."""
+
+        return self._auto_exposure_roi_requested
+
+    @property
+    def auto_exposure_roi_readback(self) -> tuple[int, int, int, int] | None:
+        """Return the SDK readback rectangle, if readback succeeded."""
+
+        return self._auto_exposure_roi_readback
+
+    @property
+    def auto_exposure_roi_verified(self) -> bool:
+        return self._auto_exposure_roi_verified
+
+    def auto_exposure_roi_status(self) -> dict[str, Any]:
+        return {
+            "requested": self._auto_exposure_roi_requested,
+            "readback": self._auto_exposure_roi_readback,
+            "mode": self._auto_exposure_roi_mode,
+            "verified": self._auto_exposure_roi_verified,
+            "verification_status": self._auto_exposure_roi_verification_status,
+            "error": self._auto_exposure_roi_error,
+        }
 
     @property
     def temperature_supported(self) -> bool:
@@ -310,9 +345,19 @@ class CameraController(QObject):
             self._exposure_range = capabilities.get("exposure_range_us")
             self._gain_range = capabilities.get("gain_range")
             self._auto_exposure_range = capabilities.get("auto_exposure_range")
+            # The SDK can retain an old/native-default metering rectangle.
+            # Force an explicit full-current-image rectangle and verify it
+            # before any Continuous AE is enabled.
+            self._disable_sdk_auto_exposure(require_readback=True)
+            ae_roi_ready = self._apply_auto_exposure_roi(
+                (0, 0, self._width, self._height),
+                reason="AE_ROI_RESET_FULL_IMAGE",
+                refresh_profile=False,
+                emit_status=False,
+            )
             self._refresh_ae_calibration_profile()
             self._configure_sdk_auto_exposure_parameters(camera)
-            if self._continuous_auto_exposure_requested:
+            if self._continuous_auto_exposure_requested and ae_roi_ready:
                 self._enable_sdk_auto_exposure(SDKAutoExposureMode.CONTINUOUS)
             else:
                 self._disable_sdk_auto_exposure(require_readback=True)
@@ -335,6 +380,14 @@ class CameraController(QObject):
                 ),
                 "auto_exposure_target_percent": self._auto_exposure_target_percent,
                 "sdk_auto_exposure_available": True,
+                "auto_exposure_roi_requested": self._auto_exposure_roi_requested,
+                "auto_exposure_roi_readback": self._auto_exposure_roi_readback,
+                "auto_exposure_roi_mode": self._auto_exposure_roi_mode,
+                "auto_exposure_roi_verified": self._auto_exposure_roi_verified,
+                "auto_exposure_roi_verification_status": (
+                    self._auto_exposure_roi_verification_status
+                ),
+                "auto_exposure_roi_error": self._auto_exposure_roi_error,
                 "sdk_auto_exposure_target": self._sdk_auto_exposure_target,
                 "sdk_auto_exposure_target_readback": (
                     self._sdk_auto_exposure_target_readback
@@ -418,7 +471,11 @@ class CameraController(QObject):
             if current is not None:
                 self.exposure_changed.emit(*current)
             self._camera_status_timer.start()
-            if self._alignment_verifier is not None:
+            if not self._auto_exposure_roi_verified:
+                self.status_changed.emit(
+                    "相機已連線，但 SDK AE 全畫面測光區驗證失敗；Auto Exposure 維持關閉"
+                )
+            elif self._alignment_verifier is not None:
                 self.status_changed.emit("正在確認相機 DN alignment…")
             else:
                 self.status_changed.emit(f"已連線：{device.displayname}")
@@ -468,7 +525,15 @@ class CameraController(QObject):
         self._gain_range = None
         self._latest_mean_effective_dn = None
         self._latest_effective_dn_fraction = None
+        self._latest_metering_mean_effective_dn = None
+        self._latest_metering_effective_dn_fraction = None
         self._effective_dn_max = None
+        self._auto_exposure_roi_requested = None
+        self._auto_exposure_roi_readback = None
+        self._auto_exposure_roi_mode = "Unavailable"
+        self._auto_exposure_roi_verified = False
+        self._auto_exposure_roi_verification_status = "Disconnected"
+        self._auto_exposure_roi_error = ""
         self._latest_image = None
         self._status_query_failed = False
         self._frame_sequence = 0
@@ -517,14 +582,219 @@ class CameraController(QObject):
             self._camera.put_eSize(index)
             resolution = self._device.model.res[index]
             self._width, self._height = resolution.width, resolution.height
-            self._start_stream()
+            self._latest_mean_effective_dn = None
+            self._latest_effective_dn_fraction = None
+            self._latest_metering_mean_effective_dn = None
+            self._latest_metering_effective_dn_fraction = None
+            ae_roi_ready = self._apply_auto_exposure_roi(
+                (0, 0, self._width, self._height),
+                reason="AE_ROI_RESET_RESOLUTION_CHANGE",
+                refresh_profile=False,
+                emit_status=False,
+            )
             self._refresh_ae_calibration_profile()
-            if previous_mode is not SDKAutoExposureMode.MANUAL:
+            if previous_mode is not SDKAutoExposureMode.MANUAL and ae_roi_ready:
                 self._configure_sdk_auto_exposure_parameters(self._camera)
                 self._enable_sdk_auto_exposure(previous_mode)
+            self._start_stream()
+            self._emit_effective_dn_status()
+            if not ae_roi_ready:
+                self.error_occurred.emit(
+                    "解析度切換後的全畫面 AE ROI readback 驗證失敗；"
+                    "Live View 可繼續使用，但 SDK Auto Exposure 維持關閉。"
+                )
             self.status_changed.emit(f"解析度：{self._width} × {self._height}")
         except Exception as exc:
             self.error_occurred.emit(self._format_error("切換解析度失敗", exc))
+
+    def set_auto_exposure_roi(
+        self, x: int, y: int, width: int, height: int
+    ) -> bool:
+        """Set and verify the SDK AE metering ROI in image-pixel coordinates."""
+
+        if self._ae_calibration_run is not None:
+            self._abort_ae_calibration("AE ROI 已變更，進行中的 AE Calibration 已取消")
+        verified = self._apply_auto_exposure_roi(
+            (x, y, width, height),
+            reason="AE_ROI_SET",
+        )
+        if not verified:
+            self.error_occurred.emit(
+                "Auto Exposure ROI 驗證失敗；Scientific ROI 顯示仍保留，"
+                f"SDK AE 未使用此 ROI。{self._auto_exposure_roi_error}"
+            )
+        return verified
+
+    def reset_auto_exposure_roi(
+        self, *, reason: str = "AE_ROI_RESET_FULL_IMAGE"
+    ) -> bool:
+        """Set and verify an explicit full-current-image SDK AE rectangle."""
+
+        if self._width <= 0 or self._height <= 0:
+            self._set_auto_exposure_roi_failure(
+                None,
+                "InvalidImageSize",
+                reason,
+                "current image dimensions are unavailable",
+            )
+            return False
+        if self._ae_calibration_run is not None:
+            self._abort_ae_calibration("AE ROI 已重設，進行中的 AE Calibration 已取消")
+        verified = self._apply_auto_exposure_roi(
+            (0, 0, self._width, self._height),
+            reason=reason,
+        )
+        if not verified:
+            self.error_occurred.emit(
+                "Auto Exposure 全畫面測光區驗證失敗；SDK AE 維持關閉。"
+                f"{self._auto_exposure_roi_error}"
+            )
+        return verified
+
+    def _validate_auto_exposure_roi(
+        self, roi: tuple[int, int, int, int]
+    ) -> tuple[int, int, int, int]:
+        if any(isinstance(value, bool) or not isinstance(value, int) for value in roi):
+            raise ValueError("AE ROI coordinates and dimensions must be integers")
+        x, y, width, height = roi
+        if x < 0 or y < 0 or width <= 0 or height <= 0:
+            raise ValueError("AE ROI requires x/y >= 0 and width/height > 0")
+        if x + width > self._width or y + height > self._height:
+            raise ValueError(
+                f"AE ROI {roi} exceeds current image {self._width}x{self._height}"
+            )
+        return roi
+
+    def _apply_auto_exposure_roi(
+        self,
+        roi: tuple[int, int, int, int],
+        *,
+        reason: str,
+        refresh_profile: bool = True,
+        emit_status: bool = True,
+    ) -> bool:
+        requested: tuple[int, int, int, int] | None = None
+        try:
+            requested = self._validate_auto_exposure_roi(roi)
+        except (TypeError, ValueError) as exc:
+            self._set_auto_exposure_roi_failure(
+                requested or roi, "InvalidROI", "AE_ROI_VERIFY_FAILED", str(exc)
+            )
+            if emit_status:
+                self._emit_effective_dn_status()
+            return False
+        self._auto_exposure_roi_requested = requested
+        self._auto_exposure_roi_readback = None
+        self._auto_exposure_roi_mode = (
+            "FullImage"
+            if requested == (0, 0, self._width, self._height)
+            else "CustomROI"
+        )
+        self._auto_exposure_roi_verified = False
+        self._auto_exposure_roi_verification_status = "Pending"
+        self._auto_exposure_roi_error = ""
+        if self._camera is None:
+            self._set_auto_exposure_roi_failure(
+                requested, "CameraDisconnected", "AE_ROI_WRITE_FAILED", "camera is not connected"
+            )
+            if emit_status:
+                self._emit_effective_dn_status()
+            return False
+
+        previous_mode = self._sdk_auto_exposure_mode
+        if previous_mode is not SDKAutoExposureMode.MANUAL:
+            try:
+                self._disable_sdk_auto_exposure(require_readback=True)
+            except Exception as exc:
+                self._set_auto_exposure_roi_failure(
+                    requested, "DisableAEFailed", "AE_ROI_WRITE_FAILED", str(exc)
+                )
+                if emit_status:
+                    self._emit_effective_dn_status()
+                return False
+        try:
+            self._camera.put_AEAuxRect(*requested)
+        except Exception as exc:
+            self._set_auto_exposure_roi_failure(
+                requested, "WriteFailed", "AE_ROI_WRITE_FAILED", str(exc)
+            )
+            if emit_status:
+                self._emit_effective_dn_status()
+            return False
+        try:
+            readback = tuple(int(value) for value in self._camera.get_AEAuxRect())
+        except Exception as exc:
+            self._set_auto_exposure_roi_failure(
+                requested, "ReadbackFailed", "AE_ROI_READBACK_FAILED", str(exc)
+            )
+            if emit_status:
+                self._emit_effective_dn_status()
+            return False
+        self._auto_exposure_roi_readback = readback
+        if readback != requested:
+            self._set_auto_exposure_roi_failure(
+                requested,
+                "ReadbackMismatch",
+                "AE_ROI_VERIFY_FAILED",
+                f"requested={requested} readback={readback}",
+            )
+            if emit_status:
+                self._emit_effective_dn_status()
+            return False
+
+        self._auto_exposure_roi_verified = True
+        self._auto_exposure_roi_verification_status = "Verified"
+        self._auto_exposure_roi_error = ""
+        LOG.info(
+            "%s requested=%s readback=%s verified=True",
+            reason,
+            requested,
+            readback,
+        )
+        if refresh_profile:
+            self._refresh_ae_calibration_profile()
+        if previous_mode is not SDKAutoExposureMode.MANUAL:
+            try:
+                self._configure_sdk_auto_exposure_parameters(self._camera)
+                self._enable_sdk_auto_exposure(previous_mode)
+            except Exception as exc:
+                self._set_auto_exposure_roi_failure(
+                    requested, "RestoreAEFailed", "AE_ROI_VERIFY_FAILED", str(exc)
+                )
+                if emit_status:
+                    self._emit_effective_dn_status()
+                return False
+        if emit_status:
+            self._emit_effective_dn_status()
+        return True
+
+    def _set_auto_exposure_roi_failure(
+        self,
+        requested: tuple[int, int, int, int] | None,
+        status: str,
+        log_event: str,
+        error: str,
+    ) -> None:
+        if requested is not None:
+            self._auto_exposure_roi_requested = requested
+            self._auto_exposure_roi_mode = (
+                "FullImage"
+                if requested == (0, 0, self._width, self._height)
+                else "CustomROI"
+            )
+        self._auto_exposure_roi_verified = False
+        self._auto_exposure_roi_verification_status = status
+        self._auto_exposure_roi_error = str(error)
+        self._latest_metering_mean_effective_dn = None
+        self._latest_metering_effective_dn_fraction = None
+        self._ae_calibration_profile = None
+        LOG.error(
+            "%s requested=%s readback=%s verified=False error=%s",
+            log_event,
+            requested,
+            self._auto_exposure_roi_readback,
+            error,
+        )
 
     def set_manual_exposure(self, exposure_us: int, gain: int) -> None:
         if self._camera is None:
@@ -635,6 +905,8 @@ class CameraController(QObject):
             or self._height <= 0
             or self._sensor_bit_depth is None
             or self._raw_value_alignment not in {"right", "left"}
+            or not self._auto_exposure_roi_verified
+            or self._auto_exposure_roi_readback is None
         ):
             return None
         model = str(getattr(getattr(self._device, "model", None), "name", ""))
@@ -645,6 +917,7 @@ class CameraController(QObject):
             height=self._height,
             sensor_bit_depth=self._sensor_bit_depth,
             raw_value_alignment=self._raw_value_alignment,
+            ae_roi=self._auto_exposure_roi_readback,
             sdk_ae_policy=1,
             sdk_autoexposure_percent=100,
         )
@@ -679,6 +952,8 @@ class CameraController(QObject):
             unavailable_reason = "SensorBitDepth 尚未確認"
         elif self._raw_value_alignment not in {"right", "left"}:
             unavailable_reason = "等待 DN alignment 確認完成後才能執行 AE calibration。"
+        elif not self._auto_exposure_roi_verified:
+            unavailable_reason = "AE 測光 ROI 尚未通過 SDK readback 驗證。"
         elif self._camera is None:
             unavailable_reason = "請先連線相機"
         else:
@@ -707,6 +982,9 @@ class CameraController(QObject):
             ),
             "sensor_bit_depth": self._sensor_bit_depth,
             "raw_value_alignment": self._raw_value_alignment,
+            "ae_roi": (
+                identity.ae_roi if identity is not None else self._auto_exposure_roi_readback
+            ),
             "profile_id": profile.profile_id if profile is not None else None,
             "created_at": profile.created_at if profile is not None else None,
             "target_mapping": dict(profile.target_mapping) if profile is not None else {},
@@ -757,7 +1035,8 @@ class CameraController(QObject):
                 )
             if self._sdk_auto_exposure_percent_readback != 100:
                 raise RuntimeError(
-                    "NNCAM_OPTION_AUTOEXPOSURE_PERCENT must read back full-frame average (100)"
+                    "NNCAM_OPTION_AUTOEXPOSURE_PERCENT must read back "
+                    "full active AE ROI average (100)"
                 )
             self._start_next_ae_calibration_point()
             return True
@@ -806,11 +1085,11 @@ class CameraController(QObject):
             "state": state,
             "exposure_us": current[0] if current is not None else None,
             "gain_percent": current[1] if current is not None else None,
-            "mean_effective_dn": self._latest_mean_effective_dn,
+            "mean_effective_dn": self._latest_metering_mean_effective_dn,
             "effective_dn_max": self._effective_dn_max,
             "mean_effective_dn_percent": (
-                self._latest_effective_dn_fraction * 100.0
-                if self._latest_effective_dn_fraction is not None
+                self._latest_metering_effective_dn_fraction * 100.0
+                if self._latest_metering_effective_dn_fraction is not None
                 else None
             ),
             "estimated_remaining_seconds": run.estimated_remaining_seconds(),
@@ -845,10 +1124,10 @@ class CameraController(QObject):
             return
         current = self._read_current_exposure(self._camera)
         point = run.record_point(
-            mean_effective_dn=self._latest_mean_effective_dn,
+            mean_effective_dn=self._latest_metering_mean_effective_dn,
             mean_effective_dn_percent=(
-                self._latest_effective_dn_fraction * 100.0
-                if self._latest_effective_dn_fraction is not None
+                self._latest_metering_effective_dn_fraction * 100.0
+                if self._latest_metering_effective_dn_fraction is not None
                 else None
             ),
             exposure_us=current[0] if current is not None else None,
@@ -867,10 +1146,10 @@ class CameraController(QObject):
         self._ae_calibration_timer.stop()
         current = self._read_current_exposure(self._camera)
         point = run.record_point(
-            mean_effective_dn=self._latest_mean_effective_dn,
+            mean_effective_dn=self._latest_metering_mean_effective_dn,
             mean_effective_dn_percent=(
-                self._latest_effective_dn_fraction * 100.0
-                if self._latest_effective_dn_fraction is not None
+                self._latest_metering_effective_dn_fraction * 100.0
+                if self._latest_metering_effective_dn_fraction is not None
                 else None
             ),
             exposure_us=current[0] if current is not None else None,
@@ -1077,6 +1356,10 @@ class CameraController(QObject):
     def _enable_sdk_auto_exposure(self, mode: SDKAutoExposureMode) -> None:
         if self._camera is None:
             raise RuntimeError("Camera is not connected")
+        if not self._auto_exposure_roi_verified:
+            raise RuntimeError(
+                "SDK AE cannot be enabled until AEAuxRect readback is verified"
+            )
         if mode not in {SDKAutoExposureMode.CONTINUOUS, SDKAutoExposureMode.ONCE}:
             raise ValueError("SDK AE enable mode must be Continuous or Once")
         enable_value = 1 if mode is SDKAutoExposureMode.CONTINUOUS else 2
@@ -1135,7 +1418,9 @@ class CameraController(QObject):
             "SDKAutoExposureTargetReadback=%s SDKAutoExposureMode=%s "
             "AutoExposureCalibrationApplied=%s CalibrationProfileId=%s "
             "ExposureReadbackUs=%s GainReadback=%s MeanEffectiveDN=%s "
-            "MeanEffectiveDNPercent=%s Alignment=%s",
+            "MeanEffectiveDNPercent=%s MeteringMeanEffectiveDN=%s "
+            "MeteringMeanEffectiveDNPercent=%s AEROI=%s AEROIVerified=%s "
+            "Alignment=%s",
             datetime.now().astimezone().isoformat(timespec="milliseconds"),
             reason,
             self._auto_exposure_target_percent,
@@ -1158,6 +1443,14 @@ class CameraController(QObject):
                 if self._latest_effective_dn_fraction is not None
                 else None
             ),
+            self._latest_metering_mean_effective_dn,
+            (
+                self._latest_metering_effective_dn_fraction * 100.0
+                if self._latest_metering_effective_dn_fraction is not None
+                else None
+            ),
+            self._auto_exposure_roi_readback,
+            self._auto_exposure_roi_verified,
             self._raw_value_alignment,
         )
 
@@ -1465,7 +1758,7 @@ class CameraController(QObject):
             "min gain = %s %%, max gain = %s %%\n"
             "Auto Exposure Controller/mode/user target: RisingCamSDK/%s/%s %%\n"
             "SDK Auto Exposure target requested/readback: %s/%s\n"
-            "SDK Auto Exposure policy/full-frame percent: %s/%s\n"
+            "SDK Auto Exposure policy/full-active-AE-ROI percent: %s/%s\n"
             "SDK Auto Exposure exposure/gain damping: %s/%s\n"
             "SDK Overexposure policy: %s",
             info.get("model") or info.get("name") or "--",
@@ -1806,10 +2099,10 @@ class CameraController(QObject):
                     run = self._ae_calibration_run
                     current = self._read_current_exposure(self._camera)
                     point = run.record_point(
-                        mean_effective_dn=self._latest_mean_effective_dn,
+                        mean_effective_dn=self._latest_metering_mean_effective_dn,
                         mean_effective_dn_percent=(
-                            self._latest_effective_dn_fraction * 100.0
-                            if self._latest_effective_dn_fraction is not None
+                            self._latest_metering_effective_dn_fraction * 100.0
+                            if self._latest_metering_effective_dn_fraction is not None
                             else None
                         ),
                         exposure_us=current[0] if current is not None else None,
@@ -1993,6 +2286,29 @@ class CameraController(QObject):
                     self._latest_mean_effective_dn,
                     self._effective_dn_max,
                 )
+                if (
+                    self._auto_exposure_roi_verified
+                    and self._auto_exposure_roi_readback is not None
+                ):
+                    if self._auto_exposure_roi_mode == "FullImage":
+                        self._latest_metering_mean_effective_dn = (
+                            self._latest_mean_effective_dn
+                        )
+                    else:
+                        self._latest_metering_mean_effective_dn = mean_effective_dn_roi(
+                            scientific,
+                            self._sensor_bit_depth,
+                            16,
+                            self._raw_value_alignment,
+                            *self._auto_exposure_roi_readback,
+                        )
+                    self._latest_metering_effective_dn_fraction = effective_dn_fraction(
+                        self._latest_metering_mean_effective_dn,
+                        self._effective_dn_max,
+                    )
+                else:
+                    self._latest_metering_mean_effective_dn = None
+                    self._latest_metering_effective_dn_fraction = None
                 display = effective_dn_to_uint8(
                     scientific,
                     self._sensor_bit_depth,
@@ -2007,6 +2323,8 @@ class CameraController(QObject):
                 )
                 self._latest_mean_effective_dn = None
                 self._latest_effective_dn_fraction = None
+                self._latest_metering_mean_effective_dn = None
+                self._latest_metering_effective_dn_fraction = None
                 # Fail-closed visualization fallback: preserve the prior fixed
                 # uint16-container mapping and never infer alignment from pixels.
                 display = np.clip(
@@ -2021,13 +2339,13 @@ class CameraController(QObject):
             if (
                 calibration_run is not None
                 and calibration_state == "waiting_convergence"
-                and self._latest_effective_dn_fraction is not None
+                and self._latest_metering_effective_dn_fraction is not None
             ):
                 current = self._read_current_exposure(self._camera)
                 if current is not None and calibration_run.observe_stability(
                     current[0],
                     current[1],
-                    self._latest_effective_dn_fraction * 100.0,
+                    self._latest_metering_effective_dn_fraction * 100.0,
                 ):
                     self._mark_ae_calibration_converged("StableFrameFallback")
                 else:
@@ -2093,6 +2411,20 @@ class CameraController(QObject):
                 if self._latest_effective_dn_fraction is not None
                 else None
             ),
+            "MeteringMeanEffectiveDN": self._latest_metering_mean_effective_dn,
+            "MeteringMeanEffectiveDNPercent": (
+                self._latest_metering_effective_dn_fraction * 100.0
+                if self._latest_metering_effective_dn_fraction is not None
+                else None
+            ),
+            "AutoExposureROIRequested": self._auto_exposure_roi_requested,
+            "AutoExposureROIReadback": self._auto_exposure_roi_readback,
+            "AutoExposureROIMode": self._auto_exposure_roi_mode,
+            "AutoExposureROIVerified": self._auto_exposure_roi_verified,
+            "AutoExposureROIVerificationStatus": (
+                self._auto_exposure_roi_verification_status
+            ),
+            "AutoExposureROIError": self._auto_exposure_roi_error,
             "AutoExposureTargetPercent": self._auto_exposure_target_percent,
             "AutoExposureTargetDN": target_dn,
             "SDKAutoExposureTarget": self._sdk_auto_exposure_target,

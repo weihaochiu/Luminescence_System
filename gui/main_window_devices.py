@@ -269,10 +269,9 @@ class MainWindowDeviceMixin:
         if info.get("exposure_us") is not None and info.get("gain") is not None:
             self.on_exposure_changed(info["exposure_us"], info["gain"])
 
-        sdk_ae_available = bool(info.get("sdk_auto_exposure_available", False))
         initial_mode = (
             ExposureMode.CONTINUOUS_AUTO
-            if info.get("continuous_auto_exposure_requested", sdk_ae_available)
+            if info.get("auto_exposure_mode") == "Continuous"
             else ExposureMode.MANUAL
         )
         self._active_exposure_mode = initial_mode
@@ -298,6 +297,18 @@ class MainWindowDeviceMixin:
                 self.controller.auto_exposure_target_percent,
             ),
             "AutoExposureTargetDN": None,
+            "AutoExposureROIRequested": info.get("auto_exposure_roi_requested"),
+            "AutoExposureROIReadback": info.get("auto_exposure_roi_readback"),
+            "AutoExposureROIMode": info.get(
+                "auto_exposure_roi_mode", "Unavailable"
+            ),
+            "AutoExposureROIVerified": info.get(
+                "auto_exposure_roi_verified", False
+            ),
+            "AutoExposureROIVerificationStatus": info.get(
+                "auto_exposure_roi_verification_status", "Unavailable"
+            ),
+            "AutoExposureROIError": info.get("auto_exposure_roi_error", ""),
         })
         self._set_camera_controls_enabled(True)
         self.temperature_monitor.start(
@@ -332,10 +343,16 @@ class MainWindowDeviceMixin:
         self.sensor_bit_depth_value.setText("--")
         self.raw_value_alignment_value.setText("Unknown")
         self.auto_exposure_target_dn_value.setText("無法判定")
+        self.live_view_ae_metering_value.setText("AE 測光：--")
+        self.live_view_ae_metering_value.setToolTip("")
 
     def change_resolution(self, index: int) -> None:
         if index >= 0 and self.controller.is_open:
             self.controller.set_resolution(index)
+            # Controller has already replaced the SDK rectangle with the new
+            # full image. Clear the old-resolution overlay immediately rather
+            # than waiting for the first new frame to arrive.
+            self.image_view.clear_roi()
 
     def change_exposure_mode(self, index: int) -> None:
         if index < 0:
@@ -416,6 +433,19 @@ class MainWindowDeviceMixin:
 
     def on_effective_dn_status_changed(self, status: dict[str, Any]) -> None:
         self._latest_effective_dn_status = dict(status)
+        if (
+            hasattr(self, "exposure_mode_combo")
+            and not bool(status.get("AutoExposureROIVerified", True))
+            and status.get("AutoExposureMode") == "Manual"
+            and getattr(self, "_active_exposure_mode", ExposureMode.MANUAL)
+            is ExposureMode.CONTINUOUS_AUTO
+        ):
+            # A failed AEAuxRect verification forces SDK AE off. Keep the
+            # exposure-mode UI from claiming Continuous while the controller
+            # is deliberately fail-closed in Manual.
+            self._active_exposure_mode = ExposureMode.MANUAL
+            self._set_exposure_mode_ui(ExposureMode.MANUAL)
+            self._update_exposure_control_state()
         sensor_bits = status.get("SensorBitDepth")
         alignment = str(status.get("RawValueAlignment", "unknown"))
         alignment_source = str(status.get("RawValueAlignmentSource", "Unknown"))
@@ -483,6 +513,7 @@ class MainWindowDeviceMixin:
         self.auto_exposure_target_dn_value.setToolTip(
             f"AE 控制器：RisingCam SDK\n{calibration_text}"
         )
+        MainWindowDeviceMixin._refresh_live_view_ae_metering_status(self, status)
         MainWindowDeviceMixin._refresh_live_view_roi_dn(self)
 
     def on_frame_ready(self, image: QImage) -> None:
@@ -526,6 +557,15 @@ class MainWindowDeviceMixin:
         self.live_view_roi_value.setToolTip(coordinate_text)
         MainWindowDeviceMixin._update_live_view_roi_controls(self)
         MainWindowDeviceMixin._refresh_live_view_roi_dn(self)
+        if not self.controller.set_auto_exposure_roi(x, y, width, height):
+            self.status_message.setText(
+                "Scientific ROI 已保留，但 SDK Auto Exposure ROI readback 驗證失敗。"
+            )
+
+    def clear_live_view_dn_roi(self) -> None:
+        if self.controller.is_open:
+            self.controller.reset_auto_exposure_roi()
+        self.image_view.clear_roi()
 
     def on_live_view_dn_roi_cleared(self) -> None:
         self._live_view_dn_roi = None
@@ -533,6 +573,39 @@ class MainWindowDeviceMixin:
         self.live_view_roi_value.setToolTip("")
         self.live_view_roi_dn_value.setText("ROI 平均 DN：--")
         MainWindowDeviceMixin._update_live_view_roi_controls(self)
+
+    def _refresh_live_view_ae_metering_status(
+        self, status: dict[str, Any]
+    ) -> None:
+        if not hasattr(self, "live_view_ae_metering_value"):
+            return
+        requested = status.get("AutoExposureROIRequested")
+        readback = status.get("AutoExposureROIReadback")
+        mode = str(status.get("AutoExposureROIMode", "Unavailable"))
+        verified = bool(status.get("AutoExposureROIVerified", False))
+        verification = str(
+            status.get("AutoExposureROIVerificationStatus", "Unavailable")
+        )
+        error = str(status.get("AutoExposureROIError", ""))
+        if verified and mode == "CustomROI":
+            text = "AE 測光：ROI ✓"
+        elif verified and mode == "FullImage":
+            text = "AE 測光：全畫面"
+        elif mode == "CustomROI":
+            text = "AE 測光：ROI 驗證失敗"
+        elif mode == "FullImage":
+            text = "AE 測光：全畫面驗證失敗"
+        else:
+            text = "AE 測光：--"
+        tooltip_lines = [
+            f"Requested: {requested}",
+            f"Readback: {readback}",
+            f"Status: {verification}",
+        ]
+        if error:
+            tooltip_lines.append(f"Error: {error}")
+        self.live_view_ae_metering_value.setText(text)
+        self.live_view_ae_metering_value.setToolTip("\n".join(tooltip_lines))
 
     def _update_live_view_roi_controls(self) -> None:
         if not hasattr(self, "select_dn_roi_button"):

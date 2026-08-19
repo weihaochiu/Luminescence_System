@@ -35,7 +35,13 @@ def point(sdk: int, percent: float, *, converged: bool = True) -> AECalibrationP
     )
 
 
-def identity(*, serial: str = "SERIAL-A", width: int = 3840, height: int = 2160):
+def identity(
+    *,
+    serial: str = "SERIAL-A",
+    width: int = 3840,
+    height: int = 2160,
+    ae_roi: tuple[int, int, int, int] | None = None,
+):
     return AECalibrationIdentity(
         camera_model="IUA8300KMB",
         camera_serial=serial,
@@ -43,6 +49,7 @@ def identity(*, serial: str = "SERIAL-A", width: int = 3840, height: int = 2160)
         height=height,
         sensor_bit_depth=12,
         raw_value_alignment="right",
+        ae_roi=ae_roi or (0, 0, width, height),
     )
 
 
@@ -134,10 +141,23 @@ class CameraAECalibrationTests(unittest.TestCase):
         store.replace(profile)
         self.assertIsNone(store.matching(identity(width=1920, height=1080)))
 
+    def test_profile_ae_roi_mismatch_does_not_apply(self) -> None:
+        store = AECalibrationProfileStore(None)
+        profile = build_calibration_profile(
+            identity(), full_curve(), sdk_minimum=16, sdk_maximum=220
+        )
+        store.replace(profile)
+        self.assertIsNone(
+            store.matching(identity(ae_roi=(100, 200, 800, 600)))
+        )
+
     def test_calibrated_20_percent_uses_profile_target_not_51(self) -> None:
         camera = FakeModeCamera()
         controller = configured_controller(camera)
         controller._width, controller._height = 3840, 2160
+        controller._auto_exposure_roi_requested = (0, 0, 3840, 2160)
+        controller._auto_exposure_roi_readback = (0, 0, 3840, 2160)
+        controller._auto_exposure_roi_mode = "FullImage"
         controller._device = SimpleNamespace(
             id="SERIAL-A",
             displayname="IUA8300KMB",
@@ -171,6 +191,9 @@ class CameraAECalibrationTests(unittest.TestCase):
         camera = FakeModeCamera()
         controller = configured_controller(camera)
         controller._width, controller._height = 3840, 2160
+        controller._auto_exposure_roi_requested = (0, 0, 3840, 2160)
+        controller._auto_exposure_roi_readback = (0, 0, 3840, 2160)
+        controller._auto_exposure_roi_mode = "FullImage"
         controller._device = SimpleNamespace(
             id="SERIAL-A",
             displayname="IUA8300KMB",
@@ -203,6 +226,9 @@ class CameraAECalibrationTests(unittest.TestCase):
         camera = FakeModeCamera()
         controller = configured_controller(camera)
         controller._width, controller._height = 3840, 2160
+        controller._auto_exposure_roi_requested = (0, 0, 3840, 2160)
+        controller._auto_exposure_roi_readback = (0, 0, 3840, 2160)
+        controller._auto_exposure_roi_mode = "FullImage"
         controller._device = SimpleNamespace(
             id="SERIAL-A",
             displayname="IUA8300KMB",

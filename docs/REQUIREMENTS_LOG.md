@@ -188,21 +188,23 @@
 - 影響模組：`camera_controller.py`、`camera_temperature_monitor.py`、`camera_temperature_chart.py`、`main_window*`、`image_io.py`、`hdr_output.py`。
 - 驗證：`tests/test_camera_temperature.py` 25 項專門測試與完整 suite 239 項全部通過；`python -m compileall .`、`git diff --check` 通過。
 
-### UI-CAM-DNROI-001－Live View Scientific DN ROI
+### UI-CAM-DNROI-001－Live View Scientific DN ROI／SDK AE Metering ROI
 
-- 狀態：已完成（2026-08-19；RisingCam 實機人工驗證待執行）。
+- 狀態：已完成（2026-08-19 AE metering scope correction）。
 - 提出日期：2026-08-19（UTC+8）。
 - 使用者原意：EL Live View 真正關注的通常是中央元件區域；whole-frame Mean DN 會包含大量黑色背景，因此使用者需要直接在 Live View 框選關注區域，並即時查看該區域的 Scientific Effective DN 平均值。
 - 詳細行為：只實作 `Live View → User ROI → Scientific Effective DN Mean → 即時顯示`。ROI 使用原始 image-pixel coordinates；相同解析度的新 frame 保留 ROI，解析度變更、影像清除或相機中斷時清除 ROI。數值只取自既有 `scientific_frame_ready` 的 `uint16 H×W` scientific frame，並沿用既有 Effective DN alignment interpretation。
 - 驗收條件：一般模式保留 ScrollHandDrag／wheel zoom／Fit to Window／Actual Size；選取模式完成後自動恢復平移。ROI overlay 只存在於 scene，不修改 QImage、scientific ndarray 或輸出像素。Alignment unknown 時顯示無法判定；左側 whole-frame MeanEffectiveDN 語意保持不變。
 - ROI coordinate contract：`(x, y, width, height)` 一律是原始 image-pixel integer coordinates，採 `scientific[y:y + height, x:x + width]`；負值、零尺寸與超界 ROI 明確拒絕。Fit／100%／zoom／pan 只改變 view transform，不改變 ROI 座標。
 - Scientific DN source：唯一來源是既有 `CameraController.scientific_frame_ready` 的 `uint16 H×W` scientific ndarray；MainWindow 只保留 latest frame reference，不 copy full frame，不使用 QImage／QPixmap／preview RGB／`equivalent_brightness_8bit()`。
-- Auto Exposure 邊界：目前 ROI 不控制 Auto Exposure；whole-frame `_latest_mean_effective_dn`、`_latest_effective_dn_fraction`、SDK AE calibration、target mapping／convergence 與 `NNCAM_OPTION_AUTOEXPOSURE_PERCENT=100` 均保持原語意。
-- 實際修改檔案：`docs/REQUIREMENTS_LOG.md`、`docs/PROGRAM_ARCHITECTURE.md`、`gui/scientific_dn.py`、`gui/widgets.py`、`gui/main_window.py`、`gui/main_window_ui.py`、`gui/main_window_devices.py`、`tests/test_live_view_dn_roi.py`；未修改 `gui/camera_controller.py`。
+- Auto Exposure 修正需求：同一個 user DN ROI 必須同時作為 Scientific Effective DN analysis ROI 與 RisingCam SDK Auto Exposure metering ROI；GUI 只能透過 `CameraController` public API 呼叫 `put_AEAuxRect()` 並以 `get_AEAuxRect()` 完整 readback 驗證。Clear、camera open 與 resolution change 必須明確恢復 `(0, 0, current_width, current_height)`。
+- SDK percent 語意：`NNCAM_OPTION_AUTOEXPOSURE_PERCENT=100` 必須保持不變；依 bundled SDK 定義，其語意為 full active AE ROI average。只有 active AE ROI 等於完整影像時，才等同 full-frame average。
+- Calibration／convergence 邊界：whole-frame `_latest_mean_effective_dn`、`_latest_effective_dn_fraction` 保持 diagnostic 語意；代表 SDK AE metering feedback 的判斷必須另用與 verified active AE ROI 一致的 Metering Mean Effective DN。Calibration profile 必須以 ROI geometry 隔離，禁止 full-image profile 無察覺地套用 custom ROI。
+- 實際修改檔案：本階段修改 `docs/REQUIREMENTS_LOG.md`、`docs/PROGRAM_ARCHITECTURE.md`、`gui/camera_ae_calibration.py`、`gui/camera_controller.py`、`gui/main_window_ui.py`、`gui/main_window_devices.py`、`tests/test_camera_ae_roi.py`、`tests/test_camera_ae_calibration.py`、`tests/test_camera_exposure.py`、`tests/test_camera_scientific.py`、`tests/test_live_view_dn_roi.py`；沿用前一階段未改寫的 `gui/scientific_dn.py::mean_effective_dn_roi()` 與 `gui/widgets.py::ImageView` image-pixel ROI／overlay。
 - 相容性／資料遷移：不保存 ROI；不變更 Recipe、measurement、metadata、影像輸出或 capture dimensions。
-- 安全風險：ROI 不控制 Continuous／Once／SDK Auto Exposure、AE calibration、SDKAutoExposureTarget、Recipe 或正式量測；`NNCAM_OPTION_AUTOEXPOSURE_PERCENT=100` 的 full-frame 語意保持不變。
-- 測試與驗證：`tests.test_live_view_dn_roi` 11/11；Scientific／Exposure／AE calibration／modular related tests 51/51；responsive／sidebar／toolbar 19/19；完整 `unittest discover -s tests -v` 334/334；`python -m compileall .` 與 `git diff --check` 通過。無實機 RisingCam，hardware manual validation pending，未宣稱完成 Pan／Zoom／背景與中央 EL 區 DN 差異、逐幀更新、disconnect／resolution change 或 AE 不變的實機驗收。
-- 完成版本：基於 V1.8.2 的 2026-08-19 增量。
+- 安全風險：只設定 AE metering rectangle，不得使用 acquisition/crop ROI，不得改變 full-resolution capture、輸出 pixels、Recipe、metadata 或正式量測流程。SDK write/readback failure 必須 fail closed 顯示驗證失敗，不可 silent fallback。
+- 測試與驗證：新增 `tests/test_camera_ae_roi.py` 14 項 controller／SDK AE ROI 專門測試，並擴充 `tests/test_live_view_dn_roi.py`、`tests/test_camera_ae_calibration.py`、`tests/test_camera_exposure.py`、`tests/test_camera_scientific.py`。Related suite 111 項通過；`python -m unittest discover -s tests -v` 共 352 項通過（0 failed、0 errors、0 skipped）；`python -m compileall .` 與 `git diff --check` 通過。RisingCam hardware validation：PENDING，未宣稱實機完成。
+- 完成版本：`Wire DN ROI to RisingCam AE metering`。
 - 取代或關聯需求：與 whole-frame Effective DN／SDK AE 分離，未取代既有曝光需求。
 
 ### UI-001－工具列一致性

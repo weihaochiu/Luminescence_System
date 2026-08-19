@@ -13,7 +13,9 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 
-CALIBRATION_SCHEMA_VERSION = 1
+# Version 2 makes AE ROI geometry part of profile identity. Version 1 profiles
+# were measured against an implicit full image and are intentionally ignored.
+CALIBRATION_SCHEMA_VERSION = 2
 CALIBRATION_CANDIDATES = (
     24,
     32,
@@ -57,6 +59,7 @@ class AECalibrationIdentity:
     height: int
     sensor_bit_depth: int
     raw_value_alignment: str
+    ae_roi: tuple[int, int, int, int]
     sdk_ae_policy: int = 1
     sdk_autoexposure_percent: int = 100
 
@@ -67,7 +70,11 @@ class AECalibrationIdentity:
     @property
     def key(self) -> str:
         camera = self.camera_serial.strip() or f"model-{self.camera_model.strip()}"
-        return f"camera/ae_calibration/{camera}/{self.resolution}"
+        x, y, width, height = self.ae_roi
+        return (
+            f"camera/ae_calibration/{camera}/{self.resolution}/"
+            f"roi-{x}-{y}-{width}-{height}"
+        )
 
     def matches(self, other: "AECalibrationIdentity") -> bool:
         if self.camera_serial.strip() or other.camera_serial.strip():
@@ -88,6 +95,7 @@ class AECalibrationIdentity:
             and self.height == other.height
             and self.sensor_bit_depth == other.sensor_bit_depth
             and self.raw_value_alignment == other.raw_value_alignment
+            and self.ae_roi == other.ae_roi
             and self.sdk_ae_policy == other.sdk_ae_policy
             and self.sdk_autoexposure_percent == other.sdk_autoexposure_percent
         )
@@ -150,6 +158,7 @@ class AECalibrationProfile:
     height: int
     sensor_bit_depth: int
     raw_value_alignment: str
+    ae_roi: tuple[int, int, int, int]
     sdk_ae_policy: int
     sdk_autoexposure_percent: int
     created_at: str
@@ -167,6 +176,7 @@ class AECalibrationProfile:
             height=self.height,
             sensor_bit_depth=self.sensor_bit_depth,
             raw_value_alignment=self.raw_value_alignment,
+            ae_roi=self.ae_roi,
             sdk_ae_policy=self.sdk_ae_policy,
             sdk_autoexposure_percent=self.sdk_autoexposure_percent,
         )
@@ -201,6 +211,7 @@ class AECalibrationProfile:
             height=int(payload["height"]),
             sensor_bit_depth=int(payload["sensor_bit_depth"]),
             raw_value_alignment=str(payload["raw_value_alignment"]),
+            ae_roi=tuple(int(value) for value in payload["ae_roi"]),
             sdk_ae_policy=int(payload.get("sdk_ae_policy", 1)),
             sdk_autoexposure_percent=int(payload.get("sdk_autoexposure_percent", 100)),
             created_at=str(payload["created_at"]),
@@ -310,6 +321,7 @@ def build_calibration_profile(
         height=identity.height,
         sensor_bit_depth=identity.sensor_bit_depth,
         raw_value_alignment=identity.raw_value_alignment,
+        ae_roi=identity.ae_roi,
         sdk_ae_policy=identity.sdk_ae_policy,
         sdk_autoexposure_percent=identity.sdk_autoexposure_percent,
         created_at=created_at or datetime.now().astimezone().isoformat(timespec="seconds"),

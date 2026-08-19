@@ -362,11 +362,14 @@ class MainWindowUIMixin:
         self.select_dn_roi_button = QToolButton()
         self.select_dn_roi_button.setText("框選 DN ROI")
         self.select_dn_roi_button.setToolTip(
-            "在 Live View 框選原始 image-pixel ROI；只計算顯示，不控制自動曝光。"
+            "在 Live View 框選原始 image-pixel ROI；同時用於 Scientific DN "
+            "分析與 RisingCam SDK AE 測光。"
         )
         self.clear_dn_roi_button = QToolButton()
         self.clear_dn_roi_button.setText("清除 ROI")
-        self.clear_dn_roi_button.setToolTip("清除 Live View DN ROI 與 overlay。")
+        self.clear_dn_roi_button.setToolTip(
+            "清除 Live View ROI 與 overlay，並將 SDK AE 測光恢復為完整影像。"
+        )
         self.live_view_roi_value = QLabel("ROI：未設定")
         self.live_view_roi_value.setMinimumWidth(0)
         self.live_view_roi_value.setSizePolicy(
@@ -379,7 +382,12 @@ class MainWindowUIMixin:
         )
         self.live_view_roi_dn_value.setToolTip(
             "來自 scientific_frame_ready 的 uint16 scientific frame；"
-            "不使用 QImage preview brightness，也不控制 Auto Exposure。"
+            "不使用 QImage preview brightness。"
+        )
+        self.live_view_ae_metering_value = QLabel("AE 測光：--")
+        self.live_view_ae_metering_value.setMinimumWidth(0)
+        self.live_view_ae_metering_value.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
         self.select_dn_roi_button.setEnabled(False)
         self.clear_dn_roi_button.setEnabled(False)
@@ -388,6 +396,7 @@ class MainWindowUIMixin:
             self.clear_dn_roi_button,
             self.live_view_roi_value,
             self.live_view_roi_dn_value,
+            self.live_view_ae_metering_value,
         ):
             header_layout.addWidget(widget)
 
@@ -511,7 +520,7 @@ class MainWindowUIMixin:
         self.select_dn_roi_button.clicked.connect(
             self.begin_live_view_dn_roi_selection
         )
-        self.clear_dn_roi_button.clicked.connect(self.image_view.clear_roi)
+        self.clear_dn_roi_button.clicked.connect(self.clear_live_view_dn_roi)
         self.image_view.roi_selected.connect(self.on_live_view_dn_roi_selected)
         self.image_view.roi_cleared.connect(self.on_live_view_dn_roi_cleared)
 

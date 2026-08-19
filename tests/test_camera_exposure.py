@@ -58,6 +58,7 @@ class FakeModeCamera:
         self.gain = gain
         self.auto_exposure_enable = 0
         self.auto_exposure_target = 120
+        self.ae_aux_rect = (0, 0, 4, 3)
         self.options = {
             nncam.NNCAM_OPTION_AUTOEXP_POLICY: 1,
             nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT: 100,
@@ -81,6 +82,14 @@ class FakeModeCamera:
     def get_AutoExpoTarget(self) -> int:
         self.calls.append(("read_sdk_target",))
         return self.auto_exposure_target
+
+    def put_AEAuxRect(self, x: int, y: int, width: int, height: int) -> None:
+        self.calls.append(("ae_roi", x, y, width, height))
+        self.ae_aux_rect = (x, y, width, height)
+
+    def get_AEAuxRect(self) -> tuple[int, int, int, int]:
+        self.calls.append(("read_ae_roi",))
+        return self.ae_aux_rect
 
     def put_Option(self, option: int, value: int) -> None:
         self.calls.append(("option", option, value))
@@ -131,11 +140,17 @@ class StickyAutoExposureCamera(FakeModeCamera):
 def configured_controller(camera: FakeModeCamera) -> CameraController:
     controller = CameraController()
     controller._camera = camera
+    controller._width, controller._height = 4, 3
     controller._sensor_bit_depth = 12
     controller._raw_value_alignment = "right"
     controller._exposure_range = (100, 1_000_000, 10_000)
     controller._gain_range = (100, 800, 100)
     controller._auto_exposure_range = (40, 400_000, 110, 600)
+    controller._auto_exposure_roi_requested = (0, 0, 4, 3)
+    controller._auto_exposure_roi_readback = (0, 0, 4, 3)
+    controller._auto_exposure_roi_mode = "FullImage"
+    controller._auto_exposure_roi_verified = True
+    controller._auto_exposure_roi_verification_status = "Verified"
     return controller
 
 

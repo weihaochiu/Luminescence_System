@@ -190,11 +190,30 @@ class ImageViewROITests(unittest.TestCase):
 
 class _LiveViewROIHarness(MainWindowDeviceMixin):
     def __init__(self) -> None:
+        class _Controller:
+            is_open = True
+
+            def __init__(self) -> None:
+                self.rois: list[tuple[int, int, int, int]] = []
+                self.reset_count = 0
+
+            def set_auto_exposure_roi(
+                self, x: int, y: int, width: int, height: int
+            ) -> bool:
+                self.rois.append((x, y, width, height))
+                return True
+
+            def reset_auto_exposure_roi(self) -> bool:
+                self.reset_count += 1
+                return True
+
+        self.controller = _Controller()
         self.image_view = ImageView()
         self.select_dn_roi_button = QToolButton()
         self.clear_dn_roi_button = QToolButton()
         self.live_view_roi_value = QLabel()
         self.live_view_roi_dn_value = QLabel()
+        self.live_view_ae_metering_value = QLabel()
         self.status_message = QLabel()
         self._latest_scientific_frame = None
         self._latest_effective_dn_status = {}
@@ -248,6 +267,39 @@ class LiveViewROIDisplayTests(unittest.TestCase):
         self.assertEqual(
             "ROI 平均 DN：2500 /4095 (61.1%)",
             self.harness.live_view_roi_dn_value.text(),
+        )
+
+    def test_selection_forwards_exact_image_pixel_roi_to_controller(self) -> None:
+        self.assertEqual([(1, 1, 2, 2)], self.harness.controller.rois)
+        self.harness.on_live_view_dn_roi_selected(0, 0, 4, 3)
+        self.assertEqual((0, 0, 4, 3), self.harness.controller.rois[-1])
+
+    def test_clear_requests_full_image_ae_reset_then_clears_overlay(self) -> None:
+        self.harness.clear_live_view_dn_roi()
+        self.assertEqual(1, self.harness.controller.reset_count)
+        self.assertIsNone(self.harness.image_view.roi)
+        self.assertIsNone(self.harness._live_view_dn_roi)
+
+    def test_ae_metering_label_uses_controller_verified_state(self) -> None:
+        self.harness._refresh_live_view_ae_metering_status({
+            "AutoExposureROIRequested": (1, 1, 2, 2),
+            "AutoExposureROIReadback": (1, 1, 2, 2),
+            "AutoExposureROIMode": "CustomROI",
+            "AutoExposureROIVerified": True,
+            "AutoExposureROIVerificationStatus": "Verified",
+        })
+        self.assertEqual("AE 測光：ROI ✓", self.harness.live_view_ae_metering_value.text())
+
+        self.harness._refresh_live_view_ae_metering_status({
+            "AutoExposureROIRequested": (1, 1, 2, 2),
+            "AutoExposureROIReadback": (1, 1, 1, 2),
+            "AutoExposureROIMode": "CustomROI",
+            "AutoExposureROIVerified": False,
+            "AutoExposureROIVerificationStatus": "ReadbackMismatch",
+        })
+        self.assertEqual(
+            "AE 測光：ROI 驗證失敗",
+            self.harness.live_view_ae_metering_value.text(),
         )
 
     def test_roi_labels_and_controls_reset_on_resolution_change(self) -> None:

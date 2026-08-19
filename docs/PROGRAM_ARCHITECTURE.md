@@ -46,14 +46,27 @@
 
 曝光控制的 widget 狀態統一由 `main_window_devices.py::_update_exposure_control_state()` 決定。`ExposureMode` 與影像亮度目標驗證位於 `camera_exposure.py`；目前影像亮度的 0–255 preview 計算位於 `image_brightness.py`。`CameraController` 負責 SDK capability/status query 與 300 ms refresh，GUI 只呈現狀態並 routing 使用者命令。共用的相機連線／中斷函式不可直接覆寫 Exposure、Gain、影像亮度目標或套用按鈕的個別狀態，避免連線狀態與自動／手動模式互相衝突。
 
-Live View Scientific DN ROI 的資料流固定為：
+Live View Scientific DN／SDK AE Metering ROI 的資料流固定為：
 
-`CameraController.scientific_frame_ready → MainWindowDeviceMixin latest scientific frame reference → ImageView image-pixel ROI → scientific_dn.mean_effective_dn_roi() → Live View header`
+```text
+ImageView image-pixel ROI
+ ├─→ scientific_frame_ready uint16 H×W frame
+ │    → scientific_dn.mean_effective_dn_roi()
+ │    → Live View ROI Mean Effective DN
+ │
+ └─→ CameraController public API
+      → put_AEAuxRect(x, y, width, height)
+      → get_AEAuxRect() exact readback verification
+      → RisingCam SDK Continuous / Once Auto Exposure
+```
 
 - `ImageView` 只管理 scene overlay 與 viewport／scene／原始 image-pixel 座標轉換；overlay 不修改 QImage、scientific ndarray、capture pixels 或輸出檔案。
 - MainWindow 只保存 controller 已建立的最新 scientific ndarray reference，不為每幀複製 full frame；ROI calculation 只建立 slice view，Effective DN 的 bit depth／right-left alignment interpretation 沿用 `scientific_dn.py`。
 - `scientific_frame_ready` 與 `effective_dn_status_changed` 都會觸發 ROI refresh，以處理同一 frame 中 alignment status 較晚更新的 signal ordering；alignment unknown 時 fail closed 顯示無法判定。
-- 相同解析度保留 ROI；解析度變更、image clear 或 camera disconnect 清除 ROI。ROI 不保存至 QSettings／Recipe／metadata，也不控制 SDK AE、AE calibration、正式量測或影像輸出。
+- GUI 不得存取 private camera handle；AE rectangle requested／readback／mode／verification state 的 single source of truth 是 `CameraController`。只有 requested 與 `get_AEAuxRect()` readback 完全一致時才是 verified；write/readback/mismatch 失敗不影響 Scientific ROI overlay 與 DN 顯示，但 SDK AE 維持關閉並顯示失敗狀態。
+- `NNCAM_OPTION_AUTOEXPOSURE_PERCENT=100` 固定代表 full active AE ROI average；active rectangle 是完整影像時才等同 full-frame average。Camera open、Clear ROI 與 resolution change 都明確設定並驗證 `(0, 0, current_width, current_height)`，且必須在重新啟用 AE 前完成。
+- Whole-frame `MeanEffectiveDN` 保持 diagnostic 語意；`MeteringMeanEffectiveDN` 在 verified custom ROI 使用相同 Effective-DN ROI interpretation，在 full-image mode 等於 whole-frame mean。AE calibration、stability fallback 與 convergence record 只使用 metering mean，calibration schema 以 camera／resolution／alignment／AE ROI geometry 隔離 profile。
+- 相同解析度保留 ROI；解析度變更、image clear 或 camera disconnect 清除 GUI ROI。ROI 不保存至 QSettings／Recipe／metadata，也不裁切 acquisition、正式量測或影像輸出。
 
 Camera Temperature Monitoring 的依賴與資料流固定為：
 

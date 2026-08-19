@@ -60,6 +60,7 @@ class _FakeMonoCamera:
         self.auto_exposure_calls: list[tuple[str, int] | tuple[str]] = []
         self.auto_exposure_target = 99
         self.auto_exposure_enable = 0
+        self.ae_aux_rect = (0, 0, 3, 2)
         self.exposure_us = 1000
         self.gain_percent = 100
         self.exposure_writes: list[int] = []
@@ -100,6 +101,14 @@ class _FakeMonoCamera:
     def get_AutoExpoEnable(self) -> int:
         self.auto_exposure_calls.append(("enable_readback",))
         return self.auto_exposure_enable
+
+    def put_AEAuxRect(self, x: int, y: int, width: int, height: int) -> None:
+        self.auto_exposure_calls.append(("ae_roi", x, y, width, height))
+        self.ae_aux_rect = (x, y, width, height)
+
+    def get_AEAuxRect(self) -> tuple[int, int, int, int]:
+        self.auto_exposure_calls.append(("ae_roi_readback",))
+        return self.ae_aux_rect
 
     def get_ExpTimeRange(self):
         return 100, 10_000, 100
@@ -477,7 +486,14 @@ class MonoScientificCameraTests(unittest.TestCase):
                 controller._sdk_auto_exposure_mode,
             )
             self.assertEqual(1, camera.auto_exposure_enable)
-            self.assertNotIn(("enable", 0), camera.auto_exposure_calls)
+            self.assertLess(
+                camera.auto_exposure_calls.index(("enable", 0)),
+                camera.auto_exposure_calls.index(("ae_roi", 0, 0, 3, 2)),
+            )
+            self.assertLess(
+                camera.auto_exposure_calls.index(("ae_roi_readback",)),
+                camera.auto_exposure_calls.index(("enable", 1)),
+            )
 
             statuses = []
             controller.effective_dn_status_changed.connect(statuses.append)
