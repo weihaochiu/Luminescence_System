@@ -98,6 +98,9 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self.devices: list[Any] = []
         self.camera_info: dict[str, Any] = {}
         self.last_image: QImage | None = None
+        self._latest_scientific_frame: Any | None = None
+        self._latest_effective_dn_status: dict[str, Any] = {}
+        self._live_view_dn_roi: tuple[int, int, int, int] | None = None
         self._pending_auto_path: str | None = None
         self._capture_next_frame = False
         self._auto_capture_converged = False

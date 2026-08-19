@@ -17,6 +17,7 @@ from .camera_temperature_monitor import TemperatureSample, format_temperature_c
 from .image_io import save_image_and_metadata
 from .instrument_state_manager import SMUUIState
 from .relay_controller import RelayError
+from .scientific_dn import mean_effective_dn_roi
 from .smu_base import SMUDevice
 from .smu_control import SMUInterlockError, SMUOwnership
 from .smu_manager import select_auto_connect_device
@@ -228,6 +229,10 @@ class MainWindowDeviceMixin:
     def on_camera_opened(self, info: dict[str, Any]) -> None:
         self.camera_info = info
         self._mean_effective_dn = None
+        self._latest_scientific_frame = None
+        self._latest_effective_dn_status = {}
+        self._live_view_dn_roi = None
+        MainWindowDeviceMixin.on_live_view_dn_roi_cleared(self)
         self.connect_action.setText("中斷連線")
         self.view_title.setText(f"即時影像 [{info['name']}]")
         self.model_value.setText(str(info["model"]))
@@ -274,6 +279,7 @@ class MainWindowDeviceMixin:
         self._set_exposure_mode_ui(initial_mode)
         self.on_effective_dn_status_changed({
             "SensorBitDepth": info.get("scientific_bit_depth"),
+            "ContainerBitDepth": 16,
             "RawValueAlignment": info.get("raw_value_alignment", "unknown"),
             "RawValueAlignmentSource": info.get(
                 "raw_value_alignment_source", "Unknown"
@@ -305,7 +311,10 @@ class MainWindowDeviceMixin:
         self.view_title.setText("即時影像")
         self.camera_info = {}
         self.last_image = None
+        self._latest_scientific_frame = None
+        self._latest_effective_dn_status = {}
         self.image_view.clear_image()
+        MainWindowDeviceMixin.on_live_view_dn_roi_cleared(self)
         self._cancel_auto_capture()
         self._set_camera_controls_enabled(False)
         self.resolution_status.setText("影像 —")
@@ -406,6 +415,7 @@ class MainWindowDeviceMixin:
             self.gain_status.setText(f"Gain {gain}%")
 
     def on_effective_dn_status_changed(self, status: dict[str, Any]) -> None:
+        self._latest_effective_dn_status = dict(status)
         sensor_bits = status.get("SensorBitDepth")
         alignment = str(status.get("RawValueAlignment", "unknown"))
         alignment_source = str(status.get("RawValueAlignmentSource", "Unknown"))
@@ -473,6 +483,7 @@ class MainWindowDeviceMixin:
         self.auto_exposure_target_dn_value.setToolTip(
             f"AE 控制器：RisingCam SDK\n{calibration_text}"
         )
+        MainWindowDeviceMixin._refresh_live_view_roi_dn(self)
 
     def on_frame_ready(self, image: QImage) -> None:
         self.last_image = image.copy()
@@ -483,6 +494,7 @@ class MainWindowDeviceMixin:
         self.auto_capture_button.setEnabled(controls_available)
         self.capture_action.setEnabled(controls_available)
         self.auto_capture_action.setEnabled(controls_available)
+        MainWindowDeviceMixin._update_live_view_roi_controls(self)
 
         if self._capture_next_frame and self._pending_auto_path:
             self._capture_next_frame = False
@@ -490,6 +502,82 @@ class MainWindowDeviceMixin:
             self._pending_auto_path = None
             self._save_image(path, capture_mode="auto_once", auto_converged=True)
             self._finish_auto_capture_ui()
+
+    def on_scientific_frame_ready(
+        self, scientific: Any, _preview: QImage, _sequence: int
+    ) -> None:
+        # CameraController already owns an independent ndarray for this frame;
+        # retain that reference and slice only the selected ROI.
+        self._latest_scientific_frame = scientific
+        MainWindowDeviceMixin._refresh_live_view_roi_dn(self)
+
+    def begin_live_view_dn_roi_selection(self) -> None:
+        if self.image_view.begin_roi_selection():
+            self.status_message.setText(
+                "請在 Live View 拖曳框選 Scientific DN ROI；完成後自動恢復平移。"
+            )
+
+    def on_live_view_dn_roi_selected(
+        self, x: int, y: int, width: int, height: int
+    ) -> None:
+        self._live_view_dn_roi = (x, y, width, height)
+        coordinate_text = f"ROI：X={x} Y={y} {width}×{height}"
+        self.live_view_roi_value.setText(coordinate_text)
+        self.live_view_roi_value.setToolTip(coordinate_text)
+        MainWindowDeviceMixin._update_live_view_roi_controls(self)
+        MainWindowDeviceMixin._refresh_live_view_roi_dn(self)
+
+    def on_live_view_dn_roi_cleared(self) -> None:
+        self._live_view_dn_roi = None
+        self.live_view_roi_value.setText("ROI：未設定")
+        self.live_view_roi_value.setToolTip("")
+        self.live_view_roi_dn_value.setText("ROI 平均 DN：--")
+        MainWindowDeviceMixin._update_live_view_roi_controls(self)
+
+    def _update_live_view_roi_controls(self) -> None:
+        if not hasattr(self, "select_dn_roi_button"):
+            return
+        self.select_dn_roi_button.setEnabled(self.image_view.has_image)
+        self.clear_dn_roi_button.setEnabled(self._live_view_dn_roi is not None)
+
+    def _refresh_live_view_roi_dn(self) -> None:
+        if not hasattr(self, "live_view_roi_dn_value"):
+            return
+        roi = self._live_view_dn_roi
+        scientific = self._latest_scientific_frame
+        status = self._latest_effective_dn_status
+        if roi is None or scientific is None:
+            self.live_view_roi_dn_value.setText("ROI 平均 DN：--")
+            return
+        sensor_bits = status.get("SensorBitDepth")
+        container_bits = status.get("ContainerBitDepth")
+        alignment = str(status.get("RawValueAlignment", "unknown")).lower()
+        maximum = status.get("EffectiveDNMax")
+        if alignment == "unknown":
+            self.live_view_roi_dn_value.setText("ROI 平均 DN：無法判定")
+            return
+        if sensor_bits is None or container_bits is None or maximum is None:
+            self.live_view_roi_dn_value.setText("ROI 平均 DN：--")
+            return
+        try:
+            mean_dn = mean_effective_dn_roi(
+                scientific,
+                int(sensor_bits),
+                int(container_bits),
+                alignment,
+                *roi,
+            )
+            maximum_dn = int(maximum)
+            if maximum_dn <= 0:
+                raise ValueError("EffectiveDNMax must be positive")
+        except (TypeError, ValueError):
+            self.live_view_roi_dn_value.setText("ROI 平均 DN：無法判定")
+            return
+        percent = mean_dn / maximum_dn * 100.0
+        rounded_mean_dn = int(mean_dn + 0.5)
+        self.live_view_roi_dn_value.setText(
+            f"ROI 平均 DN：{rounded_mean_dn} /{maximum_dn} ({percent:.1f}%)"
+        )
 
     def capture_current_frame(self) -> None:
         if self.last_image is None:
@@ -682,6 +770,7 @@ class MainWindowDeviceMixin:
         # Delegate them to one state function so a newly opened camera does not
         # overwrite the manual-mode state calculated from the mode selector.
         self._update_exposure_control_state()
+        MainWindowDeviceMixin._update_live_view_roi_controls(self)
 
     def on_temperature_sample(self, sample: TemperatureSample) -> None:
         text = format_temperature_c(sample.value_c)

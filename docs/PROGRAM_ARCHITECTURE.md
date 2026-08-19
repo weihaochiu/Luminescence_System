@@ -2,7 +2,7 @@
 
 文件版本：1.8.2
 對應程式版本：V1.8.2
-最後更新：2026-08-14（UTC+8）
+最後更新：2026-08-19（UTC+8）
 
 ## 1. 文件目的
 
@@ -45,6 +45,15 @@
 `MainWindow` 使用少量 mixin 組合完整行為。Mixin 只用來分離大型 UI 類別的明確職責，不應再拆成每個按鈕或每個事件一個檔案。
 
 曝光控制的 widget 狀態統一由 `main_window_devices.py::_update_exposure_control_state()` 決定。`ExposureMode` 與影像亮度目標驗證位於 `camera_exposure.py`；目前影像亮度的 0–255 preview 計算位於 `image_brightness.py`。`CameraController` 負責 SDK capability/status query 與 300 ms refresh，GUI 只呈現狀態並 routing 使用者命令。共用的相機連線／中斷函式不可直接覆寫 Exposure、Gain、影像亮度目標或套用按鈕的個別狀態，避免連線狀態與自動／手動模式互相衝突。
+
+Live View Scientific DN ROI 的資料流固定為：
+
+`CameraController.scientific_frame_ready → MainWindowDeviceMixin latest scientific frame reference → ImageView image-pixel ROI → scientific_dn.mean_effective_dn_roi() → Live View header`
+
+- `ImageView` 只管理 scene overlay 與 viewport／scene／原始 image-pixel 座標轉換；overlay 不修改 QImage、scientific ndarray、capture pixels 或輸出檔案。
+- MainWindow 只保存 controller 已建立的最新 scientific ndarray reference，不為每幀複製 full frame；ROI calculation 只建立 slice view，Effective DN 的 bit depth／right-left alignment interpretation 沿用 `scientific_dn.py`。
+- `scientific_frame_ready` 與 `effective_dn_status_changed` 都會觸發 ROI refresh，以處理同一 frame 中 alignment status 較晚更新的 signal ordering；alignment unknown 時 fail closed 顯示無法判定。
+- 相同解析度保留 ROI；解析度變更、image clear 或 camera disconnect 清除 ROI。ROI 不保存至 QSettings／Recipe／metadata，也不控制 SDK AE、AE calibration、正式量測或影像輸出。
 
 Camera Temperature Monitoring 的依賴與資料流固定為：
 

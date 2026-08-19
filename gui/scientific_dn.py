@@ -91,6 +91,47 @@ def mean_effective_dn(
     return float(np.mean(effective, dtype=np.float64))
 
 
+def mean_effective_dn_roi(
+    scientific: np.ndarray,
+    sensor_bit_depth: int,
+    container_bit_depth: int,
+    raw_value_alignment: str,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> float:
+    """Compute mean Effective DN for a validated image-pixel ROI.
+
+    The slice is a view of the scientific frame. Effective-DN validation and
+    alignment interpretation remain centralized in :func:`mean_effective_dn`.
+    """
+
+    source = np.asarray(scientific)
+    roi_x = int(x)
+    roi_y = int(y)
+    roi_width = int(width)
+    roi_height = int(height)
+    if source.dtype != np.uint16:
+        raise TypeError("Scientific DN source must be a uint16 ndarray")
+    if source.ndim != 2:
+        raise ValueError("Scientific DN source must be an H×W array")
+    image_height, image_width = source.shape
+    if roi_x < 0 or roi_y < 0:
+        raise ValueError("ROI coordinates must be non-negative")
+    if roi_width <= 0 or roi_height <= 0:
+        raise ValueError("ROI width and height must be positive")
+    if roi_x + roi_width > image_width or roi_y + roi_height > image_height:
+        raise ValueError("ROI must stay inside the scientific frame")
+    roi = source[roi_y : roi_y + roi_height, roi_x : roi_x + roi_width]
+    return mean_effective_dn(
+        roi,
+        sensor_bit_depth,
+        container_bit_depth,
+        raw_value_alignment,
+    )
+
+
 def effective_dn_fraction(mean_dn: float, maximum_dn: int) -> float:
     """Return a 0–1 signal fraction for an Effective-DN mean."""
 

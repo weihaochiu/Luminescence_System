@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QSpinBox,
     QStatusBar,
@@ -358,6 +359,37 @@ class MainWindowUIMixin:
         self.view_title.setStyleSheet("font-weight: 600;")
         header_layout.addWidget(self.view_title)
         header_layout.addStretch()
+        self.select_dn_roi_button = QToolButton()
+        self.select_dn_roi_button.setText("框選 DN ROI")
+        self.select_dn_roi_button.setToolTip(
+            "在 Live View 框選原始 image-pixel ROI；只計算顯示，不控制自動曝光。"
+        )
+        self.clear_dn_roi_button = QToolButton()
+        self.clear_dn_roi_button.setText("清除 ROI")
+        self.clear_dn_roi_button.setToolTip("清除 Live View DN ROI 與 overlay。")
+        self.live_view_roi_value = QLabel("ROI：未設定")
+        self.live_view_roi_value.setMinimumWidth(0)
+        self.live_view_roi_value.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.live_view_roi_dn_value = QLabel("ROI 平均 DN：--")
+        self.live_view_roi_dn_value.setMinimumWidth(0)
+        self.live_view_roi_dn_value.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.live_view_roi_dn_value.setToolTip(
+            "來自 scientific_frame_ready 的 uint16 scientific frame；"
+            "不使用 QImage preview brightness，也不控制 Auto Exposure。"
+        )
+        self.select_dn_roi_button.setEnabled(False)
+        self.clear_dn_roi_button.setEnabled(False)
+        for widget in (
+            self.select_dn_roi_button,
+            self.clear_dn_roi_button,
+            self.live_view_roi_value,
+            self.live_view_roi_dn_value,
+        ):
+            header_layout.addWidget(widget)
 
         workspace = QWidget()
         workspace_layout = QVBoxLayout(workspace)
@@ -476,6 +508,12 @@ class MainWindowUIMixin:
         self.exposure_mode_combo.currentIndexChanged.connect(self.change_exposure_mode)
         self.resolution_combo.currentIndexChanged.connect(self.change_resolution)
         self.image_view.zoom_changed.connect(lambda value: self.zoom_status.setText(f"縮放 {value:.1f}%"))
+        self.select_dn_roi_button.clicked.connect(
+            self.begin_live_view_dn_roi_selection
+        )
+        self.clear_dn_roi_button.clicked.connect(self.image_view.clear_roi)
+        self.image_view.roi_selected.connect(self.on_live_view_dn_roi_selected)
+        self.image_view.roi_cleared.connect(self.on_live_view_dn_roi_cleared)
 
         self.device_panel.smu_scan_requested.connect(self.refresh_smu_devices)
         self.device_panel.smu_connect_requested.connect(self.connect_selected_smu)
@@ -517,6 +555,9 @@ class MainWindowUIMixin:
         self.instrument_state_manager.refresh()
 
         self.controller.frame_ready.connect(self.on_frame_ready)
+        self.controller.scientific_frame_ready.connect(
+            self.on_scientific_frame_ready
+        )
         self.controller.camera_opened.connect(self.on_camera_opened)
         self.controller.camera_opened.connect(lambda _info: self._update_measurement_controls())
         self.controller.camera_closing.connect(self.temperature_monitor.stop)

@@ -1,7 +1,7 @@
 # EL 量測設備控制程式需求紀錄
 
 文件版本：1.5
-最後更新：2026-08-14（UTC+8）
+最後更新：2026-08-19（UTC+8）
 
 註：版本摘要中的「Recipe 停用／暫緩」只描述當時版本，現行狀態一律以 FLOW-ELM-001 與 V1.8.2 為準。
 
@@ -187,6 +187,23 @@
 - 明確排除：Camera state machine、event marker、TEC/PID/fan、warning/alarm、over-temperature shutdown、自動停止量測與可調 sampling interval。
 - 影響模組：`camera_controller.py`、`camera_temperature_monitor.py`、`camera_temperature_chart.py`、`main_window*`、`image_io.py`、`hdr_output.py`。
 - 驗證：`tests/test_camera_temperature.py` 25 項專門測試與完整 suite 239 項全部通過；`python -m compileall .`、`git diff --check` 通過。
+
+### UI-CAM-DNROI-001－Live View Scientific DN ROI
+
+- 狀態：已完成（2026-08-19；RisingCam 實機人工驗證待執行）。
+- 提出日期：2026-08-19（UTC+8）。
+- 使用者原意：EL Live View 真正關注的通常是中央元件區域；whole-frame Mean DN 會包含大量黑色背景，因此使用者需要直接在 Live View 框選關注區域，並即時查看該區域的 Scientific Effective DN 平均值。
+- 詳細行為：只實作 `Live View → User ROI → Scientific Effective DN Mean → 即時顯示`。ROI 使用原始 image-pixel coordinates；相同解析度的新 frame 保留 ROI，解析度變更、影像清除或相機中斷時清除 ROI。數值只取自既有 `scientific_frame_ready` 的 `uint16 H×W` scientific frame，並沿用既有 Effective DN alignment interpretation。
+- 驗收條件：一般模式保留 ScrollHandDrag／wheel zoom／Fit to Window／Actual Size；選取模式完成後自動恢復平移。ROI overlay 只存在於 scene，不修改 QImage、scientific ndarray 或輸出像素。Alignment unknown 時顯示無法判定；左側 whole-frame MeanEffectiveDN 語意保持不變。
+- ROI coordinate contract：`(x, y, width, height)` 一律是原始 image-pixel integer coordinates，採 `scientific[y:y + height, x:x + width]`；負值、零尺寸與超界 ROI 明確拒絕。Fit／100%／zoom／pan 只改變 view transform，不改變 ROI 座標。
+- Scientific DN source：唯一來源是既有 `CameraController.scientific_frame_ready` 的 `uint16 H×W` scientific ndarray；MainWindow 只保留 latest frame reference，不 copy full frame，不使用 QImage／QPixmap／preview RGB／`equivalent_brightness_8bit()`。
+- Auto Exposure 邊界：目前 ROI 不控制 Auto Exposure；whole-frame `_latest_mean_effective_dn`、`_latest_effective_dn_fraction`、SDK AE calibration、target mapping／convergence 與 `NNCAM_OPTION_AUTOEXPOSURE_PERCENT=100` 均保持原語意。
+- 實際修改檔案：`docs/REQUIREMENTS_LOG.md`、`docs/PROGRAM_ARCHITECTURE.md`、`gui/scientific_dn.py`、`gui/widgets.py`、`gui/main_window.py`、`gui/main_window_ui.py`、`gui/main_window_devices.py`、`tests/test_live_view_dn_roi.py`；未修改 `gui/camera_controller.py`。
+- 相容性／資料遷移：不保存 ROI；不變更 Recipe、measurement、metadata、影像輸出或 capture dimensions。
+- 安全風險：ROI 不控制 Continuous／Once／SDK Auto Exposure、AE calibration、SDKAutoExposureTarget、Recipe 或正式量測；`NNCAM_OPTION_AUTOEXPOSURE_PERCENT=100` 的 full-frame 語意保持不變。
+- 測試與驗證：`tests.test_live_view_dn_roi` 11/11；Scientific／Exposure／AE calibration／modular related tests 51/51；responsive／sidebar／toolbar 19/19；完整 `unittest discover -s tests -v` 334/334；`python -m compileall .` 與 `git diff --check` 通過。無實機 RisingCam，hardware manual validation pending，未宣稱完成 Pan／Zoom／背景與中央 EL 區 DN 差異、逐幀更新、disconnect／resolution change 或 AE 不變的實機驗收。
+- 完成版本：基於 V1.8.2 的 2026-08-19 增量。
+- 取代或關聯需求：與 whole-frame Effective DN／SDK AE 分離，未取代既有曝光需求。
 
 ### UI-001－工具列一致性
 
