@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 from gui.recipe_store import Recipe, RecipeStore
@@ -195,6 +196,36 @@ class RecipeStoreTests(unittest.TestCase):
         recipe.output.pixel_csv_dark_corrected = False
         recipe.output.pixel_csv_exposure_normalized = False
         self.assertFalse(any("Shared Dark" in error for error in recipe.validate()))
+
+    def test_upsert_serialization_failure_keeps_memory_disk_and_version_consistent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recipes.json"
+            store = RecipeStore(path)
+            original = Recipe()
+            store.upsert(original)
+            disk_before = path.read_bytes()
+            memory_before = [item.to_dict() for item in store.recipes]
+            version_before = store.recipes[0].version
+
+            candidate = deepcopy(store.recipes[0])
+            candidate.name = "Changed once"
+            candidate.el_matrix.voltage_v = [float("nan")]
+            with self.assertRaisesRegex(ValueError, "finite"):
+                store.upsert(candidate)
+
+            self.assertEqual(memory_before, [item.to_dict() for item in store.recipes])
+            self.assertEqual(disk_before, path.read_bytes())
+            self.assertEqual(version_before, store.recipes[0].version)
+            self.assertEqual(version_before, candidate.version)
+            self.assertFalse(path.with_suffix(".json.tmp").exists())
+
+            candidate.el_matrix.voltage_v = [0.8, 1.0, 1.2]
+            store.upsert(candidate)
+            self.assertEqual(version_before + 1, store.recipes[0].version)
+            self.assertEqual(version_before + 1, candidate.version)
+            reloaded = RecipeStore(path).recipes[0]
+            self.assertEqual("Changed once", reloaded.name)
+            self.assertEqual(version_before + 1, reloaded.version)
 
 
 if __name__ == "__main__":

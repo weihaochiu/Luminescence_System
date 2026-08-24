@@ -315,8 +315,19 @@ class ELMatrixRunner:
                 for repeat_index in range(1, self.plan.repeat + 1):
                     dark_index += 1
                     capture = MatrixCapture(
-                        "DARK", "SHARED", ", ".join(applicable), None,
-                        None, None, None, gain, exposure, repeat_index, self.plan.repeat,
+                        measurement_type="DARK",
+                        channel="SHARED",
+                        sample_id=", ".join(applicable),
+                        area_cm2=None,
+                        output_mode=None,
+                        current_density_ma_cm2=None,
+                        commanded_voltage_v=None,
+                        commanded_physical_current_a=None,
+                        commanded_physical_voltage_v=None,
+                        gain_percent=gain,
+                        exposure_ms=exposure,
+                        repeat_index=repeat_index,
+                        repeat_total=self.plan.repeat,
                         channel_capture_index=dark_index,
                         channel_capture_total=dark_total,
                         overall_index=self._completed + 1,
@@ -347,18 +358,21 @@ class ELMatrixRunner:
                 if self.plan.matrix.output_mode == "voltage":
                     density = None
                     voltage = float(setpoint)
-                    self.hardware.set_voltage(
-                        voltage, self.plan.matrix.current_compliance_ma
-                    )
+                    physical_current_a = None
+                    physical_voltage_v = float(self.hardware.set_voltage(
+                        voltage,
+                        self.plan.matrix.current_compliance_ma,
+                    ))
                     condition = f"V={format_voltage_number(voltage)} V"
                 else:
                     density = float(setpoint)
                     voltage = None
+                    physical_voltage_v = None
                     current_ma = self.recipe.matrix_source_current_ma(channel, density)
-                    self.hardware.set_current(
+                    physical_current_a = float(self.hardware.set_current(
                         current_ma / 1000.0,
                         self.plan.matrix.voltage_compliance_v,
-                    )
+                    ))
                     condition = f"J={density:g} mA/cm²"
                 self._output_started = monotonic()
                 self._phase(
@@ -373,13 +387,25 @@ class ELMatrixRunner:
                         for repeat_index in range(1, self.plan.repeat + 1):
                             channel_completed += 1
                             capture = MatrixCapture(
-                                "EL", channel.channel,
-                                self.sample_ids[channel.channel], channel.area_cm2,
-                                self.plan.matrix.output_mode, density, voltage,
-                                gain, exposure, repeat_index, self.plan.repeat,
-                                channel_index, len(self.plan.channels), channel_completed,
-                                channel_capture_total, self._completed + 1,
-                                self.plan.estimate().overall_captures,
+                                measurement_type="EL",
+                                channel=channel.channel,
+                                sample_id=self.sample_ids[channel.channel],
+                                area_cm2=channel.area_cm2,
+                                output_mode=self.plan.matrix.output_mode,
+                                current_density_ma_cm2=density,
+                                commanded_voltage_v=voltage,
+                                commanded_physical_current_a=physical_current_a,
+                                commanded_physical_voltage_v=physical_voltage_v,
+                                gain_percent=gain,
+                                exposure_ms=exposure,
+                                repeat_index=repeat_index,
+                                repeat_total=self.plan.repeat,
+                                channel_index=channel_index,
+                                channel_total=len(self.plan.channels),
+                                channel_capture_index=channel_completed,
+                                channel_capture_total=channel_capture_total,
+                                overall_index=self._completed + 1,
+                                overall_total=self.plan.estimate().overall_captures,
                             )
                             self._capture_and_save(capture, channel, None)
                 self.check_cancel()
@@ -485,7 +511,16 @@ class ELMatrixRunner:
             ),
             "CalculatedSourceCurrentMa": calculated_current_ma,
             "SetVoltageV": capture.commanded_voltage_v,
-            "CommandedVoltageV": capture.commanded_voltage_v,
+            # Backward-compatible EL field; its semantic is the actual physical
+            # SMU command. SetVoltageV remains the device-coordinate condition.
+            "CommandedVoltageV": capture.commanded_physical_voltage_v,
+            "CommandedPhysicalVoltageV": capture.commanded_physical_voltage_v,
+            "CommandedPhysicalCurrentA": capture.commanded_physical_current_a,
+            "CommandedPhysicalCurrentMa": (
+                None
+                if capture.commanded_physical_current_a is None
+                else capture.commanded_physical_current_a * 1000.0
+            ),
             "MeasuredCurrentA": current_a,
             "MeasuredCurrentMa": current_ma,
             "MeasuredCurrentDensityMaCm2": measured_density,

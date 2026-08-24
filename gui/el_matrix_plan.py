@@ -19,6 +19,8 @@ class MatrixCapture:
     output_mode: str | None
     current_density_ma_cm2: float | None
     commanded_voltage_v: float | None
+    commanded_physical_current_a: float | None
+    commanded_physical_voltage_v: float | None
     gain_percent: int
     exposure_ms: float
     repeat_index: int
@@ -165,8 +167,19 @@ class ELMatrixPlan:
                         overall += 1
                         dark_index += 1
                         yield MatrixCapture(
-                            "DARK", "SHARED", applicable, None, None, None, None,
-                            int(gain), float(exposure), repeat_index, self.repeat,
+                            measurement_type="DARK",
+                            channel="SHARED",
+                            sample_id=applicable,
+                            area_cm2=None,
+                            output_mode=None,
+                            current_density_ma_cm2=None,
+                            commanded_voltage_v=None,
+                            commanded_physical_current_a=None,
+                            commanded_physical_voltage_v=None,
+                            gain_percent=int(gain),
+                            exposure_ms=float(exposure),
+                            repeat_index=repeat_index,
+                            repeat_total=self.repeat,
                             channel_capture_index=dark_index,
                             channel_capture_total=estimate.shared_dark_captures,
                             overall_index=overall,
@@ -181,18 +194,33 @@ class ELMatrixPlan:
                             overall += 1
                             channel_capture_index += 1
                             yield MatrixCapture(
-                                "EL", channel.channel,
-                                self.sample_ids.get(channel.channel, ""),
-                                channel.area_cm2,
-                                self.matrix.output_mode,
-                                float(setpoint)
-                                if self.matrix.output_mode == "current_density" else None,
-                                float(setpoint)
-                                if self.matrix.output_mode == "voltage" else None,
-                                int(gain), float(exposure), repeat_index,
-                                self.repeat, channel_index, len(self.channels),
-                                channel_capture_index, estimate.el_per_channel,
-                                overall, estimate.overall_captures,
+                                measurement_type="EL",
+                                channel=channel.channel,
+                                sample_id=self.sample_ids.get(channel.channel, ""),
+                                area_cm2=channel.area_cm2,
+                                output_mode=self.matrix.output_mode,
+                                current_density_ma_cm2=(
+                                    float(setpoint)
+                                    if self.matrix.output_mode == "current_density"
+                                    else None
+                                ),
+                                commanded_voltage_v=(
+                                    float(setpoint)
+                                    if self.matrix.output_mode == "voltage"
+                                    else None
+                                ),
+                                commanded_physical_current_a=None,
+                                commanded_physical_voltage_v=None,
+                                gain_percent=int(gain),
+                                exposure_ms=float(exposure),
+                                repeat_index=repeat_index,
+                                repeat_total=self.repeat,
+                                channel_index=channel_index,
+                                channel_total=len(self.channels),
+                                channel_capture_index=channel_capture_index,
+                                channel_capture_total=estimate.el_per_channel,
+                                overall_index=overall,
+                                overall_total=estimate.overall_captures,
                             )
 
     def exposure_sequence_after(self, completed: int) -> Iterable[float]:

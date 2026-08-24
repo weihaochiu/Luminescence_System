@@ -762,15 +762,22 @@ class RecipeStore:
         return recipe
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_recipes(self.recipes)
+
+    def _write_recipes(self, recipes: list[Recipe]) -> None:
         payload = {
             "schema_version": self.schema_version,
             "saved_at": _now(),
-            "recipes": [recipe.to_dict() for recipe in self.recipes],
+            "recipes": [recipe.to_dict() for recipe in recipes],
         }
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self.path)
+        try:
+            temporary.write_text(encoded, encoding="utf-8")
+            temporary.replace(self.path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def available(self) -> list[Recipe]:
         return sorted(
@@ -782,21 +789,28 @@ class RecipeStore:
         return next((recipe for recipe in self.recipes if recipe.recipe_id == recipe_id), None)
 
     def upsert(self, recipe: Recipe) -> None:
-        recipe.modified_at = _now()
+        candidate = deepcopy(recipe)
+        candidate.modified_at = _now()
         existing = self.get(recipe.recipe_id)
+        updated = list(self.recipes)
         if existing is None:
-            self.recipes.append(recipe)
+            updated.append(candidate)
         else:
             index = self.recipes.index(existing)
             comparable_existing = existing.to_dict()
-            comparable_new = recipe.to_dict()
+            comparable_new = candidate.to_dict()
             for payload in (comparable_existing, comparable_new):
                 payload.pop("modified_at", None)
                 payload.pop("version", None)
             if comparable_existing != comparable_new:
-                recipe.version = existing.version + 1
-            self.recipes[index] = recipe
-        self.save()
+                candidate.version = existing.version + 1
+            else:
+                candidate.version = existing.version
+            updated[index] = candidate
+        self._write_recipes(updated)
+        self.recipes = updated
+        recipe.version = candidate.version
+        recipe.modified_at = candidate.modified_at
 
     def delete(self, recipe_id: str) -> None:
         self.recipes = [recipe for recipe in self.recipes if recipe.recipe_id != recipe_id]

@@ -3,6 +3,7 @@ from __future__ import annotations
 """Binding, persistence, migration entry points, and live plan preview."""
 
 import json
+import math
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,37 @@ from .recipe_store import ChannelRecipe, Recipe
 def _parse_numbers(text: str, caster: type = float) -> list[Any]:
     values = [token.strip() for token in text.replace(";", ",").split(",")]
     return [caster(token) for token in values if token]
+
+
+def _parse_finite_numbers(
+    text: str,
+    caster: type = float,
+    *,
+    field_name: str,
+) -> list[Any]:
+    try:
+        values = _parse_numbers(text, caster)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{field_name} 必須是以逗號或分號分隔的有限數值"
+        ) from exc
+    if not values:
+        raise ValueError(f"{field_name} 不可空白")
+    if any(not math.isfinite(float(value)) for value in values):
+        raise ValueError(f"{field_name} 不可包含 NaN 或 Inf")
+    return values
+
+
+def _parse_inactive_finite_numbers(
+    text: str,
+    previous: list[float],
+    *,
+    field_name: str,
+) -> list[float]:
+    try:
+        return _parse_finite_numbers(text, float, field_name=field_name)
+    except ValueError:
+        return list(previous)
 
 
 class RecipeDialogLogicMixin:
@@ -176,12 +208,30 @@ class RecipeDialogLogicMixin:
 
         recipe.el_matrix.dark_frame_enabled = self.dark_frame_enabled_check.isChecked()
         recipe.el_matrix.output_mode = str(self.matrix_output_mode_combo.currentData())
-        recipe.el_matrix.current_density_ma_cm2 = _parse_numbers(
-            self.matrix_current_density_edit.text(), float
-        )
-        recipe.el_matrix.voltage_v = _parse_numbers(
-            self.matrix_voltage_edit.text(), float
-        )
+        if recipe.el_matrix.output_mode == "voltage":
+            recipe.el_matrix.voltage_v = _parse_finite_numbers(
+                self.matrix_voltage_edit.text(),
+                float,
+                field_name="Voltage List",
+            )
+            recipe.el_matrix.current_density_ma_cm2 = (
+                _parse_inactive_finite_numbers(
+                    self.matrix_current_density_edit.text(),
+                    recipe.el_matrix.current_density_ma_cm2,
+                    field_name="Current Density List",
+                )
+            )
+        else:
+            recipe.el_matrix.current_density_ma_cm2 = _parse_finite_numbers(
+                self.matrix_current_density_edit.text(),
+                float,
+                field_name="Current Density List",
+            )
+            recipe.el_matrix.voltage_v = _parse_inactive_finite_numbers(
+                self.matrix_voltage_edit.text(),
+                recipe.el_matrix.voltage_v,
+                field_name="Voltage List",
+            )
         recipe.el_matrix.gains_percent = _parse_numbers(
             self.matrix_gain_edit.text(), int
         )

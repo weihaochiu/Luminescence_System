@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import csv
 import json
 import threading
 import time
@@ -43,7 +44,7 @@ from gui.recipe_dialog import RecipeManagerDialog
 from gui.recipe_store import RecipeStore
 from gui.polarity_settings import PolarityMeasurementSettings
 from gui.relay_settings import RelaySettings
-from gui.smu_control import SMUSafetyLimits
+from gui.smu_control import SMUControlManager, SMUOwnership, SMUSafetyLimits
 from tests.qt_test_utils import ensure_qapplication
 
 
@@ -135,6 +136,108 @@ class _FakeHardware:
             "white_light_off": True,
             "ownership_released": True,
             "ok": True,
+        }
+
+
+class _RecordingSMUDriver:
+    def __init__(self) -> None:
+        self.commands: list[tuple[object, ...]] = []
+        self.output = False
+        self.voltage_v = 0.0
+        self.current_a = 0.0
+
+    def configure_voltage_source(
+        self, voltage_v: float, current_compliance_a: float
+    ) -> None:
+        self.voltage_v = voltage_v
+        self.current_a = 0.0008 if voltage_v >= 0 else -0.0008
+        self.commands.append(("CV", voltage_v, current_compliance_a))
+
+    def configure_current_source(
+        self, current_a: float, voltage_compliance_v: float
+    ) -> None:
+        self.current_a = current_a
+        self.voltage_v = 1.2 if current_a >= 0 else -1.2
+        self.commands.append(("CC", current_a, voltage_compliance_v))
+
+    def set_output_enabled(self, enabled: bool) -> None:
+        self.output = enabled
+        self.commands.append(("OUTPUT", enabled))
+
+    def safe_stop(self) -> list[str]:
+        self.output = False
+        self.commands.append(("OUTPUT", False))
+        return []
+
+    def query_output_enabled(self) -> bool:
+        return self.output
+
+    def measure_voltage(self) -> float:
+        return self.voltage_v
+
+    def measure_current(self) -> float:
+        return self.current_a
+
+    def query_compliance_tripped(self, _mode: str) -> bool:
+        return False
+
+
+class _ControlBackedHardware(_FakeHardware):
+    def __init__(self, control: SMUControlManager, polarity_factor: int) -> None:
+        super().__init__()
+        self.control = control
+        self.polarity_factor = polarity_factor
+
+    def run_polarity(self, channel, _check_cancel):
+        self.events.append(("polarity", channel.channel))
+        return {
+            "polarity_check_status": "COMPLETED",
+            "polarity_result": (
+                "NORMAL" if self.polarity_factor == 1 else "REVERSED"
+            ),
+            "polarity_factor": self.polarity_factor,
+            "polarity_timestamp": "2026-08-14T06:00:00+08:00",
+            "Jsc": {"representative": -10},
+            "Voc": {"representative": 1.1},
+        }
+
+    def apply_polarity_factor(self, factor):
+        self.events.append(("apply_polarity", factor))
+        self.control.set_recipe_polarity_factor(factor)
+
+    def set_current(self, current_a, compliance):
+        physical = self.control.recipe_output("CC", current_a, compliance)
+        self.events.append(("set_current", current_a, compliance, physical))
+        return physical
+
+    def set_voltage(self, voltage_v, compliance_ma):
+        physical = self.control.recipe_output(
+            "CV", voltage_v, compliance_ma / 1000.0
+        )
+        self.events.append(("set_voltage", voltage_v, compliance_ma, physical))
+        return physical
+
+    def readback(self):
+        return self.control.recipe_readback()
+
+    def output_off(self):
+        self.events.append("output_off")
+        if (
+            self.control.ownership is SMUOwnership.RECIPE
+            and self.control.output_enabled
+        ):
+            self.control.recipe_output_off("test transition")
+
+    def safe_shutdown(self):
+        ok = self.control.safe_shutdown(SMUOwnership.RECIPE)
+        self.safe = ok
+        self.events.append("safe_shutdown")
+        return {
+            "smu_output_off": ok,
+            "routing_off": True,
+            "white_light_off": True,
+            "ownership_released": self.control.ownership is SMUOwnership.IDLE,
+            "ok": ok,
         }
 
 
@@ -254,6 +357,61 @@ class ELMatrixRecipeAndPlanTests(unittest.TestCase):
                 self.assertEqual(18.0, result.el_matrix.current_compliance_ma)
             finally:
                 dialog.close()
+
+    def test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail(self) -> None:
+        recipe = Recipe()
+        recipe.el_matrix.current_density_ma_cm2 = [2.0, 4.0]
+        recipe.el_matrix.voltage_v = [0.8, 1.0, 1.2]
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecipeStore(Path(directory) / "recipes.json")
+            store.upsert(recipe)
+            dialog = RecipeManagerDialog(store)
+            try:
+                self.app.processEvents()
+                dialog.matrix_current_density_edit.setText("2, 4, 6")
+                for invalid in ("nan", "inf", "-inf", "abc"):
+                    with self.subTest(inactive_voltage=invalid):
+                        dialog.matrix_voltage_edit.setText(invalid)
+                        with patch(
+                            "gui.recipe_dialog_logic.QMessageBox.information"
+                        ):
+                            dialog._save_current()
+                        saved = store.get(recipe.recipe_id)
+                        self.assertIsNotNone(saved)
+                        self.assertEqual(
+                            [2.0, 4.0, 6.0],
+                            saved.el_matrix.current_density_ma_cm2,
+                        )
+                        self.assertEqual(
+                            [0.8, 1.0, 1.2], saved.el_matrix.voltage_v
+                        )
+
+                dialog.matrix_current_density_edit.setText("nan")
+                with self.assertRaisesRegex(ValueError, "Current Density List"):
+                    dialog._read_form_to_recipe()
+                dialog.matrix_output_mode_combo.setCurrentIndex(
+                    dialog.matrix_output_mode_combo.findData("voltage")
+                )
+                dialog.matrix_voltage_edit.setText("inf")
+                with self.assertRaisesRegex(ValueError, "Voltage List"):
+                    dialog._read_form_to_recipe()
+                dialog.matrix_voltage_edit.clear()
+                with self.assertRaisesRegex(ValueError, "不可空白"):
+                    dialog._read_form_to_recipe()
+                dialog.matrix_voltage_edit.setText("0.9, 1.1")
+                dialog.matrix_current_density_edit.setText("-inf")
+                with patch(
+                    "gui.recipe_dialog_logic.QMessageBox.information"
+                ):
+                    dialog._save_current()
+                saved = store.get(recipe.recipe_id)
+                self.assertIsNotNone(saved)
+                self.assertEqual(
+                    [2.0, 4.0, 6.0], saved.el_matrix.current_density_ma_cm2
+                )
+                self.assertEqual([0.9, 1.1], saved.el_matrix.voltage_v)
+            finally:
+                dialog.close()
     def test_enabled_channels_are_fixed_order_and_disabled_are_skipped(self) -> None:
         recipe = _small_recipe(3)
         recipe.channels[1].enabled = False
@@ -368,6 +526,98 @@ class ELMatrixRecipeAndPlanTests(unittest.TestCase):
 
 
 class ELMatrixRunnerTests(unittest.TestCase):
+    def _run_physical_command_case(
+        self, output_mode: str, polarity_factor: int
+    ) -> tuple[dict[str, object], list[tuple[object, ...]], str, str, dict[str, str]]:
+        recipe = _small_recipe(1)
+        recipe.el_matrix.dark_frame_enabled = False
+        recipe.dark_iv.enabled = False
+        recipe.el_matrix.gains_percent = [100]
+        recipe.el_matrix.exposures_ms = [1.0]
+        recipe.el_matrix.current_density_ma_cm2 = [10.0]
+        recipe.el_matrix.output_mode = output_mode
+        recipe.el_matrix.voltage_v = [1.0]
+        recipe.el_matrix.current_compliance_ma = 20.0
+        driver = _RecordingSMUDriver()
+        control = SMUControlManager()
+        control.bind_driver(driver, output_confirmed_off=True)
+        control.acquire_recipe()
+        hardware = _ControlBackedHardware(control, polarity_factor)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                result = ELMatrixRunner(
+                    recipe,
+                    hardware,
+                    directory,
+                    report_progress=lambda _item: None,
+                    is_cancel_requested=lambda: False,
+                ).run()
+                run_directory = Path(result["output_directory"])
+                metadata_path = next(
+                    run_directory.rglob(
+                        "*_V1.0_*.json"
+                        if output_mode == "voltage"
+                        else "*_J10_*.json"
+                    )
+                )
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                footer = "\n".join(format_el_footer(metadata))
+                with (run_directory / "measurement_manifest.csv").open(
+                    "r", newline="", encoding="utf-8-sig"
+                ) as stream:
+                    manifest_row = next(csv.DictReader(stream))
+                return (
+                    metadata,
+                    list(driver.commands),
+                    metadata_path.name,
+                    footer,
+                    manifest_row,
+                )
+        finally:
+            control.shutdown(safety_confirmed=True)
+
+    def test_current_density_metadata_tracks_positive_and_negative_physical_commands(self) -> None:
+        for factor in (-1, 1):
+            with self.subTest(polarity_factor=factor):
+                metadata, commands, filename, footer, manifest = (
+                    self._run_physical_command_case("current_density", factor)
+                )
+                expected = 0.001 * factor
+                self.assertIn(("CC", expected, 3.0), commands)
+                self.assertEqual(10.0, metadata["SetCurrentDensityMaCm2"])
+                self.assertEqual(0.001, metadata["CalculatedSourceCurrentA"])
+                self.assertEqual(factor, metadata["PolarityFactor"])
+                self.assertEqual(expected, metadata["CommandedPhysicalCurrentA"])
+                self.assertEqual(
+                    expected * 1000.0,
+                    metadata["CommandedPhysicalCurrentMa"],
+                )
+                self.assertIsNone(metadata["CommandedPhysicalVoltageV"])
+                self.assertIn("_J10_", filename)
+                self.assertIn("J=10 mA/cm²", footer)
+                self.assertEqual(str(expected), manifest["CommandedPhysicalCurrentA"])
+                self.assertEqual("", manifest["CommandedPhysicalVoltageV"])
+
+    def test_voltage_metadata_tracks_positive_and_negative_physical_commands(self) -> None:
+        for factor in (-1, 1):
+            with self.subTest(polarity_factor=factor):
+                metadata, commands, filename, footer, manifest = (
+                    self._run_physical_command_case("voltage", factor)
+                )
+                expected = 1.0 * factor
+                self.assertIn(("CV", expected, 0.020), commands)
+                self.assertEqual(1.0, metadata["SetVoltageV"])
+                self.assertEqual(factor, metadata["PolarityFactor"])
+                self.assertEqual(expected, metadata["CommandedVoltageV"])
+                self.assertEqual(expected, metadata["CommandedPhysicalVoltageV"])
+                self.assertIsNone(metadata["CommandedPhysicalCurrentA"])
+                self.assertIn("_V1.0_", filename)
+                self.assertNotIn("_V-1.0_", filename)
+                self.assertIn("V=1.0 V", footer)
+                self.assertNotIn("V=-1.0 V", footer)
+                self.assertEqual(str(expected), manifest["CommandedPhysicalVoltageV"])
+                self.assertEqual("", manifest["CommandedPhysicalCurrentA"])
+
     def test_runner_dark_once_stabilizes_once_per_j_and_keeps_output_during_inner_matrix(self) -> None:
         recipe = _small_recipe(2)
         hardware = _FakeHardware()
