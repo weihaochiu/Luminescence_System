@@ -9,6 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
+from core.i18n import configure_i18n, tr
 from gui.instrument_state_manager import SMUInstrumentState, SMUUIState
 from gui.smu_control import (
     ManualPolarityResult,
@@ -23,6 +24,9 @@ from gui.smu_manual_panel import ManualSMUPanel
 
 
 class SMUUIStructureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        configure_i18n(None)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.gui = Path(__file__).parents[1] / "gui"
@@ -36,17 +40,17 @@ class SMUUIStructureTests(unittest.TestCase):
     def test_manual_panel_is_presentational_and_has_required_controls(self) -> None:
         source = (self.gui / "smu_manual_panel.py").read_text(encoding="utf-8")
         for required in (
-            "定電流密度",
-            "定電壓",
-            "元件面積",
-            "設定電流密度",
-            "Voltage Compliance",
-            "Current Compliance",
-            'QPushButton("輸出")',
+            'tr("smu.constant_current_density")',
+            'tr("smu.constant_voltage")',
+            'tr("smu.device_area")',
+            'tr("smu.set_current_density")',
+            'tr("smu.voltage_compliance")',
+            'tr("smu.current_compliance")',
+            'QPushButton(tr("smu.output"))',
             'QLabel("OFF")',
-            "量測電壓",
-            "量測電流密度",
-            "待輸出確認",
+            'tr("smu.voltage_measured")',
+            'tr("smu.current_density_measured")',
+            'tr("smu.awaiting_output_confirmation")',
         ):
             self.assertIn(required, source)
         self.assertNotIn("Emergency OFF", source)
@@ -79,9 +83,9 @@ class SMUUIStructureTests(unittest.TestCase):
         self.assertLess(routing_shutdown, shutdown)
         self.assertLess(routing_shutdown, camera_close)
         self.assertIn("FORCED_APPLICATION_EXIT_WITH_UNCONFIRMED_SMU_OUTPUT", source)
-        self.assertIn("取消關閉", source)
-        self.assertIn("再次嘗試安全停止", source)
-        self.assertIn("強制結束", source)
+        self.assertIn('tr("common.cancel_close")', source)
+        self.assertIn('tr("common.retry_safe_shutdown")', source)
+        self.assertIn('tr("common.force_exit")', source)
 
     def test_polarity_factor_is_assignment_not_toggle(self) -> None:
         source = (self.gui / "smu_control.py").read_text(encoding="utf-8")
@@ -174,7 +178,7 @@ class SMUUIStructureTests(unittest.TestCase):
         self.assertFalse(hasattr(panel, "emergency_button"))
 
         panel.update_readback(SMUReadback(1.0, 0.001, 0.001, True, True))
-        self.assertEqual("⚠ Voltage Compliance Active", panel.compliance_value.text())
+        self.assertEqual(tr("smu.compliance_active", kind="Voltage"), panel.compliance_value.text())
 
     def test_polarity_label_updates_without_command_applied(self) -> None:
         if self.app is None:

@@ -2,7 +2,13 @@
 
 文件版本：1.8.2
 對應程式版本：V1.8.2
-最後更新：2026-08-19（UTC+8）
+最後更新：2026-08-25（UTC+8）
+
+## 0. 雙語與中央錯誤架構
+
+`core/i18n.py` 是所有 user-facing 文字的單一入口，從 `resources/locales/` 載入 `zh-TW`／`en-US` namespaced catalogs，以 `ui/language` 持久化並用 `language_changed` 通知可即時重譯的視窗。Recipe、Settings 與 ComboBox persistence 只使用 canonical data，不依賴顯示文字。
+
+錯誤依賴方向為 `hardware/workflow failure → GUI/controller boundary → ErrorReporter → structured log + bounded session history + presentation`。`resources/errors/error_registry.json` 只保存穩定 code、subsystem、severity、recoverability、translation key 與 actions；`core/error_context.py` 建立有界且可序列化的 diagnostics；`gui/dialogs/error_dialog.py` 與 `gui/error_center/` 負責 UI。硬體層不匯入 PySide dialog，Critical definitions 不得包含 Ignore／Continue。
 
 ## 1. 文件目的
 

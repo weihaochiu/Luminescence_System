@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import tr
+
 from .smu_base import SMUDevice
 from .instrument_state_manager import SMUInstrumentState, SMUUIState
 from .recipe_store import Recipe
@@ -38,24 +40,24 @@ class DevicePanel(QWidget):
         self.smu_list = QListWidget()
         self.smu_list.setMaximumHeight(132)
         self.smu_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.smu_list.setToolTip("選取 VISA 儀器後按「連線」；選取本身不會自動連線。")
+        self.smu_list.setToolTip(tr("smu.select_tooltip"))
 
         self.recipe_list = QListWidget()
         self.recipe_list.setMaximumHeight(165)
         self.recipe_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.recipe_list.setToolTip("此處只顯示已啟用且通過驗證的 Recipe。")
-        self.recipe_empty_label = QLabel("尚無可用 Recipe\n請從「設定 → Recipe 管理」建立")
+        self.recipe_list.setToolTip(tr("recipe.available_only_tooltip"))
+        self.recipe_empty_label = QLabel(tr("recipe.none_available"))
         self.recipe_empty_label.setWordWrap(True)
         self.recipe_empty_label.setStyleSheet("color:#687078; padding:6px;")
 
-        self.smu_state = QLabel("● 未連線")
+        self.smu_state = QLabel(tr("common.state_disconnected"))
         self.smu_state.setObjectName("smuState")
         self.smu_state.setWordWrap(True)
         self.smu_state.setStyleSheet("color: #687078; font-weight: 600;")
 
-        self.smu_scan_button = QPushButton("重新掃描")
-        self.smu_connect_button = QPushButton("連線")
-        self.smu_disconnect_button = QPushButton("中斷")
+        self.smu_scan_button = QPushButton(tr("common.rescan"))
+        self.smu_connect_button = QPushButton(tr("common.connect"))
+        self.smu_disconnect_button = QPushButton(tr("common.disconnect"))
         self.smu_disconnect_button.setEnabled(False)
 
         buttons = QHBoxLayout()
@@ -97,10 +99,11 @@ class DevicePanel(QWidget):
         self.smu_list.clear()
         preferred_row = -1
         for row, device in enumerate(devices):
-            suffix = "（B2900 驅動）" if device.supported else "（一般 SCPI）"
-            serial = f"S/N：{device.serial_number}\n" if device.serial_number else ""
+            suffix = tr("smu.b2900_driver_suffix") if device.supported else tr("smu.generic_scpi_suffix")
+            serial = tr("smu.serial_line", serial=device.serial_number) if device.serial_number else ""
             self.smu_list.addItem(
-                f"{device.display_name} {suffix}\n{serial}{device.visa_address}"
+                tr("smu.device_list_entry", name=device.display_name, suffix=suffix,
+                   serial=serial, resource=device.visa_address)
             )
             self.smu_list.item(row).setToolTip(device.idn or device.visa_address)
             if device.visa_address == preferred_address:
@@ -138,12 +141,12 @@ class DevicePanel(QWidget):
             except ValueError:
                 counts = recipe.matrix_capture_counts()
             self.recipe_list.addItem(
-                f"{recipe.name}\nv{recipe.version}｜"
-                f"{len(recipe.enabled_channels())} Channels｜{counts['overall']} captures"
+                tr("recipe.list_summary", name=recipe.name, version=recipe.version,
+                   channels=len(recipe.enabled_channels()), captures=counts["overall"])
             )
             self.recipe_list.item(row).setToolTip(
                 (recipe.description + "\n" if recipe.description else "")
-                + "實際流程請於 Recipe 管理右側的完整執行流程預覽確認"
+                + tr("recipe.preview_tooltip")
             )
             if recipe.recipe_id == preferred_id:
                 preferred_row = row
@@ -158,17 +161,17 @@ class DevicePanel(QWidget):
         return self.recipes[row] if 0 <= row < len(self.recipes) else None
 
     def set_smu_scanning(self) -> None:
-        self.smu_state.setText("● 掃描中")
+        self.smu_state.setText(tr("common.state_scanning"))
         self.smu_state.setStyleSheet("color: #c48a00; font-weight: 600;")
         self._set_busy(True)
 
     def set_smu_connecting(self) -> None:
-        self.smu_state.setText("● 連線中")
+        self.smu_state.setText(tr("common.state_connecting"))
         self.smu_state.setStyleSheet("color: #c48a00; font-weight: 600;")
         self._set_busy(True)
 
     def set_smu_connected(self, device: SMUDevice) -> None:
-        self.smu_state.setText(f"● 已連線：{device.model or device.display_name}")
+        self.smu_state.setText(tr("common.state_connected_to", device=device.model or device.display_name))
         self.smu_state.setStyleSheet("color: #16823b; font-weight: 600;")
         self.smu_list.setEnabled(False)
         self.smu_scan_button.setEnabled(False)

@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import tr
+
 from .recipe_dialog_logic import RecipeDialogLogicMixin
 from .recipe_dialog_pages import RecipeDialogPagesMixin
 from .recipe_store import Recipe, RecipeStore
@@ -41,7 +43,7 @@ class RecipeManagerDialog(
         super().__init__(parent)
         self.store = store
         self.current_recipe: Recipe | None = None
-        self.setWindowTitle("EL Recipe 管理－四階段流程")
+        self.setWindowTitle(tr("recipe.dialog_title"))
         self.resize(1500, 850)
         self.setMinimumSize(1180, 700)
         self._build_ui()
@@ -56,14 +58,14 @@ class RecipeManagerDialog(
 
     def _build_ui(self) -> None:
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("搜尋 Recipe…")
+        self.search_edit.setPlaceholderText(tr("recipe.search"))
         self.recipe_list = QListWidget()
         self.recipe_list.setMinimumWidth(230)
-        self.new_button = QPushButton("新增")
-        self.copy_button = QPushButton("複製")
-        self.delete_button = QPushButton("刪除")
-        self.import_button = QPushButton("匯入")
-        self.export_button = QPushButton("匯出")
+        self.new_button = QPushButton(tr("common.new"))
+        self.copy_button = QPushButton(tr("common.copy"))
+        self.delete_button = QPushButton(tr("common.delete"))
+        self.import_button = QPushButton(tr("common.import"))
+        self.export_button = QPushButton(tr("common.export"))
 
         list_buttons = QHBoxLayout()
         list_buttons.addWidget(self.new_button)
@@ -75,24 +77,24 @@ class RecipeManagerDialog(
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(QLabel("所有 Recipe"))
+        left_layout.addWidget(QLabel(tr("recipe.all")))
         left_layout.addWidget(self.search_edit)
         left_layout.addWidget(self.recipe_list, 1)
         left_layout.addLayout(list_buttons)
         left_layout.addLayout(transfer_buttons)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_basic_tab(), "1 基本資料")
-        self.tabs.addTab(self._build_polarity_dark_iv_tab(), "2 極性確認 / Dark IV")
-        self.tabs.addTab(self._build_el_matrix_tab(), "3 EL Matrix")
-        self.tabs.addTab(self._build_output_tab(), "4 輸出")
+        self.tabs.addTab(self._build_basic_tab(), tr("recipe.tab_basic"))
+        self.tabs.addTab(self._build_polarity_dark_iv_tab(), tr("recipe.tab_polarity_dark"))
+        self.tabs.addTab(self._build_el_matrix_tab(), tr("recipe.tab_matrix"))
+        self.tabs.addTab(self._build_output_tab(), tr("recipe.tab_output"))
 
         self.execution_tree = QTreeWidget()
         self.execution_tree.setHeaderHidden(True)
         self.execution_tree.setStyleSheet(
             "background:#f6f7f8; border:1px solid #c9cdd0; padding:6px;"
         )
-        self.validation_label = QLabel("尚未驗證")
+        self.validation_label = QLabel(tr("recipe.not_validated"))
         self.validation_label.setWordWrap(True)
         self.validation_label.setStyleSheet("color:#687078; padding:6px;")
         right = QWidget()
@@ -100,9 +102,9 @@ class RecipeManagerDialog(
         right.setMaximumWidth(390)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.addWidget(QLabel("完整執行流程"))
+        right_layout.addWidget(QLabel(tr("recipe.execution_plan")))
         right_layout.addWidget(self.execution_tree, 1)
-        right_layout.addWidget(QLabel("驗證結果"))
+        right_layout.addWidget(QLabel(tr("recipe.validation_result")))
         right_layout.addWidget(self.validation_label)
 
         divider1 = QFrame()
@@ -116,12 +118,12 @@ class RecipeManagerDialog(
         columns.addWidget(divider2)
         columns.addWidget(right)
 
-        self.validate_button = QPushButton("驗證")
-        self.save_button = QPushButton("儲存")
+        self.validate_button = QPushButton(tr("common.validate"))
+        self.save_button = QPushButton(tr("common.save"))
         self.save_button.setDefault(True)
-        self.close_button = QPushButton("關閉")
+        self.close_button = QPushButton(tr("common.close"))
         footer = QHBoxLayout()
-        footer.addWidget(QLabel("Sample ID 與儲存目錄在主畫面設定；安全限制位於設定 → 安全 / SMU。"))
+        footer.addWidget(QLabel(tr("recipe.footer_settings_note")))
         footer.addStretch()
         footer.addWidget(self.validate_button)
         footer.addWidget(self.save_button)

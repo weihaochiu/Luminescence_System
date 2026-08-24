@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import tr
+
 from .responsive_layout import LayoutMode
 
 
@@ -25,7 +27,7 @@ class MeasurementControlBar(QFrame):
         self.setObjectName("measurementBar")
         self.layout_mode = LayoutMode.WIDE
 
-        self.sample_label = QLabel("樣品資訊")
+        self.sample_label = QLabel(tr("measurement.sample_information"))
         self.sample_container = QWidget()
         self.sample_layout = QVBoxLayout(self.sample_container)
         self.sample_layout.setContentsMargins(0, 0, 0, 0)
@@ -34,21 +36,21 @@ class MeasurementControlBar(QFrame):
         self.sample_id_edit = QLineEdit()  # compatibility alias, replaced below
         self.set_active_channels(())
 
-        self.path_label = QLabel("儲存目錄")
+        self.path_label = QLabel(tr("measurement.output_directory"))
         self.measurement_path_edit = QLineEdit()
         self.measurement_path_edit.setReadOnly(True)
-        self.measurement_path_edit.setPlaceholderText("選擇量測資料儲存位置")
+        self.measurement_path_edit.setPlaceholderText(tr("measurement.select_output_directory"))
         self.measurement_path_edit.textChanged.connect(self.measurement_path_edit.setToolTip)
-        self.measurement_path_button = QPushButton("瀏覽…")
+        self.measurement_path_button = QPushButton(tr("common.browse"))
 
         self.recipe_label = QLabel("Recipe")
-        self.selected_recipe_label = QLabel("尚未選擇")
+        self.selected_recipe_label = QLabel(tr("common.not_selected"))
         self.selected_recipe_label.setWordWrap(True)
-        self.white_light_status = QLabel("白光 ● 未連線")
-        self.white_light_button = QPushButton("開啟白光")
-        self.start_measurement_button = QPushButton("開始量測")
+        self.white_light_status = QLabel(tr("relay.white_light_disconnected"))
+        self.white_light_button = QPushButton(tr("relay.white_light_on"))
+        self.start_measurement_button = QPushButton(tr("measurement.start"))
         self.start_measurement_button.setObjectName("startMeasurement")
-        self.stop_measurement_button = QPushButton("停止")
+        self.stop_measurement_button = QPushButton(tr("common.stop"))
         self.stop_measurement_button.setObjectName("stopMeasurement")
         self.stop_measurement_button.setEnabled(False)
 
@@ -70,7 +72,7 @@ class MeasurementControlBar(QFrame):
         for channel in channels:
             edit = QLineEdit()
             edit.setObjectName(f"sampleId_{channel}")
-            edit.setPlaceholderText(f"{channel} 樣品 ID")
+            edit.setPlaceholderText(tr("measurement.sample_id_for_channel", channel=channel))
             edit.setText(previous.get(channel, ""))
             edit.textChanged.connect(lambda _text: self.sample_ids_changed.emit())
             self.sample_layout.addWidget(edit)
@@ -79,7 +81,7 @@ class MeasurementControlBar(QFrame):
             self.sample_id_edit = next(iter(self.sample_id_edits.values()))
         else:
             placeholder = QLineEdit()
-            placeholder.setPlaceholderText("選擇 Recipe 後顯示 active channels")
+            placeholder.setPlaceholderText(tr("measurement.active_channels_placeholder"))
             placeholder.setEnabled(False)
             self.sample_layout.addWidget(placeholder)
             self.sample_id_edit = placeholder

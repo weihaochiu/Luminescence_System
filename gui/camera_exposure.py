@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from enum import Enum
 
+from core.i18n import tr
+
 
 class ExposureMode(str, Enum):
-    """User-selectable exposure modes and their Traditional Chinese labels."""
+    """User-selectable exposure modes with canonical persisted values."""
 
     CONTINUOUS_AUTO = "continuous_auto"
     MANUAL = "manual"
@@ -12,6 +14,6 @@ class ExposureMode(str, Enum):
     @property
     def label(self) -> str:
         return {
-            ExposureMode.CONTINUOUS_AUTO: "持續自動曝光",
-            ExposureMode.MANUAL: "手動曝光",
+            ExposureMode.CONTINUOUS_AUTO: tr("camera.exposure_mode_continuous_auto"),
+            ExposureMode.MANUAL: tr("camera.exposure_mode_manual"),
         }[self]

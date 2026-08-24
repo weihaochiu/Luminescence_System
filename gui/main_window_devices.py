@@ -10,6 +10,8 @@ from PySide6.QtCore import QSignalBlocker, QStandardPaths, QTimer
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
+from core.i18n import tr
+
 from . import __version__
 from .camera_auto_exposure_settings import target_effective_dn
 from .camera_exposure import ExposureMode
@@ -58,14 +60,12 @@ class MainWindowDeviceMixin:
             return
         supported_count = sum(device.supported for device in devices)
         if supported_count > 1:
-            self.status_message.setText(
-                "找到多台支援的 SMU，且無法確認上次成功設備；請手動選擇後連線。"
-            )
+            self.status_message.setText(tr("smu.multiple_devices_manual_selection"))
 
     def connect_selected_smu(self) -> None:
         device = self.device_panel.selected_smu()
         if device is None:
-            QMessageBox.information(self, "尚未選擇 SMU", "請先在左側 SMU 列表選擇一台儀器。")
+            self.report_error("SMU-101", context={"operation": "connect_smu"})
             return
         self._remember_smu_selection(device.visa_address)
         self.smu_manager.connect_device(device)
@@ -124,16 +124,14 @@ class MainWindowDeviceMixin:
             )
             if not accepted:
                 raise SMUInterlockError("SMU 正忙碌，請稍後再試。")
-            self.status_message.setText(
-                f"手動輸出：正在以 Break-Before-Make 切換 {channel_id}…"
-            )
+            self.status_message.setText(tr("smu.routing_channel", channel=channel_id))
         except (ValueError, SMUInterlockError, RelayError) as exc:
             self.show_smu_error(str(exc))
 
     def on_manual_smu_sequence_finished(self, success: bool) -> None:
         self._update_white_light_control()
         if success:
-            self.status_message.setText("手動 SMU OUTPUT ON；已啟動實際 V / J 監控。")
+            self.status_message.setText(tr("smu.manual_output_on_monitoring"))
 
     def on_smu_connected(self, device: SMUDevice) -> None:
         self.device_panel.set_smu_connected(device)
@@ -169,9 +167,7 @@ class MainWindowDeviceMixin:
                 "請勿更換 Relay 或樣品，請檢查 SMU 連線。"
             )
             return
-        self.status_message.setText(
-            "正在確認 SMU OUTPUT OFF；確認後將關閉並驗證所有 SMU routing Relay。"
-        )
+        self.status_message.setText(tr("smu.confirming_output_off_and_routing"))
 
     def request_smu_emergency_off(self) -> None:
         self.emergency_stop_measurement()
@@ -179,9 +175,8 @@ class MainWindowDeviceMixin:
     def request_recipe_to_manual_handover(self) -> None:
         answer = QMessageBox.question(
             self,
-            "安全交接至手動控制",
-            "將取消目前 Recipe、關閉白光，並在 SMU I/O 安全點確認 OUTPUT OFF。\n\n"
-            "確認完成前手動輸出會維持鎖定。是否繼續？",
+            tr("smu.safe_handover_manual"),
+            tr("smu.safe_handover_confirmation"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -193,9 +188,7 @@ class MainWindowDeviceMixin:
         if not self.smu_manager.control.request_recipe_handover_to_manual():
             self.show_smu_error("無法啟動 Recipe 至手動控制的安全交接。")
             return
-        self.status_message.setText(
-            "Recipe 已停止接受新輸出；正在等待安全點並確認 SMU OUTPUT OFF。"
-        )
+        self.status_message.setText(tr("smu.recipe_handover_waiting_safe_point"))
 
     def _remember_smu_selection(self, address: str) -> None:
         if address:
@@ -211,12 +204,12 @@ class MainWindowDeviceMixin:
         if self.devices:
             self.camera_list.setCurrentRow(0)
             self.connect_action.setEnabled(True)
-            self.status_message.setText(f"找到 {len(self.devices)} 台相機")
+            self.status_message.setText(tr("camera.devices_found", count=len(self.devices)))
             if len(self.devices) == 1:
                 QTimer.singleShot(100, self.toggle_connection)
         else:
             self.connect_action.setEnabled(False)
-            self.status_message.setText("找不到相機；請檢查 USB、供電與驅動程式")
+            self.status_message.setText(tr("camera.none_found"))
 
     def toggle_connection(self) -> None:
         if self.controller.is_open:
@@ -224,9 +217,9 @@ class MainWindowDeviceMixin:
             return
         index = self.camera_list.currentRow()
         if index < 0 or index >= len(self.devices):
-            QMessageBox.information(self, "尚未選擇相機", "請先在左側相機列表選擇一台相機。")
+            self.report_error("CAM-101", context={"operation": "connect_camera"})
             return
-        self.status_message.setText("正在連線相機…")
+        self.status_message.setText(tr("camera.connecting"))
         self.controller.open_device(self.devices[index])
 
     def on_camera_opened(self, info: dict[str, Any]) -> None:
@@ -236,12 +229,12 @@ class MainWindowDeviceMixin:
         self._latest_effective_dn_status = {}
         self._live_view_dn_roi = None
         MainWindowDeviceMixin.on_live_view_dn_roi_cleared(self)
-        self.connect_action.setText("中斷連線")
-        self.view_title.setText(f"即時影像 [{info['name']}]")
+        self.connect_action.setText(tr("common.disconnect"))
+        self.view_title.setText(tr("camera.live_view_named", name=info["name"]))
         self.model_value.setText(str(info["model"]))
         self.sdk_value.setText(str(info["sdk_version"]))
-        self.color_value.setText("黑白" if info["mono"] else "彩色")
-        self.camera_status.setText(f"相機 {info['model']}")
+        self.color_value.setText(tr("camera.monochrome") if info["mono"] else tr("camera.color"))
+        self.camera_status.setText(tr("camera.status_model", model=info["model"]))
 
         with QSignalBlocker(self.resolution_combo):
             self.resolution_combo.clear()
@@ -255,19 +248,20 @@ class MainWindowDeviceMixin:
             exp_min, exp_max, _ = exposure_range
             self.exposure_spin.setRange(exp_min / 1000.0, exp_max / 1000.0)
             self.exposure_spin.setToolTip(
-                "相機允許曝光範圍：\n"
-                f"{exp_min / 1000.0:.3f}–{exp_max / 1000.0:.3f} ms"
+                tr(
+                    "camera.exposure_range",
+                    minimum=f"{exp_min / 1000.0:.3f}",
+                    maximum=f"{exp_max / 1000.0:.3f}",
+                )
             )
         else:
-            self.exposure_spin.setToolTip("無法從相機 SDK 取得曝光時間硬體範圍")
+            self.exposure_spin.setToolTip(tr("camera.exposure_range_unavailable"))
         if gain_range is not None:
             gain_min, gain_max, _ = gain_range
             self.gain_spin.setRange(gain_min, gain_max)
-            self.gain_spin.setToolTip(
-                f"相機允許 Gain 範圍：\n{gain_min}–{gain_max} %"
-            )
+            self.gain_spin.setToolTip(tr("camera.gain_range", minimum=gain_min, maximum=gain_max))
         else:
-            self.gain_spin.setToolTip("無法從相機 SDK 取得 Gain 硬體範圍")
+            self.gain_spin.setToolTip(tr("camera.gain_range_unavailable"))
 
         if info.get("exposure_us") is not None and info.get("gain") is not None:
             self.on_exposure_changed(info["exposure_us"], info["gain"])
@@ -321,8 +315,8 @@ class MainWindowDeviceMixin:
         )
 
     def on_camera_closed(self) -> None:
-        self.connect_action.setText("相機連線")
-        self.view_title.setText("即時影像")
+        self.connect_action.setText(tr("toolbar.camera_connect"))
+        self.view_title.setText(tr("camera.live_view"))
         self.camera_info = {}
         self.last_image = None
         self._latest_scientific_frame = None
@@ -331,22 +325,22 @@ class MainWindowDeviceMixin:
         MainWindowDeviceMixin.on_live_view_dn_roi_cleared(self)
         self._cancel_auto_capture()
         self._set_camera_controls_enabled(False)
-        self.resolution_status.setText("影像 —")
-        self.exposure_status.setText("曝光 —")
-        self.gain_status.setText("Gain —")
+        self.resolution_status.setText(tr("camera.image_status_empty"))
+        self.exposure_status.setText(tr("camera.exposure_status_empty"))
+        self.gain_status.setText(tr("camera.gain_status_empty"))
         self.fps_status.setText("FPS —")
         self.camera_temperature_value.setText("N/A")
-        self.temperature_status.setText("相機溫度 N/A")
-        self.camera_status.setText("相機 —")
+        self.temperature_status.setText(tr("camera.temperature_unavailable"))
+        self.camera_status.setText(tr("camera.status_empty"))
         self.current_exposure_value.setText("--")
         self.current_gain_value.setText("--")
         self._mean_effective_dn = None
-        self.mean_effective_dn_value.setText("無法判定")
+        self.mean_effective_dn_value.setText(tr("common.undetermined"))
         self.effective_dn_percent_value.setText("--")
         self.sensor_bit_depth_value.setText("--")
         self.raw_value_alignment_value.setText("Unknown")
-        self.auto_exposure_target_dn_value.setText("無法判定")
-        self.live_view_ae_metering_value.setText("AE 測光：--")
+        self.auto_exposure_target_dn_value.setText(tr("common.undetermined"))
+        self.live_view_ae_metering_value.setText(tr("camera.ae_metering_empty"))
         self.live_view_ae_metering_value.setToolTip("")
 
     def change_resolution(self, index: int) -> None:
@@ -412,8 +406,8 @@ class MainWindowDeviceMixin:
             self.exposure_spin.setValue(exposure_us / 1000.0)
         with QSignalBlocker(self.gain_spin):
             self.gain_spin.setValue(gain)
-        self.exposure_status.setText(f"曝光 {self._format_exposure(exposure_us)}")
-        self.gain_status.setText(f"Gain {gain}%")
+        self.exposure_status.setText(tr("camera.exposure_status", value=self._format_exposure(exposure_us)))
+        self.gain_status.setText(tr("camera.gain_status", value=gain))
         self.current_exposure_value.setText(f"{exposure_us / 1000.0:.3f} ms")
         self.current_gain_value.setText(f"{gain} %")
 
@@ -426,13 +420,13 @@ class MainWindowDeviceMixin:
         if exposure_us is None or gain is None:
             self.current_exposure_value.setText("--")
             self.current_gain_value.setText("--")
-            self.exposure_status.setText("曝光 —")
-            self.gain_status.setText("Gain —")
+            self.exposure_status.setText(tr("camera.exposure_status_empty"))
+            self.gain_status.setText(tr("camera.gain_status_empty"))
         else:
             self.current_exposure_value.setText(f"{exposure_us / 1000.0:.3f} ms")
             self.current_gain_value.setText(f"{gain} %")
-            self.exposure_status.setText(f"曝光 {self._format_exposure(exposure_us)}")
-            self.gain_status.setText(f"Gain {gain}%")
+            self.exposure_status.setText(tr("camera.exposure_status", value=self._format_exposure(exposure_us)))
+            self.gain_status.setText(tr("camera.gain_status", value=gain))
 
     def on_effective_dn_status_changed(self, status: dict[str, Any]) -> None:
         self._latest_effective_dn_status = dict(status)
@@ -473,21 +467,21 @@ class MainWindowDeviceMixin:
         if alignment in {"right", "left"}:
             alignment_text = alignment.capitalize()
         elif alignment_source == "InsufficientSignal":
-            alignment_text = "訊號不足"
+            alignment_text = tr("camera.insufficient_signal")
         elif alignment_source == "AmbiguousRuntimeEvidence":
-            alignment_text = "無法判定"
+            alignment_text = tr("common.undetermined")
         elif (
             verification_state in {"Unknown", "Collecting"}
             and alignment_source == "RuntimeVerificationPending"
         ):
-            alignment_text = "確認中"
+            alignment_text = tr("common.confirming")
         else:
             alignment_text = "Unknown"
         self.raw_value_alignment_value.setText(alignment_text)
         self.mean_effective_dn_value.setText(
             f"{round(float(mean_dn))} /{int(maximum)}"
             if mean_dn is not None and maximum is not None
-            else "無法判定"
+            else tr("common.undetermined")
         )
         self.effective_dn_percent_value.setText(
             f"{float(percent):.1f} %" if percent is not None else "--"
@@ -496,25 +490,22 @@ class MainWindowDeviceMixin:
         if target_dn is not None and maximum is not None:
             target_text = f"{int(target_dn)} /{int(maximum)}"
             if not bool(status.get("AutoExposureCalibrationApplied")):
-                target_text += "（參考）"
+                target_text += tr("common.reference_suffix")
         elif alignment_source == "RuntimeVerificationPending":
-            target_text = "等待 DN alignment"
+            target_text = tr("camera.waiting_dn_alignment")
         elif alignment_source == "InsufficientSignal":
-            target_text = "Alignment 訊號不足"
+            target_text = tr("camera.alignment_insufficient_signal")
         else:
-            target_text = "無法判定"
+            target_text = tr("common.undetermined")
         self.auto_exposure_target_dn_value.setText(target_text)
         sdk_target = status.get("SDKAutoExposureTargetReadback")
         calibration_applied = bool(status.get("AutoExposureCalibrationApplied"))
         if calibration_applied:
-            calibration_text = f"Calibrated SDK Target = {sdk_target}"
+            calibration_text = tr("camera.calibrated_sdk_target", target=sdk_target)
         else:
-            calibration_text = (
-                f"目前使用未校正 SDK Target guess = {sdk_target}。\n"
-                "尚未進行 SDK AE ↔ Effective DN 校正"
-            )
+            calibration_text = tr("camera.uncalibrated_sdk_target_detail", target=sdk_target)
         self.auto_exposure_target_dn_value.setToolTip(
-            f"AE 控制器：RisingCam SDK\n{calibration_text}"
+            tr("camera.ae_controller_details", details=calibration_text)
         )
         MainWindowDeviceMixin._refresh_live_view_ae_metering_status(self, status)
         MainWindowDeviceMixin._refresh_live_view_roi_dn(self)
@@ -547,23 +538,19 @@ class MainWindowDeviceMixin:
 
     def begin_live_view_dn_roi_selection(self) -> None:
         if self.image_view.begin_roi_selection():
-            self.status_message.setText(
-                "請在 Live View 拖曳框選 Scientific DN ROI；完成後自動恢復平移。"
-            )
+            self.status_message.setText(tr("camera.roi_selection_instruction"))
 
     def on_live_view_dn_roi_selected(
         self, x: int, y: int, width: int, height: int
     ) -> None:
         self._live_view_dn_roi = (x, y, width, height)
-        coordinate_text = f"ROI：X={x} Y={y} {width}×{height}"
+        coordinate_text = tr("camera.roi_coordinates", x=x, y=y, width=width, height=height)
         self.live_view_roi_value.setText(coordinate_text)
         self.live_view_roi_value.setToolTip(coordinate_text)
         MainWindowDeviceMixin._update_live_view_roi_controls(self)
         MainWindowDeviceMixin._refresh_live_view_roi_dn(self)
         if not self.controller.set_auto_exposure_roi(x, y, width, height):
-            self.status_message.setText(
-                "Scientific ROI 已保留，但 SDK Auto Exposure ROI readback 驗證失敗。"
-            )
+            self.status_message.setText(tr("camera.roi_sdk_verification_failed"))
 
     def clear_live_view_dn_roi(self) -> None:
         if self.controller.is_open:
@@ -572,9 +559,9 @@ class MainWindowDeviceMixin:
 
     def on_live_view_dn_roi_cleared(self) -> None:
         self._live_view_dn_roi = None
-        self.live_view_roi_value.setText("ROI：未設定")
+        self.live_view_roi_value.setText(tr("camera.roi_not_set"))
         self.live_view_roi_value.setToolTip("")
-        self.live_view_roi_dn_value.setText("ROI 平均 DN：--")
+        self.live_view_roi_dn_value.setText(tr("camera.roi_mean_dn_empty"))
         MainWindowDeviceMixin._update_live_view_roi_controls(self)
 
     def _refresh_live_view_ae_metering_status(
@@ -623,17 +610,17 @@ class MainWindowDeviceMixin:
         scientific = self._latest_scientific_frame
         status = self._latest_effective_dn_status
         if roi is None or scientific is None:
-            self.live_view_roi_dn_value.setText("ROI 平均 DN：--")
+            self.live_view_roi_dn_value.setText(tr("camera.roi_mean_dn_empty"))
             return
         sensor_bits = status.get("SensorBitDepth")
         container_bits = status.get("ContainerBitDepth")
         alignment = str(status.get("RawValueAlignment", "unknown")).lower()
         maximum = status.get("EffectiveDNMax")
         if alignment == "unknown":
-            self.live_view_roi_dn_value.setText("ROI 平均 DN：無法判定")
+            self.live_view_roi_dn_value.setText(tr("camera.roi_mean_dn_undetermined"))
             return
         if sensor_bits is None or container_bits is None or maximum is None:
-            self.live_view_roi_dn_value.setText("ROI 平均 DN：--")
+            self.live_view_roi_dn_value.setText(tr("camera.roi_mean_dn_empty"))
             return
         try:
             mean_dn = mean_effective_dn_roi(
@@ -647,17 +634,20 @@ class MainWindowDeviceMixin:
             if maximum_dn <= 0:
                 raise ValueError("EffectiveDNMax must be positive")
         except (TypeError, ValueError):
-            self.live_view_roi_dn_value.setText("ROI 平均 DN：無法判定")
+            self.live_view_roi_dn_value.setText(tr("camera.roi_mean_dn_undetermined"))
             return
         percent = mean_dn / maximum_dn * 100.0
         rounded_mean_dn = int(mean_dn + 0.5)
-        self.live_view_roi_dn_value.setText(
-            f"ROI 平均 DN：{rounded_mean_dn} /{maximum_dn} ({percent:.1f}%)"
-        )
+        self.live_view_roi_dn_value.setText(tr(
+            "camera.roi_mean_dn_value",
+            value=rounded_mean_dn,
+            maximum=maximum_dn,
+            percent=f"{percent:.1f}",
+        ))
 
     def capture_current_frame(self) -> None:
         if self.last_image is None:
-            QMessageBox.information(self, "尚無影像", "請先連線相機並等待即時影像出現。")
+            self.report_error("CAM-101", context={"operation": "capture_current_frame"})
             return
         path = self._choose_capture_path("manual")
         if path:
@@ -670,7 +660,7 @@ class MainWindowDeviceMixin:
 
     def auto_expose_and_capture(self) -> None:
         if not self.controller.is_open or self.last_image is None:
-            QMessageBox.information(self, "尚無影像", "請先連線相機並等待即時影像出現。")
+            self.report_error("CAM-101", context={"operation": "auto_expose_and_capture"})
             return
         path = self._choose_capture_path("auto")
         if not path:
@@ -696,13 +686,16 @@ class MainWindowDeviceMixin:
             self._active_exposure_mode = ExposureMode.MANUAL
             self._set_exposure_mode_ui(ExposureMode.MANUAL)
             self._update_exposure_control_state()
-            self.status_message.setText("曝光已收斂，正在取得拍攝影像…")
+            self.status_message.setText(tr("camera.exposure_converged_capturing"))
             self._capture_next_frame = True
         else:
             self._active_exposure_mode = ExposureMode.MANUAL
             self._set_exposure_mode_ui(ExposureMode.MANUAL)
             self._cancel_auto_capture()
-            QMessageBox.warning(self, "自動曝光失敗", message)
+            self.report_error(
+                "CAM-202",
+                context={"operation": "auto_exposure", "actual": message},
+            )
 
     def on_ae_calibration_finished(self, _success: bool, _message: str) -> None:
         mode = (
@@ -724,10 +717,13 @@ class MainWindowDeviceMixin:
             path = self._pending_auto_path
             self._pending_auto_path = None
             self._save_image(path, capture_mode="auto_once_timeout", auto_converged=False)
-            QMessageBox.information(
-                self,
-                "自動曝光逾時",
-                "15 秒內未收到收斂事件，已鎖定並保存最新畫面；JSON 紀錄中的 auto_converged 為 false。",
+            self.report_error(
+                "CAM-203",
+                context={
+                    "operation": "auto_exposure_capture",
+                    "expected": "convergence event within 15 seconds",
+                    "actual": "latest frame saved with auto_converged=false",
+                },
             )
         self._finish_auto_capture_ui()
 
@@ -804,14 +800,18 @@ class MainWindowDeviceMixin:
         metadata.update(self.temperature_monitor.metadata_fields())
         try:
             image_path, sidecar_path = save_image_and_metadata(self.last_image, path, metadata)
-            self.status_message.setText(f"已保存：{image_path.name}")
+            self.status_message.setText(tr("file.saved_name", name=image_path.name))
             QMessageBox.information(
                 self,
-                "拍攝完成",
-                f"影像：{image_path}\n設定紀錄：{sidecar_path}",
+                tr("camera.capture_complete"),
+                tr("camera.capture_paths", image=image_path, sidecar=sidecar_path),
             )
         except Exception as exc:
-            self.show_error(f"儲存影像失敗：{exc}")
+            self.report_error(
+                "FILE-201",
+                context={"operation": "save_image", "resource": path},
+                exception=exc,
+            )
 
     def _choose_capture_path(self, mode: str) -> str:
         pictures = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation)
@@ -821,7 +821,7 @@ class MainWindowDeviceMixin:
         suggested = str(base_dir / f"EL_{suffix}_{timestamp}.tif")
         path, selected_filter = QFileDialog.getSaveFileName(
             self,
-            "保存拍攝影像",
+            tr("file.save_capture_image"),
             suggested,
             "TIFF（建議） (*.tif *.tiff);;PNG (*.png);;JPEG (*.jpg *.jpeg);;Bitmap (*.bmp)",
         )
@@ -851,13 +851,13 @@ class MainWindowDeviceMixin:
     def on_temperature_sample(self, sample: TemperatureSample) -> None:
         text = format_temperature_c(sample.value_c)
         self.camera_temperature_value.setText(text)
-        self.temperature_status.setText(f"相機溫度 {text}")
+        self.temperature_status.setText(tr("camera.temperature_current", temperature=text))
 
     def on_temperature_availability_changed(self, available: bool) -> None:
         if available:
             return
         self.camera_temperature_value.setText("N/A")
-        self.temperature_status.setText("相機溫度 N/A")
+        self.temperature_status.setText(tr("camera.temperature_unavailable"))
 
     def open_temperature_chart(self) -> None:
         self.temperature_chart.show()
@@ -866,13 +866,38 @@ class MainWindowDeviceMixin:
 
     def show_error(self, message: str) -> None:
         self.status_message.setText(message)
-        QMessageBox.warning(self, "相機控制錯誤", message)
+        self.report_error(
+            "CAM-202",
+            context={"operation": "camera_control", "actual": message},
+        )
 
     def show_smu_error(self, message: str) -> None:
         self.status_message.setText(message)
         if not self.smu_manager.is_connected:
             self.device_panel.set_smu_disconnected(error=True)
-        QMessageBox.warning(self, "SMU 設備錯誤", message)
+        folded = message.casefold()
+        if (
+            not self.smu_manager.control.output_confirmed_off
+            and any(token in folded for token in ("output off", "safe shutdown", "unconfirmed", "無法確認"))
+        ):
+            code = "SMU-203"
+        elif "unexpected" in folded and "output" in folded:
+            code = "SMU-205"
+        elif "compliance" in folded:
+            code = "SMU-204"
+        else:
+            code = "SMU-201"
+        selected = self.device_panel.selected_smu()
+        self.report_error(
+            code,
+            context={
+                "operation": "smu_control",
+                "instrument": selected.display_name if selected is not None else None,
+                "resource": selected.visa_address if selected is not None else None,
+                "actual": message,
+                "expected": "OUTPUT OFF" if code in {"SMU-203", "SMU-205"} else None,
+            },
+        )
 
     @staticmethod
     def _format_exposure(exposure_us: int) -> str:

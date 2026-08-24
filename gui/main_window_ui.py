@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import tr
 from .camera_exposure import ExposureMode
 from .device_panel import DevicePanel
 from .measurement_control_bar import MeasurementControlBar
@@ -40,65 +41,67 @@ class MainWindowUIMixin:
     def _build_actions(self) -> None:
         style = self.style()
         self.refresh_action = QAction(
-            style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload), "重新偵測", self
+            style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload), tr("toolbar.refresh_devices"), self
         )
         self.refresh_action.setShortcut(QKeySequence("F5"))
-        self.refresh_action.setToolTip("重新掃描並偵測相機（F5）")
+        self.refresh_action.setToolTip(tr("toolbar.refresh_devices_tooltip"))
         self.connect_action = QAction(
-            style.standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton), "相機連線", self
+            style.standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton), tr("toolbar.camera_connection"), self
         )
-        self.connect_action.setToolTip("連線或中斷目前選取的相機")
+        self.connect_action.setToolTip(tr("toolbar.camera_connection_tooltip"))
         self.capture_action = QAction(
-            style.standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton), "拍攝影像", self
+            style.standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton), tr("toolbar.capture_image"), self
         )
         self.capture_action.setShortcut(QKeySequence("Ctrl+S"))
-        self.capture_action.setToolTip("使用目前相機設定拍攝並儲存影像（Ctrl+S）")
+        self.capture_action.setToolTip(tr("toolbar.capture_image_tooltip"))
         self.auto_capture_action = QAction(
-            style.standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton), "自動曝光拍攝", self
+            style.standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton), tr("toolbar.auto_capture"), self
         )
-        self.auto_capture_action.setToolTip("等待自動曝光收斂後拍攝並儲存影像")
-        self.temperature_chart_action = QAction("相機溫度趨勢圖…", self)
-        self.temperature_chart_action.setToolTip("開啟 Camera Temperature vs Time 趨勢圖")
+        self.auto_capture_action.setToolTip(tr("toolbar.auto_capture_tooltip"))
+        self.temperature_chart_action = QAction(tr("camera.temperature_chart"), self)
+        self.temperature_chart_action.setToolTip(tr("camera.temperature_chart_tooltip"))
         self.fit_action = QAction(
-            style.standardIcon(QStyle.StandardPixmap.SP_TitleBarMaxButton), "符合視窗", self
+            style.standardIcon(QStyle.StandardPixmap.SP_TitleBarMaxButton), tr("view.fit_window"), self
         )
-        self.fit_action.setToolTip("縮放影像以符合目前顯示區域")
+        self.fit_action.setToolTip(tr("view.fit_window_tooltip"))
         self.actual_action = QAction(
-            style.standardIcon(QStyle.StandardPixmap.SP_TitleBarNormalButton), "原始尺寸", self
+            style.standardIcon(QStyle.StandardPixmap.SP_TitleBarNormalButton), tr("view.actual_size"), self
         )
-        self.actual_action.setToolTip("以 100% 比例顯示影像")
-        self.exit_action = QAction("結束", self)
+        self.actual_action.setToolTip(tr("view.actual_size_tooltip"))
+        self.exit_action = QAction(tr("app.exit"), self)
         self.exit_action.setShortcut(QKeySequence.StandardKey.Quit)
-        self.about_action = QAction("關於", self)
+        self.about_action = QAction(tr("app.about"), self)
         self.recipe_manager_action = QAction(
-            style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView), "Recipe 管理", self
+            style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView), tr("recipe.manager"), self
         )
         self.recipe_manager_action.setShortcut(QKeySequence("Ctrl+R"))
-        self.recipe_manager_action.setToolTip("建立、編輯、驗證或匯入／匯出 Recipe（Ctrl+R）")
-        self.polarity_settings_action = QAction("極性確認…", self)
+        self.recipe_manager_action.setToolTip(tr("recipe.manager_tooltip"))
+        self.polarity_settings_action = QAction(tr("settings.polarity"), self)
         self.camera_auto_exposure_settings_action = QAction(
-            "自動曝光設定…", self
+            tr("settings.auto_exposure"), self
         )
         self.camera_auto_exposure_settings_action.setToolTip(
-            "設定 Scientific Effective DN 全畫面平均值的 Software AE 目標"
+            tr("settings.auto_exposure_tooltip")
         )
-        self.polarity_settings_action.setToolTip("設定手動輸出與 Recipe 共用的 Jsc / Voc 極性確認條件")
-        self.relay_settings_action = QAction("Relay 設定…", self)
-        self.smu_safety_settings_action = QAction("安全 / SMU…", self)
+        self.polarity_settings_action.setToolTip(tr("settings.polarity_tooltip"))
+        self.relay_settings_action = QAction(tr("settings.relay"), self)
+        self.smu_safety_settings_action = QAction(tr("settings.smu_safety"), self)
         self.smu_safety_settings_action.setToolTip(
-            "設定手動輸出、Recipe 與自動化共用的全域 SMU 安全限制"
+            tr("settings.smu_safety_tooltip")
         )
-        self.relay_settings_action.setToolTip("設定 USBRelay8 Channel、群組與手動測試")
-        self.sidebar_settings_action = QAction("左側工具列…", self)
-        self.sidebar_settings_action.setToolTip("調整左側功能面板的順序與顯示狀態")
-        self.smu_auto_connect_action = QAction("啟動時自動連線 SMU", self)
+        self.relay_settings_action.setToolTip(tr("settings.relay_tooltip"))
+        self.sidebar_settings_action = QAction(tr("settings.sidebar"), self)
+        self.sidebar_settings_action.setToolTip(tr("settings.sidebar_tooltip"))
+        self.smu_auto_connect_action = QAction(tr("settings.smu_auto_connect"), self)
         self.smu_auto_connect_action.setCheckable(True)
         self.smu_auto_connect_action.setChecked(
             self.settings.value("devices/auto_connect_smu", True, type=bool)
         )
         self.smu_auto_connect_action.setToolTip(
-            "只連線上次成功的 SMU，或唯一一台受支援的 SMU；OUTPUT 保持 OFF。"
+            tr("settings.smu_auto_connect_tooltip")
         )
+        self.general_settings_action = QAction(tr("settings.general"), self)
+        self.error_center_action = QAction(tr("error_center.title"), self)
 
         self.refresh_action.triggered.connect(self.refresh_devices)
         self.connect_action.triggered.connect(self.toggle_connection)
@@ -120,28 +123,32 @@ class MainWindowUIMixin:
         self.smu_auto_connect_action.toggled.connect(
             lambda enabled: self.settings.setValue("devices/auto_connect_smu", enabled)
         )
+        self.general_settings_action.triggered.connect(self.open_general_settings)
+        self.error_center_action.triggered.connect(self.open_error_center)
 
     def _build_menu_and_toolbar(self) -> None:
-        file_menu = self.menuBar().addMenu("檔案(&F)")
+        file_menu = self.menuBar().addMenu(tr("menu.file"))
         file_menu.addAction(self.capture_action)
         file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
 
-        camera_menu = self.menuBar().addMenu("相機(&C)")
+        camera_menu = self.menuBar().addMenu(tr("menu.camera"))
         camera_menu.addAction(self.refresh_action)
         camera_menu.addAction(self.connect_action)
         camera_menu.addAction(self.auto_capture_action)
         camera_menu.addSeparator()
         camera_menu.addAction(self.temperature_chart_action)
 
-        view_menu = self.menuBar().addMenu("檢視(&V)")
+        view_menu = self.menuBar().addMenu(tr("menu.view"))
         view_menu.addAction(self.fit_action)
         view_menu.addAction(self.actual_action)
 
-        settings_menu = self.menuBar().addMenu("設定(&S)")
-        interface_menu = settings_menu.addMenu("介面")
+        settings_menu = self.menuBar().addMenu(tr("menu.settings"))
+        settings_menu.addAction(self.general_settings_action)
+        settings_menu.addSeparator()
+        interface_menu = settings_menu.addMenu(tr("menu.interface"))
         interface_menu.addAction(self.sidebar_settings_action)
-        camera_settings_menu = settings_menu.addMenu("相機")
+        camera_settings_menu = settings_menu.addMenu(tr("menu.camera_plain"))
         camera_settings_menu.addAction(self.camera_auto_exposure_settings_action)
         settings_menu.addSeparator()
         settings_menu.addAction(self.recipe_manager_action)
@@ -151,10 +158,12 @@ class MainWindowUIMixin:
         settings_menu.addSeparator()
         settings_menu.addAction(self.smu_auto_connect_action)
 
-        help_menu = self.menuBar().addMenu("說明(&H)")
+        help_menu = self.menuBar().addMenu(tr("menu.help"))
+        help_menu.addAction(self.error_center_action)
+        help_menu.addSeparator()
         help_menu.addAction(self.about_action)
 
-        toolbar = QToolBar("主要工具", self)
+        toolbar = QToolBar(tr("toolbar.main"), self)
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
         toolbar.setFloatable(False)
@@ -172,10 +181,10 @@ class MainWindowUIMixin:
         toolbar.addSeparator()
         toolbar.addAction(self.fit_action)
         toolbar.addAction(self.actual_action)
-        self.emergency_stop_button = QPushButton("⚠ 緊急停止")
+        self.emergency_stop_button = QPushButton(tr("common.emergency_stop"))
         self.emergency_stop_button.setObjectName("globalEmergencyStop")
         self.emergency_stop_button.setToolTip(
-            "立即封鎖 SMU 輸出，關閉白光，取消量測並停止相機擷取。"
+            tr("common.emergency_stop_tooltip")
         )
         toolbar.addWidget(self.emergency_stop_button)
 
@@ -198,10 +207,10 @@ class MainWindowUIMixin:
         self.device_panel = DevicePanel()
         self.camera_list = self.device_panel.camera_list
 
-        self.capture_button = QPushButton("拍攝")
+        self.capture_button = QPushButton(tr("camera.capture"))
         self.capture_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
         self.capture_button.setMinimumHeight(40)
-        self.auto_capture_button = QPushButton("自動曝光後拍攝")
+        self.auto_capture_button = QPushButton(tr("camera.capture_after_auto_exposure"))
         self.auto_capture_button.setMinimumHeight(40)
 
         capture_buttons = QHBoxLayout()
@@ -210,7 +219,7 @@ class MainWindowUIMixin:
 
         self.resolution_combo = QComboBox()
         self.format_combo = QComboBox()
-        self.format_combo.addItem("RGB24（基本預覽／拍攝）")
+        self.format_combo.addItem(tr("camera.format_rgb24"), "rgb24")
         self.format_combo.setEnabled(False)
 
         capture_content = QWidget()
@@ -222,8 +231,8 @@ class MainWindowUIMixin:
         resolution_layout = QVBoxLayout(resolution_content)
         resolution_layout.setContentsMargins(8, 8, 8, 10)
         capture_form = QFormLayout()
-        capture_form.addRow("解析度", self.resolution_combo)
-        capture_form.addRow("格式", self.format_combo)
+        capture_form.addRow(tr("camera.resolution"), self.resolution_combo)
+        capture_form.addRow(tr("camera.format"), self.format_combo)
         resolution_layout.addLayout(capture_form)
 
         self.exposure_mode_combo = QComboBox()
@@ -238,59 +247,57 @@ class MainWindowUIMixin:
         self.gain_spin = QSpinBox()
         self.gain_spin.setSuffix(" %")
         self.gain_spin.setKeyboardTracking(False)
-        self.apply_manual_button = QPushButton("套用手動設定")
+        self.apply_manual_button = QPushButton(tr("camera.apply_manual_settings"))
 
         self.current_exposure_value = QLabel("--")
         self.current_gain_value = QLabel("--")
         auto_page = QWidget()
         auto_form = QFormLayout(auto_page)
         auto_form.setContentsMargins(0, 0, 0, 0)
-        auto_form.addRow("目前曝光時間", self.current_exposure_value)
-        auto_form.addRow("目前 Gain", self.current_gain_value)
+        auto_form.addRow(tr("camera.exposure_current"), self.current_exposure_value)
+        auto_form.addRow(tr("camera.gain_current"), self.current_gain_value)
         self.auto_exposure_target_percent_value = QLabel(
             f"{self.controller.auto_exposure_target_percent} %"
         )
-        self.auto_exposure_target_dn_value = QLabel("無法判定")
-        auto_form.addRow("AE 目標", self.auto_exposure_target_percent_value)
-        auto_form.addRow("目標 DN", self.auto_exposure_target_dn_value)
+        self.auto_exposure_target_dn_value = QLabel(tr("common.undetermined"))
+        auto_form.addRow(tr("camera.ae_target"), self.auto_exposure_target_percent_value)
+        auto_form.addRow(tr("camera.target_dn"), self.auto_exposure_target_dn_value)
 
         manual_page = QWidget()
         manual_layout = QVBoxLayout(manual_page)
         manual_layout.setContentsMargins(0, 0, 0, 0)
         manual_form = QFormLayout()
-        manual_form.addRow("曝光時間", self.exposure_spin)
-        manual_form.addRow("Gain", self.gain_spin)
+        manual_form.addRow(tr("camera.exposure_time"), self.exposure_spin)
+        manual_form.addRow(tr("camera.gain"), self.gain_spin)
         manual_layout.addLayout(manual_form)
         manual_layout.addWidget(self.apply_manual_button)
 
         self.exposure_stack = QStackedWidget()
         self.exposure_stack.addWidget(auto_page)
         self.exposure_stack.addWidget(manual_page)
-        self.mean_effective_dn_value = QLabel("無法判定")
+        self.mean_effective_dn_value = QLabel(tr("common.undetermined"))
         self.mean_effective_dn_value.setToolTip(
-            "由 Scientific MONO16 frame 換算出的全畫面平均 Effective DN。\n"
-            "分母依實際 SensorBitDepth 決定。\n"
-            "此數值不是 8-bit Preview brightness。"
+            tr("camera.mean_effective_dn_tooltip")
         )
         self.effective_dn_percent_value = QLabel("--")
         self.sensor_bit_depth_value = QLabel("--")
         self.raw_value_alignment_value = QLabel("Unknown")
-        self.camera_connection_hint = QLabel("請先連線相機")
+        self.camera_connection_hint = QLabel(tr("camera.connect_first"))
         self.camera_connection_hint.setStyleSheet("color: #a66a00;")
 
         exposure_content = QWidget()
         exposure_layout = QVBoxLayout(exposure_content)
         exposure_layout.setContentsMargins(8, 8, 8, 10)
         exposure_form = QFormLayout()
-        exposure_form.addRow("曝光模式", self.exposure_mode_combo)
+        exposure_form.addRow(tr("camera.exposure_mode"), self.exposure_mode_combo)
         exposure_layout.addLayout(exposure_form)
         exposure_layout.addWidget(self.exposure_stack)
         exposure_separator = QFrame()
         exposure_separator.setFrameShape(QFrame.Shape.HLine)
         exposure_layout.addWidget(exposure_separator)
         brightness_form = QFormLayout()
-        brightness_form.addRow("目前平均 DN", self.mean_effective_dn_value)
-        brightness_form.addRow("訊號比例", self.effective_dn_percent_value)
+        brightness_form.addRow(tr("camera.mean_dn_current"), self.mean_effective_dn_value)
+        brightness_form.addRow(tr("camera.signal_ratio"), self.effective_dn_percent_value)
         brightness_form.addRow("Sensor", self.sensor_bit_depth_value)
         brightness_form.addRow("Alignment", self.raw_value_alignment_value)
         exposure_layout.addLayout(brightness_form)
@@ -301,7 +308,7 @@ class MainWindowUIMixin:
         temperature_layout.setContentsMargins(8, 8, 8, 10)
         self.camera_temperature_value = QLabel("N/A")
         self.camera_temperature_value.setStyleSheet("font-size: 18px; font-weight: 600;")
-        self.temperature_chart_button = QPushButton("開啟溫度趨勢圖")
+        self.temperature_chart_button = QPushButton(tr("camera.open_temperature_chart"))
         temperature_layout.addWidget(self.camera_temperature_value)
         temperature_layout.addWidget(self.temperature_chart_button)
 
@@ -317,8 +324,8 @@ class MainWindowUIMixin:
         self.sdk_value = QLabel("—")
         self.color_value = QLabel("—")
         self.model_value.setWordWrap(True)
-        info_layout.addRow("相機型號", self.model_value)
-        info_layout.addRow("感測器", self.color_value)
+        info_layout.addRow(tr("camera.model"), self.model_value)
+        info_layout.addRow(tr("camera.sensor"), self.color_value)
         info_layout.addRow("SDK", self.sdk_value)
 
         sidebar_body = QWidget()
@@ -327,15 +334,15 @@ class MainWindowUIMixin:
         sidebar_layout.setSpacing(3)
         sidebar_layout.addStretch()
         sections = (
-            SidebarItem("camera_connection", "相機連線", CollapsibleSection("相機連線", self.device_panel.camera_content, True), 10),
-            SidebarItem("smu_connection", "SMU 連線", CollapsibleSection("SMU 連線", self.device_panel.smu_content, True), 20),
-            SidebarItem("manual_smu", "手動 SMU", CollapsibleSection("SMU 手動輸出", self.manual_smu_panel, True), 30),
-            SidebarItem("recipe", "Recipe 選擇", CollapsibleSection("Recipe", self.device_panel.recipe_content, True), 40),
-            SidebarItem("manual_capture", "手動拍攝", CollapsibleSection("手動拍攝", capture_content, True), 50),
-            SidebarItem("resolution", "影像解析度", CollapsibleSection("影像解析度", resolution_content, True), 60),
-            SidebarItem("exposure", "曝光控制", CollapsibleSection("曝光控制", exposure_content, True), 70),
-            SidebarItem("temperature", "相機溫度", CollapsibleSection("相機溫度", temperature_content, True), 75),
-            SidebarItem("camera_info", "相機資訊", CollapsibleSection("相機資訊", info_content, False), 80),
+            SidebarItem("camera_connection", tr("toolbar.camera_connect"), CollapsibleSection(tr("toolbar.camera_connect"), self.device_panel.camera_content, True), 10),
+            SidebarItem("smu_connection", tr("toolbar.smu_connect"), CollapsibleSection(tr("toolbar.smu_connect"), self.device_panel.smu_content, True), 20),
+            SidebarItem("manual_smu", tr("toolbar.manual_smu"), CollapsibleSection(tr("smu.manual_output"), self.manual_smu_panel, True), 30),
+            SidebarItem("recipe", tr("recipe.selection"), CollapsibleSection(tr("recipe.title"), self.device_panel.recipe_content, True), 40),
+            SidebarItem("manual_capture", tr("camera.manual_capture"), CollapsibleSection(tr("camera.manual_capture"), capture_content, True), 50),
+            SidebarItem("resolution", tr("camera.resolution"), CollapsibleSection(tr("camera.resolution"), resolution_content, True), 60),
+            SidebarItem("exposure", tr("camera.exposure_control"), CollapsibleSection(tr("camera.exposure_control"), exposure_content, True), 70),
+            SidebarItem("temperature", tr("camera.temperature"), CollapsibleSection(tr("camera.temperature"), temperature_content, True), 75),
+            SidebarItem("camera_info", tr("camera.information"), CollapsibleSection(tr("camera.information"), info_content, False), 80),
         )
         self.sidebar_registry = SidebarRegistry(sidebar_layout, self.settings)
         for item in sections:
@@ -356,36 +363,34 @@ class MainWindowUIMixin:
         workspace_header.setObjectName("workspaceHeader")
         header_layout = QHBoxLayout(workspace_header)
         header_layout.setContentsMargins(10, 5, 10, 5)
-        self.view_title = QLabel("即時影像")
+        self.view_title = QLabel(tr("camera.live_view"))
         self.view_title.setStyleSheet("font-weight: 600;")
         header_layout.addWidget(self.view_title)
         header_layout.addStretch()
         self.select_dn_roi_button = QToolButton()
-        self.select_dn_roi_button.setText("框選 DN ROI")
+        self.select_dn_roi_button.setText(tr("camera.select_dn_roi"))
         self.select_dn_roi_button.setToolTip(
-            "在 Live View 框選原始 image-pixel ROI；同時用於 Scientific DN "
-            "分析與 RisingCam SDK AE 測光。"
+            tr("camera.select_dn_roi_tooltip")
         )
         self.clear_dn_roi_button = QToolButton()
-        self.clear_dn_roi_button.setText("清除 ROI")
+        self.clear_dn_roi_button.setText(tr("camera.clear_roi"))
         self.clear_dn_roi_button.setToolTip(
-            "清除 Live View ROI 與 overlay，並將 SDK AE 測光恢復為完整影像。"
+            tr("camera.clear_roi_tooltip")
         )
-        self.live_view_roi_value = QLabel("ROI：未設定")
+        self.live_view_roi_value = QLabel(tr("camera.roi_not_set"))
         self.live_view_roi_value.setMinimumWidth(0)
         self.live_view_roi_value.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
-        self.live_view_roi_dn_value = QLabel("ROI 平均 DN：--")
+        self.live_view_roi_dn_value = QLabel(tr("camera.roi_mean_dn_empty"))
         self.live_view_roi_dn_value.setMinimumWidth(0)
         self.live_view_roi_dn_value.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
         self.live_view_roi_dn_value.setToolTip(
-            "來自 scientific_frame_ready 的 uint16 scientific frame；"
-            "不使用 QImage preview brightness。"
+            tr("camera.roi_mean_dn_tooltip")
         )
-        self.live_view_ae_metering_value = QLabel("AE 測光：--")
+        self.live_view_ae_metering_value = QLabel(tr("camera.ae_metering_empty"))
         self.live_view_ae_metering_value.setMinimumWidth(0)
         self.live_view_ae_metering_value.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
@@ -488,15 +493,15 @@ class MainWindowUIMixin:
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)
         self.setStatusBar(bar)
-        self.status_message = QLabel("正在偵測相機…")
-        self.camera_status = QLabel("相機 —")
+        self.status_message = QLabel(tr("camera.detecting"))
+        self.camera_status = QLabel(tr("camera.status_empty"))
         self.smu_status = QLabel("SMU —")
-        self.zoom_status = QLabel("縮放 —")
-        self.resolution_status = QLabel("影像 —")
-        self.exposure_status = QLabel("曝光 —")
-        self.gain_status = QLabel("Gain —")
-        self.fps_status = QLabel("FPS —")
-        self.temperature_status = QLabel("相機溫度 N/A")
+        self.zoom_status = QLabel(tr("view.zoom_empty"))
+        self.resolution_status = QLabel(tr("camera.image_status_empty"))
+        self.exposure_status = QLabel(tr("camera.exposure_status_empty"))
+        self.gain_status = QLabel(tr("camera.gain_status_empty"))
+        self.fps_status = QLabel(tr("camera.fps_empty"))
+        self.temperature_status = QLabel(tr("camera.temperature_unavailable"))
         bar.addWidget(self.status_message, 1)
         for widget in (
             self.camera_status,
@@ -517,7 +522,7 @@ class MainWindowUIMixin:
         self.apply_manual_button.clicked.connect(self.apply_manual_exposure)
         self.exposure_mode_combo.currentIndexChanged.connect(self.change_exposure_mode)
         self.resolution_combo.currentIndexChanged.connect(self.change_resolution)
-        self.image_view.zoom_changed.connect(lambda value: self.zoom_status.setText(f"縮放 {value:.1f}%"))
+        self.image_view.zoom_changed.connect(lambda value: self.zoom_status.setText(tr("view.zoom_percent", value=f"{value:.1f}")))
         self.select_dn_roi_button.clicked.connect(
             self.begin_live_view_dn_roi_selection
         )
@@ -583,7 +588,7 @@ class MainWindowUIMixin:
             self.on_ae_calibration_finished
         )
         self.controller.fps_changed.connect(
-            lambda fps, total: self.fps_status.setText(f"FPS {fps:.1f}｜幀 {total}")
+            lambda fps, total: self.fps_status.setText(tr("camera.fps_frames", fps=f"{fps:.1f}", total=total))
         )
         self.controller.status_changed.connect(self.status_message.setText)
         self.controller.error_occurred.connect(self.show_error)

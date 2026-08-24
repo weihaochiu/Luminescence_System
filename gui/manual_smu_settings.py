@@ -11,6 +11,24 @@ from PySide6.QtCore import QSettings
 
 MANUAL_SMU_CHANNELS = ("Ch1", "Ch2", "Ch3", "Ch4")
 MANUAL_SMU_MODES = ("CC", "CV")
+LEGACY_CHANNEL_VALUES = {
+    "CH1": "Ch1", "CH2": "Ch2", "CH3": "Ch3", "CH4": "Ch4",
+    "通道1": "Ch1", "通道2": "Ch2", "通道3": "Ch3", "通道4": "Ch4",
+}
+LEGACY_MODE_VALUES = {
+    "cc": "CC",
+    "constant_current": "CC",
+    "constant_current_density": "CC",
+    "current_density": "CC",
+    "固定電流": "CC",
+    "定電流": "CC",
+    "定電流密度": "CC",
+    "cv": "CV",
+    "constant_voltage": "CV",
+    "voltage": "CV",
+    "固定電壓": "CV",
+    "定電壓": "CV",
+}
 
 CHANNEL_KEY = "manual_smu/channel"
 MODE_KEY = "manual_smu/mode"
@@ -61,9 +79,11 @@ class ManualSMUSettingsStore:
     def _load_from(cls, settings: Any) -> ManualSMUSettings:
         defaults = ManualSMUSettings()
         channel = str(settings.value(CHANNEL_KEY, defaults.channel))
+        channel = LEGACY_CHANNEL_VALUES.get(channel, channel)
         if channel not in MANUAL_SMU_CHANNELS:
             channel = defaults.channel
         mode = str(settings.value(MODE_KEY, defaults.mode))
+        mode = LEGACY_MODE_VALUES.get(mode.casefold(), LEGACY_MODE_VALUES.get(mode, mode))
         if mode not in MANUAL_SMU_MODES:
             mode = defaults.mode
         area_cm2 = cls._finite_value(settings, AREA_CM2_KEY, defaults.area_cm2)

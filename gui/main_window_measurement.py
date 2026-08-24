@@ -9,7 +9,10 @@ from typing import Any
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QMessageBox
 
+from core.i18n import tr
+
 from .camera_capture_bridge import CameraCaptureBridge
+from .error_reporting import report_error
 from .camera_exposure import ExposureMode
 from .el_matrix_hardware import ELMatrixHardwareAdapter
 from .el_matrix_plan import ELMatrixPlan, format_duration, format_finish_time
@@ -38,7 +41,7 @@ def _best_effort_routing_off(self: Any, source: str) -> bool:
     try:
         return bool(self.relay_service.safe_smu_output_channels_off(source))
     except Exception as exc:
-        self.status_message.setText(f"Routing Safe OFF failed: {exc}")
+        self.status_message.setText(tr("relay.safe_off_failed", reason=exc))
         return False
 
 
@@ -59,12 +62,11 @@ def start_background_measurement(
         raise RuntimeError("Measurement is already running")
     control = self.smu_manager.control
     if acquire_recipe_ownership and control.ownership is SMUOwnership.MANUAL:
-        detail = "\n\n啟動 Recipe 前必須先安全關閉手動輸出。" if control.output_enabled else ""
+        detail = tr("measurement.manual_output_shutdown_detail") if control.output_enabled else ""
         answer = QMessageBox.question(
             self,
-            "手動 SMU 輸出仍在使用中",
-            "SMU 目前處於手動輸出模式。" + detail +
-            "\n\n是否關閉手動輸出並開始 Recipe？",
+            tr("measurement.manual_smu_active"),
+            tr("measurement.manual_smu_active_question", detail=detail),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -181,19 +183,15 @@ def _on_measurement_progress(
         self.stop_measurement_button.setEnabled(False)
         if dialog is not None:
             dialog.update_postprocess_progress(progress)
-        self.status_message.setText(
-            f"Pixel CSV 後處理：{progress.current}/{progress.total} ({progress.percent:.1f}%)"
-        )
+        self.status_message.setText(tr("progress.pixel_csv_status", current=progress.current, total=progress.total, percent=f"{progress.percent:.1f}"))
         return
     if isinstance(progress, MatrixRuntimeProgress):
         if dialog is not None:
             dialog.update_progress(progress)
-        self.status_message.setText(
-            f"{progress.phase}: {progress.current}/{progress.total}"
-        )
+        self.status_message.setText(tr("progress.runtime", phase=progress.phase, current=progress.current, total=progress.total))
         return
     suffix = f" — {progress.message}" if progress.message else ""
-    self.status_message.setText(f"{progress.phase}: {progress.current}/{progress.total}{suffix}")
+    self.status_message.setText(tr("progress.runtime_details", phase=progress.phase, current=progress.current, total=progress.total, details=suffix))
 
 
 def _on_measurement_finished(self: Any, result: object) -> None:
@@ -207,17 +205,26 @@ def _on_measurement_finished(self: Any, result: object) -> None:
         dialog = getattr(self, "_measurement_progress_dialog", None)
         if dialog is not None:
             dialog.set_failed(message)
+        report_error(
+            self,
+            "SMU-203",
+            context={
+                "operation": "measurement_completion_safe_shutdown",
+                "expected": "verified SMU OUTPUT OFF and all routing OFF",
+                "actual": shutdown,
+            },
+        )
         return
     self._measurement_hardware_active = False
     self._last_measurement_result = dict(result)
     if self.emergency_manager.is_active:
-        self.status_message.setText("ABORTED / EMERGENCY STOP")
+        self.status_message.setText(tr("measurement.aborted_emergency"))
     else:
         postprocess = result.get("postprocess", {})
         post_status = str(postprocess.get("status", "not_requested"))
         if post_status in {"failed", "partial"}:
             reason = str(postprocess.get("error", "Pixel CSV 後處理失敗"))
-            self.status_message.setText("硬體量測完成，但 Pixel CSV 後處理失敗")
+            self.status_message.setText(tr("progress.postprocess_failed"))
             self._pixel_csv_retry_context = {
                 "output_directory": result.get("output_directory"),
                 "safe_shutdown": dict(shutdown),
@@ -229,7 +236,7 @@ def _on_measurement_finished(self: Any, result: object) -> None:
                 dialog.show()
             return
         self._pixel_csv_retry_context = None
-        self.status_message.setText("Measurement completed")
+        self.status_message.setText(tr("measurement.completed"))
     dialog = getattr(self, "_measurement_progress_dialog", None)
     if dialog is not None:
         total = int(result.get("captures", 0)) if isinstance(result, dict) else 0
@@ -237,7 +244,7 @@ def _on_measurement_finished(self: Any, result: object) -> None:
         post_total = int(postprocess.get("total_files", 0))
         dialog.set_complete(
             post_total or total,
-            "量測與 Pixel CSV 後處理完成"
+            tr("measurement.completed_with_pixel_csv")
             if postprocess.get("status") == "completed" else "硬體量測完成",
         )
 
@@ -262,7 +269,15 @@ def _on_measurement_failed(self: Any, message: str) -> None:
         if self.smu_manager.control.safe_shutdown(SMUOwnership.RECIPE):
             _best_effort_routing_off(self, "critical_exception_cleanup")
             self.relay_service.safe_white_light_off("critical_exception_cleanup")
-    self.show_error(f"Measurement failed: {message}")
+    report_error(
+        self,
+        "MEAS-201",
+        context={
+            "operation": "el_matrix_measurement",
+            "recipe": getattr(self.selected_recipe, "name", None),
+            "actual": message,
+        },
+    )
     dialog = getattr(self, "_measurement_progress_dialog", None)
     if dialog is not None:
         dialog.set_failed(message)
@@ -349,22 +364,30 @@ def begin_el_matrix_measurement(self: Any) -> None:
         missing = self.measurement_control_bar.missing_sample_channels()
         if missing:
             channel = missing[0]
-            QMessageBox.warning(
+            report_error(
                 self,
-                "無法開始量測",
-                f"無法開始量測：{channel} 尚未設定樣品 ID。",
+                "MEAS-101",
+                context={"operation": "preflight", "channel": channel, "actual": "missing sample ID"},
             )
             return
     errors = _validate_camera_matrix(self)
     if errors:
-        QMessageBox.warning(self, "EL Matrix 無法開始", "• " + "\n• ".join(errors))
+        report_error(
+            self,
+            "MEAS-101",
+            context={"operation": "camera_matrix_validation", "actual": errors},
+        )
         return
     recipe = self.selected_recipe
     if recipe is None:
         return
     output_root = self.measurement_path_edit.text().strip()
     if not output_root:
-        QMessageBox.warning(self, "尚未設定輸出位置", "請先選擇量測資料儲存位置。")
+        report_error(
+            self,
+            "MEAS-101",
+            context={"operation": "output_preflight", "actual": "output path not selected"},
+        )
         return
     resolution_id = recipe.output.resolution_id
     if resolution_id.startswith("sdk:"):
@@ -379,7 +402,7 @@ def begin_el_matrix_measurement(self: Any) -> None:
     )
     answer = QMessageBox.question(
         self,
-        "確認 EL Matrix 量測",
+        tr("measurement.confirm_matrix"),
         _measurement_summary(self, plan),
         QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
         QMessageBox.StandardButton.Cancel,
@@ -389,10 +412,14 @@ def begin_el_matrix_measurement(self: Any) -> None:
     # Formal Recipe capture owns Exposure/Gain. Disable native SDK AE and
     # require an authoritative OFF readback before any camera configuration.
     if not self.controller.disable_auto_exposure_for_formal_measurement():
-        QMessageBox.warning(
+        report_error(
             self,
-            "EL Matrix 無法開始",
-            "無法確認相機自動曝光已停止；正式量測未啟動。",
+            "CAM-202",
+            context={
+                "operation": "disable_auto_exposure_for_measurement",
+                "expected": "SDK auto exposure OFF",
+                "actual": "unconfirmed",
+            },
         )
         return
     self._active_exposure_mode = ExposureMode.MANUAL
@@ -447,7 +474,11 @@ def begin_el_matrix_measurement(self: Any) -> None:
         global_safety=self.smu_manager.control.safety.limits,
     )
     if preflight:
-        QMessageBox.warning(self, "EL Matrix Preflight 阻擋", "• " + "\n• ".join(preflight))
+        report_error(
+            self,
+            "MEAS-101",
+            context={"operation": "el_matrix_preflight", "actual": preflight},
+        )
         return
     bridge = getattr(self, "_camera_capture_bridge", None)
     if bridge is None:
@@ -520,7 +551,7 @@ def retry_pixel_csv_postprocess(self: Any) -> None:
     output_directory = context.get("output_directory")
     shutdown = context.get("safe_shutdown")
     if not output_directory or not verified_safe_shutdown(shutdown):
-        self.status_message.setText("無法重試 Pixel CSV：缺少已驗證的安全關機結果")
+        self.status_message.setText(tr("progress.pixel_csv_retry_requires_safe_shutdown"))
         return
     dialog = getattr(self, "_measurement_progress_dialog", None)
     if dialog is not None:

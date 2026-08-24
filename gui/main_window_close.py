@@ -8,6 +8,8 @@ from typing import Any
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMessageBox
 
+from core.i18n import tr
+
 
 LOG = logging.getLogger(__name__)
 
@@ -49,17 +51,24 @@ def closeEvent(self: Any, event: QCloseEvent) -> None:  # noqa: N802 - Qt API na
 
 
 def _unsafe_smu_close_decision(self: Any) -> str:
+    reporter = getattr(self, "error_reporter", None)
+    if reporter is not None:
+        reporter.report(
+            "SMU-203",
+            context={
+                "operation": "application_close",
+                "expected": "verified OUTPUT OFF before application exit",
+                "actual": getattr(self.smu_manager.control, "fault_reason", "unconfirmed"),
+            },
+            present=False,
+        )
     box = QMessageBox(self)
     box.setIcon(QMessageBox.Icon.Critical)
-    box.setWindowTitle("無法確認 SMU 已停止輸出")
-    box.setText(
-        "程式無法確認 SMU OUTPUT OFF。\n"
-        "SMU 可能仍處於帶電狀態。\n"
-        "請立即確認 SMU 前面板 OUTPUT 狀態。"
-    )
-    retry = box.addButton("再次嘗試安全停止", QMessageBox.ButtonRole.ActionRole)
-    cancel = box.addButton("取消關閉", QMessageBox.ButtonRole.RejectRole)
-    force = box.addButton("強制結束", QMessageBox.ButtonRole.DestructiveRole)
+    box.setWindowTitle(tr("errors.SMU-203.title"))
+    box.setText(tr("errors.close_smu_unconfirmed"))
+    retry = box.addButton(tr("common.retry_safe_shutdown"), QMessageBox.ButtonRole.ActionRole)
+    cancel = box.addButton(tr("common.cancel_close"), QMessageBox.ButtonRole.RejectRole)
+    force = box.addButton(tr("common.force_exit"), QMessageBox.ButtonRole.DestructiveRole)
     box.setDefaultButton(cancel)
     box.exec()
     clicked = box.clickedButton()
@@ -73,10 +82,8 @@ def _unsafe_smu_close_decision(self: Any) -> str:
 def _confirm_forced_close(self: Any) -> bool:
     answer = QMessageBox.warning(
         self,
-        "確認強制結束",
-        "目前無法確認 SMU 是否仍在輸出。\n"
-        "強制關閉軟體不代表硬體已安全停止。\n\n"
-        "是否仍要強制結束？",
+        tr("common.confirm_force_exit"),
+        tr("errors.force_exit_warning"),
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         QMessageBox.StandardButton.Cancel,
     )

@@ -51,7 +51,7 @@ class MainToolbarStructureTests(unittest.TestCase):
         actual = source.index("toolbar.addAction(self.actual_action)")
         emergency = source.index("toolbar.addWidget(self.emergency_stop_button)")
         self.assertLess(actual, emergency)
-        self.assertIn('QPushButton("⚠ 緊急停止")', source)
+        self.assertIn('QPushButton(tr("common.emergency_stop"))', source)
         self.assertIn('setObjectName("globalEmergencyStop")', source)
         self.assertNotIn("live_actual_size_button", source)
         self.assertNotIn("header_layout.addWidget(self.emergency_stop_button)", source)

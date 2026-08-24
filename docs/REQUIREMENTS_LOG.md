@@ -1,7 +1,16 @@
 # EL 量測設備控制程式需求紀錄
 
 文件版本：1.5
-最後更新：2026-08-19（UTC+8）
+最後更新：2026-08-25（UTC+8）
+
+## Current requirement — I18N-ERROR-001
+
+- 狀態：已完成（2026-08-25）。
+- 支援語言：`zh-TW`、`en-US`；語言設定獨立持久化並支援 runtime signal/retranslation。
+- canonical compatibility：Recipe／Settings／Manual SMU 不保存翻譯文字；legacy 中文值在讀取時映射，原始檔不做破壞式覆寫。
+- error architecture：中央 Registry／Reporter／Context、統一 Error Dialog、可搜尋與篩選 Error Center、500 筆 bounded Session History、diagnostics copy 與 exact-code deep link。
+- safety：沿用既有 SMU OUTPUT OFF、Relay routing、Emergency、close safety 與 measurement abort 流程；Critical 無 Ignore／Continue。
+- 文件與測試：`USER_MESSAGE_INVENTORY.md`、由 registry 生成的 `ERROR_CODE_REFERENCE.md`、migration audit，以及 i18n/error GUI/canonical/safety automated regression。
 
 註：版本摘要中的「Recipe 停用／暫緩」只描述當時版本，現行狀態一律以 FLOW-ELM-001 與 V1.8.2 為準。
 

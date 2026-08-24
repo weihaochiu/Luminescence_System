@@ -11,7 +11,10 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from core.i18n import tr
+
 from .relay_controller import RelayError, RelayService, RelayState
+from .error_reporting import report_error
 from .relay_settings import RelayGroup, RelaySettings, RelaySettingsStore
 
 
@@ -20,7 +23,7 @@ class RelaySettingsDialog(QDialog):
         super().__init__(parent)
         self.store, self.service = store, service
         self.working = deepcopy(store.settings)
-        self.setWindowTitle("Relay 設定")
+        self.setWindowTitle(tr("relay.settings_title"))
         self.resize(980, 780)
         self._build_ui()
         self._write_settings()
@@ -33,21 +36,18 @@ class RelaySettingsDialog(QDialog):
         self._refresh_connection_status()
 
     def _build_ui(self) -> None:
-        note = QLabel(
-            "Relay 設定會依 VID、PID 與產品名稱重新偵測設備；不會保存 USB 插槽或 HID path。"
-            "Channel 個別控制僅供接線確認與維修使用。USBRelay8 繼電器板需確認外部 5 V Relay 電源已接妥。"
-        )
+        note = QLabel(tr("relay.settings_note"))
         note.setWordWrap(True)
         note.setStyleSheet("background:#edf5fa; border:1px solid #b6cedd; padding:8px;")
         self.connection_label = QLabel()
-        self.detect_button = QPushButton("重新偵測設備")
+        self.detect_button = QPushButton(tr("common.rescan"))
         self.detect_button.clicked.connect(self._detect)
         connection = QHBoxLayout()
         connection.addWidget(self.connection_label, 1)
         connection.addWidget(self.detect_button)
 
         self.channel_table = QTableWidget(8, 7)
-        self.channel_table.setHorizontalHeaderLabels(["Channel", "啟用", "名稱", "用途／連接設備", "Group", "目前狀態", "手動控制"])
+        self.channel_table.setHorizontalHeaderLabels([tr("common.channel"), tr("common.enabled"), tr("common.name"), tr("relay.purpose_device"), tr("relay.group"), tr("common.status"), tr("relay.manual_control")])
         self.channel_table.verticalHeader().setVisible(False)
         self.channel_table.setColumnWidth(0, 70)
         self.channel_table.setColumnWidth(1, 60)
@@ -68,16 +68,16 @@ class RelaySettingsDialog(QDialog):
             self.channel_table.setCellWidget(row, 2, QLineEdit())
             self.channel_table.setCellWidget(row, 3, QLineEdit())
             self.channel_table.setItem(row, 4, QTableWidgetItem(""))
-            state = QTableWidgetItem("未知")
+            state = QTableWidgetItem(tr("common.unknown"))
             state.setFlags(state.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.channel_table.setItem(row, 5, state)
             controls = QWidget()
             layout = QHBoxLayout(controls)
             layout.setContentsMargins(2, 1, 2, 1)
-            on, off = QPushButton("開啟"), QPushButton("關閉")
+            on, off = QPushButton(tr("common.on")), QPushButton(tr("common.off"))
             on.clicked.connect(lambda _checked=False, ch=row + 1: self._channel(ch, True))
             off.clicked.connect(lambda _checked=False, ch=row + 1: self._channel(ch, False))
-            routing_label = QLabel("SMU Routing 專用")
+            routing_label = QLabel(tr("relay.smu_routing_only"))
             routing_label.setStyleSheet("color:#9b111e; font-weight:600;")
             routing_label.hide()
             self.channel_on_buttons[row + 1] = on
@@ -87,16 +87,16 @@ class RelaySettingsDialog(QDialog):
             self.channel_table.setCellWidget(row, 6, controls)
 
         self.group_table = QTableWidget(0, 5)
-        self.group_table.setHorizontalHeaderLabels(["Group ID", "顯示名稱", "Member channels（例如 1,2）", "啟用", "目前狀態"])
+        self.group_table.setHorizontalHeaderLabels([tr("relay.group_id"), tr("common.display_name"), tr("relay.member_channels"), tr("common.enabled"), tr("common.status")])
         self.group_table.setColumnWidth(0, 170)
         self.group_table.setColumnWidth(1, 170)
         self.group_table.setColumnWidth(2, 260)
         self.group_table.setColumnWidth(3, 70)
         self.group_table.setColumnWidth(4, 90)
-        self.add_group_button = QPushButton("新增 Group")
-        self.remove_group_button = QPushButton("刪除選取 Group")
-        self.group_on_button = QPushButton("開啟群組")
-        self.group_off_button = QPushButton("關閉群組")
+        self.add_group_button = QPushButton(tr("relay.add_group"))
+        self.remove_group_button = QPushButton(tr("relay.remove_group"))
+        self.group_on_button = QPushButton(tr("relay.group_on"))
+        self.group_off_button = QPushButton(tr("relay.group_off"))
         self.add_group_button.clicked.connect(self._add_group)
         self.remove_group_button.clicked.connect(self._remove_group)
         self.group_on_button.clicked.connect(lambda: self._group(True))
@@ -106,7 +106,7 @@ class RelaySettingsDialog(QDialog):
             group_buttons.addWidget(button)
         group_buttons.addStretch(1)
 
-        routing_group = QGroupBox("SMU 輸出 Routing（Break-Before-Make）")
+        routing_group = QGroupBox(tr("relay.smu_output_routing"))
         routing_form = QFormLayout(routing_group)
         self.smu_routing_combos: dict[str, QComboBox] = {}
         for channel_id in ("Ch1", "Ch2", "Ch3", "Ch4"):
@@ -116,10 +116,7 @@ class RelaySettingsDialog(QDialog):
             self.smu_routing_combos[channel_id] = combo
             combo.currentIndexChanged.connect(self._refresh_routing_channel_controls)
             routing_form.addRow(channel_id, combo)
-        routing_note = QLabel(
-            "一般操作介面只顯示 Ch1～Ch4；實體 Relay mapping 僅在此維護。"
-            "四個 Relay 必須唯一，且不可與白光 Relay 共用。"
-        )
+        routing_note = QLabel(tr("relay.routing_note"))
         routing_note.setWordWrap(True)
         routing_form.addRow(routing_note)
 
@@ -129,9 +126,9 @@ class RelaySettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(note)
         layout.addLayout(connection)
-        layout.addWidget(QLabel("Channel 設定"))
+        layout.addWidget(QLabel(tr("relay.channel_settings")))
         layout.addWidget(self.channel_table, 1)
-        layout.addWidget(QLabel("Relay Group（同步代表同一次軟體操作，非機械接點的零時間差）"))
+        layout.addWidget(QLabel(tr("relay.group_explanation")))
         layout.addWidget(self.group_table, 1)
         layout.addLayout(group_buttons)
         layout.addWidget(routing_group)
@@ -215,7 +212,7 @@ class RelaySettingsDialog(QDialog):
             if errors:
                 raise ValueError("\n".join(errors))
         except Exception as exc:
-            QMessageBox.warning(self, "Relay 設定無效", str(exc))
+            report_error(self, "CFG-101", context={"operation": "validate_relay_settings"}, exception=exc)
             return
         self._refresh_connection_status(self.service.refresh_connection(candidate))
         self._refresh_statuses()
@@ -250,7 +247,7 @@ class RelaySettingsDialog(QDialog):
         try:
             (self.service.channel_on if state else self.service.channel_off)(channel, "manual_channel")
         except RelayError as exc:
-            QMessageBox.warning(self, "Relay 操作失敗", str(exc))
+            report_error(self, "REL-203", context={"operation": "manual_relay_channel"}, exception=exc)
         self._refresh_statuses()
 
     def _selected_group_id(self) -> str | None:
@@ -260,7 +257,7 @@ class RelaySettingsDialog(QDialog):
     def _group(self, state: bool) -> None:
         group_id = self._selected_group_id()
         if not group_id:
-            QMessageBox.information(self, "選擇 Group", "請先選擇要操作的 Relay Group。")
+            QMessageBox.information(self, tr("relay.select_group"), tr("relay.select_group_message"))
             return
         try:
             candidate = self._read_settings()
@@ -272,7 +269,7 @@ class RelaySettingsDialog(QDialog):
                 raise ValueError(f"找不到 Relay Group：{group_id}")
             (self.service.group_on if state else self.service.group_off)(group_id, "manual_group", group)
         except (RelayError, ValueError) as exc:
-            QMessageBox.warning(self, "Relay Group 操作失敗", str(exc))
+            report_error(self, "REL-203", context={"operation": "manual_relay_group"}, exception=exc)
         self._refresh_statuses()
 
     def _add_group(self) -> None:
@@ -307,6 +304,6 @@ class RelaySettingsDialog(QDialog):
             self.store.settings = settings
             self.store.save()
         except Exception as exc:
-            QMessageBox.warning(self, "Relay 設定無效", str(exc))
+            report_error(self, "CFG-101", context={"operation": "save_relay_settings"}, exception=exc)
             return
         self.accept()

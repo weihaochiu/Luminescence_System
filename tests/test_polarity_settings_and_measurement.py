@@ -127,7 +127,7 @@ class PolaritySettingsTests(unittest.TestCase):
         root = Path(__file__).parents[1] / "gui"
         ui = (root / "main_window_ui.py").read_text(encoding="utf-8")
         devices = (root / "main_window_devices.py").read_text(encoding="utf-8")
-        self.assertIn('QAction("極性確認…"', ui)
+        self.assertIn('QAction(tr("settings.polarity")', ui)
         self.assertIn("settings_menu.addAction(self.polarity_settings_action)", ui)
         self.assertIn("self.polarity_settings_store.settings", devices)
 

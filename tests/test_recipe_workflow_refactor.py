@@ -117,9 +117,7 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                         "upsert",
                         side_effect=OSError("recipe disk unavailable"),
                     ),
-                    patch(
-                        "gui.recipe_dialog_logic.QMessageBox.warning"
-                    ) as warning,
+                    patch("gui.recipe_dialog_logic.report_error") as reported,
                     patch(
                         "gui.recipe_dialog_logic.QMessageBox.information"
                     ) as information,
@@ -128,14 +126,12 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                     dialog._new_recipe()
                     dialog._copy_recipe()
 
-                self.assertEqual(3, warning.call_count)
+                self.assertEqual(3, reported.call_count)
                 information.assert_not_called()
                 self.assertTrue(all(
-                    call.args[1] == "Recipe 儲存失敗"
-                    and "操作未完成" in call.args[2]
-                    and "原 Recipe 仍保留" in call.args[2]
-                    and "recipe disk unavailable" in call.args[2]
-                    for call in warning.call_args_list
+                    call.args[1] == "REC-201"
+                    and call.kwargs["exception"].args[0] == "recipe disk unavailable"
+                    for call in reported.call_args_list
                 ))
                 self.assertEqual(count_before, len(store.recipes))
                 self.assertEqual(selected_id, dialog.current_recipe.recipe_id)
@@ -151,14 +147,12 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                         "import_payload",
                         side_effect=OSError("import replace failed"),
                     ),
-                    patch(
-                        "gui.recipe_dialog_logic.QMessageBox.warning"
-                    ) as warning,
+                    patch("gui.recipe_dialog_logic.report_error") as reported,
                 ):
                     dialog._import_recipe()
-                warning.assert_called_once()
-                self.assertEqual("Recipe 匯入失敗", warning.call_args.args[1])
-                self.assertIn("import replace failed", warning.call_args.args[2])
+                reported.assert_called_once()
+                self.assertEqual("REC-201", reported.call_args.args[1])
+                self.assertEqual("import replace failed", str(reported.call_args.kwargs["exception"]))
                 self.assertEqual(count_before, len(store.recipes))
                 self.assertEqual(selected_id, dialog.current_recipe.recipe_id)
                 self.assertEqual([], emissions)
@@ -187,16 +181,12 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                         "delete",
                         side_effect=OSError("delete replace failed"),
                     ),
-                    patch(
-                        "gui.recipe_dialog_logic.QMessageBox.warning"
-                    ) as warning,
+                    patch("gui.recipe_dialog_logic.report_error") as reported,
                 ):
                     dialog._delete_recipe()
-                warning.assert_called_once()
-                self.assertEqual("Recipe 刪除失敗", warning.call_args.args[1])
-                self.assertIn("操作未完成", warning.call_args.args[2])
-                self.assertIn("原 Recipe 仍保留", warning.call_args.args[2])
-                self.assertIn("delete replace failed", warning.call_args.args[2])
+                reported.assert_called_once()
+                self.assertEqual("REC-201", reported.call_args.args[1])
+                self.assertEqual("delete replace failed", str(reported.call_args.kwargs["exception"]))
                 self.assertEqual([selected_id], [item.recipe_id for item in store.recipes])
                 self.assertEqual(selected_id, dialog.current_recipe.recipe_id)
                 self.assertEqual([], emissions)
@@ -339,15 +329,11 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
             owner = SimpleNamespace(
                 selected_recipe=Recipe(), measurement_control_bar=bar,
             )
-            with patch(
-                "gui.main_window_measurement.QMessageBox.warning"
-            ) as warning:
+            with patch("gui.main_window_measurement.report_error") as reported:
                 begin_el_matrix_measurement(owner)
-            warning.assert_called_once()
-            self.assertEqual(
-                "無法開始量測：CH3 尚未設定樣品 ID。",
-                warning.call_args.args[2],
-            )
+            reported.assert_called_once()
+            self.assertEqual("MEAS-101", reported.call_args.args[1])
+            self.assertEqual("CH3", reported.call_args.kwargs["context"]["channel"])
         finally:
             bar.close()
 

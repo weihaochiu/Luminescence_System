@@ -12,9 +12,12 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFileDialog, QListWidgetItem, QMessageBox, QTreeWidgetItem
 
+from core.i18n import tr
+
 from .measurement_execution_plan import build_measurement_execution_plan
 from .numeric import format_voltage_number
 from .recipe_store import ChannelRecipe, Recipe
+from .error_reporting import report_error
 
 
 LOG = logging.getLogger(__name__)
@@ -64,10 +67,11 @@ class RecipeDialogLogicMixin:
         exc: Exception,
     ) -> None:
         LOG.exception("Recipe %s failed", operation)
-        QMessageBox.warning(
+        report_error(
             self,
-            title,
-            f"{operation}操作未完成，原 Recipe 仍保留。\n錯誤原因：{exc}",
+            "REC-201",
+            context={"operation": operation, "actual": title},
+            exception=exc,
         )
 
     def _set_combo_data(self, combo: Any, value: Any) -> None:
@@ -168,7 +172,7 @@ class RecipeDialogLogicMixin:
 
         if self.resolution_combo.findData(recipe.output.resolution_id) < 0:
             self.resolution_combo.addItem(
-                f"已儲存模式（{recipe.output.resolution_id}）",
+                tr("recipe.stored_resolution_mode", value=recipe.output.resolution_id),
                 recipe.output.resolution_id,
             )
         self._set_combo_data(self.resolution_combo, recipe.output.resolution_id)
@@ -361,7 +365,7 @@ class RecipeDialogLogicMixin:
         if self.current_recipe is None:
             return
         if QMessageBox.question(
-            self, "刪除 Recipe", f"確定刪除「{self.current_recipe.name}」？"
+            self, tr("recipe.delete_title"), tr("recipe.delete_confirmation", name=self.current_recipe.name)
         ) != QMessageBox.StandardButton.Yes:
             return
         try:
@@ -379,7 +383,12 @@ class RecipeDialogLogicMixin:
         try:
             recipe = self._read_form_to_recipe()
         except ValueError as exc:
-            QMessageBox.warning(self, "Recipe 欄位錯誤", str(exc))
+            report_error(
+                self,
+                "REC-101",
+                context={"operation": "validate_recipe_fields", "actual": str(exc)},
+                exception=exc,
+            )
             return
         errors = recipe.validate()
         if recipe.state == "active" and errors:
@@ -394,7 +403,7 @@ class RecipeDialogLogicMixin:
         self._write_recipe_to_form(self.current_recipe)
         self._reload_list(preferred_id=recipe.recipe_id)
         self.recipes_changed.emit()
-        QMessageBox.information(self, "已儲存", f"已儲存 Recipe「{recipe.name}」。")
+        QMessageBox.information(self, tr("common.saved"), tr("recipe.saved_message", name=recipe.name))
 
     def _validate_current(self) -> None:
         if self.current_recipe is None:

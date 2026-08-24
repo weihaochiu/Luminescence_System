@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import tr
+
 from .el_matrix_plan import format_duration, format_finish_time
 from .el_matrix_runner import MatrixRuntimeProgress
 from .numeric import format_voltage_number
@@ -27,14 +29,14 @@ class MeasurementProgressDialog(QDialog):
 
     def __init__(self, recipe_name: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("EL Matrix 量測進度")
+        self.setWindowTitle(tr("progress.title"))
         self.setModal(False)
         self.setMinimumWidth(520)
         self._running = True
         self._postprocessing = False
         self.recipe_value = QLabel(recipe_name)
-        self.stage_value = QLabel("硬體量測")
-        self.phase_value = QLabel("準備中")
+        self.stage_value = QLabel(tr("progress.hardware_measurement"))
+        self.phase_value = QLabel(tr("progress.preparing"))
         self.channel_value = QLabel("—")
         self.sample_value = QLabel("—")
         self.condition_value = QLabel("—")
@@ -45,22 +47,22 @@ class MeasurementProgressDialog(QDialog):
         self.remaining_time_value = QLabel("—")
         self.finish_value = QLabel("—")
         form = QFormLayout()
-        form.addRow("Recipe", self.recipe_value)
-        form.addRow("階段", self.stage_value)
-        form.addRow("目前步驟", self.phase_value)
-        form.addRow("Channel", self.channel_value)
-        form.addRow("Sample", self.sample_value)
-        form.addRow("條件 / 狀態", self.condition_value)
-        form.addRow("Channel 進度", self.channel_progress_value)
-        form.addRow("檔案 / 擷取進度", self.overall_value)
-        form.addRow("百分比", self.percent_value)
-        form.addRow("剩餘數量", self.remaining_value)
-        form.addRow("剩餘時間", self.remaining_time_value)
-        form.addRow("預計完成時間", self.finish_value)
+        form.addRow(tr("recipe.title"), self.recipe_value)
+        form.addRow(tr("progress.stage"), self.stage_value)
+        form.addRow(tr("progress.current_step"), self.phase_value)
+        form.addRow(tr("common.channel"), self.channel_value)
+        form.addRow(tr("measurement.sample"), self.sample_value)
+        form.addRow(tr("progress.condition_status"), self.condition_value)
+        form.addRow(tr("progress.channel_progress"), self.channel_progress_value)
+        form.addRow(tr("progress.file_capture_progress"), self.overall_value)
+        form.addRow(tr("progress.percentage"), self.percent_value)
+        form.addRow(tr("progress.remaining_count"), self.remaining_value)
+        form.addRow(tr("progress.remaining_time"), self.remaining_time_value)
+        form.addRow(tr("progress.estimated_finish"), self.finish_value)
         self.progress_bar = QProgressBar()
-        self.stop_button = QPushButton("停止 / 安全關閉")
+        self.stop_button = QPushButton(tr("progress.stop_safe_shutdown"))
         self.stop_button.clicked.connect(self.stop_requested)
-        self.retry_button = QPushButton("重試 Pixel CSV")
+        self.retry_button = QPushButton(tr("progress.retry_pixel_csv"))
         self.retry_button.clicked.connect(self.retry_pixel_csv_requested)
         self.retry_button.hide()
         layout = QVBoxLayout(self)
@@ -70,7 +72,7 @@ class MeasurementProgressDialog(QDialog):
         layout.addWidget(self.retry_button)
 
     def update_progress(self, progress: MatrixRuntimeProgress) -> None:
-        self.stage_value.setText("硬體量測")
+        self.stage_value.setText(tr("progress.hardware_measurement"))
         self.phase_value.setText(progress.phase)
         self.channel_value.setText(
             f"{progress.channel_index} / {progress.channel_total} — {progress.channel}"
@@ -88,11 +90,14 @@ class MeasurementProgressDialog(QDialog):
                 if progress.output_mode == "voltage"
                 else f"J={progress.current_density_ma_cm2:g} mA/cm²"
             )
-            self.condition_value.setText(
-                f"{electrical} | Gain={progress.gain_percent}% | "
-                f"Exposure={progress.exposure_ms:g} ms | "
-                f"Repeat={progress.repeat_index}/{progress.repeat_total}"
-            )
+            self.condition_value.setText(tr(
+                "progress.condition_value",
+                electrical=electrical,
+                gain=progress.gain_percent,
+                exposure=f"{progress.exposure_ms:g}",
+                repeat=progress.repeat_index,
+                repeat_total=progress.repeat_total,
+            ))
         self.channel_progress_value.setText(
             f"{progress.channel_completed} / {progress.channel_capture_total}"
             if progress.channel_capture_total else "—"
@@ -100,7 +105,7 @@ class MeasurementProgressDialog(QDialog):
         self.overall_value.setText(f"{progress.current} / {progress.total}")
         percent = 100.0 if progress.total == 0 else progress.current / progress.total * 100.0
         self.percent_value.setText(f"{percent:.1f}%")
-        self.remaining_value.setText(f"{progress.remaining_captures} 次擷取")
+        self.remaining_value.setText(tr("progress.captures_remaining", count=progress.remaining_captures))
         self.remaining_time_value.setText(format_duration(progress.remaining_time_s))
         self.finish_value.setText(
             format_finish_time(progress.estimated_finish)
@@ -111,15 +116,15 @@ class MeasurementProgressDialog(QDialog):
 
     def update_postprocess_progress(self, progress: PixelCSVProgress) -> None:
         self._postprocessing = True
-        self.stage_value.setText("Pixel CSV 後處理")
-        self.phase_value.setText("Pixel CSV 後處理")
-        self.condition_value.setText(progress.message or "正在產生 Pixel CSV")
+        self.stage_value.setText(tr("progress.pixel_csv_postprocess"))
+        self.phase_value.setText(tr("progress.pixel_csv_postprocess"))
+        self.condition_value.setText(progress.message or tr("progress.generating_pixel_csv"))
         self.channel_value.setText("—")
         self.sample_value.setText("—")
         self.channel_progress_value.setText("—")
         self.overall_value.setText(f"{progress.current} / {progress.total}")
         self.percent_value.setText(f"{progress.percent:.1f}%")
-        self.remaining_value.setText(f"{max(0, progress.total - progress.current)} 個檔案")
+        self.remaining_value.setText(tr("progress.files_remaining", count=max(0, progress.total - progress.current)))
         self.remaining_time_value.setText(format_duration(progress.remaining_time_s))
         self.finish_value.setText(
             format_finish_time(progress.estimated_finish)
@@ -134,15 +139,15 @@ class MeasurementProgressDialog(QDialog):
     def set_hardware_complete_starting_postprocess(self) -> None:
         self._running = True
         self._postprocessing = True
-        self.stage_value.setText("Pixel CSV 後處理")
-        self.phase_value.setText("硬體量測完成")
-        self.condition_value.setText("硬體量測完成，SMU 已安全關閉，正在產生 Pixel CSV")
+        self.stage_value.setText(tr("progress.pixel_csv_postprocess"))
+        self.phase_value.setText(tr("progress.hardware_complete"))
+        self.condition_value.setText(tr("progress.hardware_complete_generating_csv"))
         self.stop_button.setEnabled(False)
         self.retry_button.hide()
 
-    def set_complete(self, total: int, message: str = "量測與後處理完成") -> None:
+    def set_complete(self, total: int, message: str | None = None) -> None:
         self._running = False
-        self.phase_value.setText(message)
+        self.phase_value.setText(message or tr("measurement.completed_with_pixel_csv"))
         self.overall_value.setText(f"{total} / {total}")
         self.percent_value.setText("100.0%")
         self.finish_value.setText(datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"))
@@ -151,21 +156,21 @@ class MeasurementProgressDialog(QDialog):
 
     def set_stopped(self) -> None:
         self._running = False
-        self.phase_value.setText("量測已停止並安全關閉")
+        self.phase_value.setText(tr("progress.stopped_safely"))
         self.stop_button.setEnabled(False)
 
     def set_failed(self, reason: str) -> None:
         self._running = False
-        self.phase_value.setText("硬體量測失敗 / FAULT")
-        self.condition_value.setText(f"原因：{reason}")
+        self.phase_value.setText(tr("progress.hardware_failed"))
+        self.condition_value.setText(tr("progress.reason", reason=reason))
         self.stop_button.setEnabled(False)
 
     def set_postprocess_failed(self, reason: str) -> None:
         self._running = False
         self._postprocessing = True
-        self.stage_value.setText("Pixel CSV 後處理")
-        self.phase_value.setText("硬體量測完成，但 Pixel CSV 後處理失敗")
-        self.condition_value.setText(f"原因：{reason}")
+        self.stage_value.setText(tr("progress.pixel_csv_postprocess"))
+        self.phase_value.setText(tr("progress.postprocess_failed"))
+        self.condition_value.setText(tr("progress.reason", reason=reason))
         self.stop_button.setEnabled(False)
         self.retry_button.setEnabled(True)
         self.retry_button.show()

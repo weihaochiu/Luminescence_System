@@ -97,16 +97,23 @@ class ResponsiveLayoutManager(QObject):
         return self._mode
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
-        if watched in (self.window, self.control_bar) and event.type() == QEvent.Type.Resize:
+        # Qt can deliver teardown events after the Python wrapper has started
+        # clearing attributes. Keep destruction side-effect free so repeated
+        # offscreen GUI regression runs do not leak callback exceptions.
+        window = getattr(self, "window", None)
+        control_bar = getattr(self, "control_bar", None)
+        if window is None or control_bar is None:
+            return False
+        if watched in (window, control_bar) and event.type() == QEvent.Type.Resize:
             self.schedule_update()
-        elif watched is self.window and event.type() in (
+        elif watched is window and event.type() in (
             QEvent.Type.Show,
             QEvent.Type.WinIdChange,
         ):
             self._connect_screen_signal()
             self.schedule_update()
-        elif event.type() in self._metric_event_types:
-            self.control_bar.refresh_metrics()
+        elif event.type() in getattr(self, "_metric_event_types", ()):
+            control_bar.refresh_metrics()
             self.schedule_update()
         return super().eventFilter(watched, event)
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QDialog, QMessageBox
 
+from core.i18n import tr
+
 from .relay_controller import RelayError, RelayState
 from .relay_settings_dialog import RelaySettingsDialog
 
@@ -27,7 +29,11 @@ class MainWindowRelayMixin:
             else:
                 self.relay_service.group_on("white_light", "main_window")
         except RelayError as exc:
-            QMessageBox.warning(self, "白光控制失敗", str(exc))
+            self.report_error(
+                "REL-203",
+                context={"operation": "toggle_white_light", "actual": str(exc)},
+                exception=exc,
+            )
         self._update_white_light_control()
 
     def _update_white_light_control(self, connection_message: str | None = None) -> None:
@@ -41,15 +47,15 @@ class MainWindowRelayMixin:
         self.white_light_button.setEnabled(
             connected and group is not None and group.enabled and not measurement_locked
         )
-        self.white_light_button.setText("關閉白光" if is_on else "開啟白光")
+        self.white_light_button.setText(tr("relay.white_light_off") if is_on else tr("relay.white_light_on"))
         state_text = {
-            RelayState.ON: "開啟",
-            RelayState.OFF: "關閉",
-            RelayState.PARTIAL: "部分啟用／狀態異常",
-            RelayState.ERROR: "錯誤／狀態未知",
-            RelayState.UNKNOWN: "未知" if connected else "未連線",
+            RelayState.ON: tr("common.on"),
+            RelayState.OFF: tr("common.off"),
+            RelayState.PARTIAL: tr("relay.partial_state"),
+            RelayState.ERROR: tr("relay.error_state"),
+            RelayState.UNKNOWN: tr("common.unknown") if connected else tr("common.not_connected"),
         }[state]
-        self.white_light_status.setText(f"白光 ● {state_text}")
+        self.white_light_status.setText(tr("relay.white_light_status", state=state_text))
         self.white_light_status.setStyleSheet(
             "color:#16823b; font-weight:600;" if connected else "color:#b3261e; font-weight:600;"
         )

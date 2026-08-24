@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import tr
+
 from .instrument_state_manager import SMUInstrumentState, SMUUIState
 from .manual_smu_settings import (
     MANUAL_SMU_CHANNELS,
@@ -71,8 +73,8 @@ class ManualSMUPanel(QWidget):
             self.channel_combo.addItem(channel_id, channel_id)
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("定電流密度", "CC")
-        self.mode_combo.addItem("定電壓", "CV")
+        self.mode_combo.addItem(tr("smu.constant_current_density"), "CC")
+        self.mode_combo.addItem(tr("smu.constant_voltage"), "CV")
 
         self.area_spin = QDoubleSpinBox()
         self.area_spin.setDecimals(4)
@@ -81,42 +83,42 @@ class ManualSMUPanel(QWidget):
         self.area_spin.setSuffix(" cm²")
         self.area_spin.setKeyboardTracking(False)
 
-        self.setpoint_label = QLabel("設定電流密度")
+        self.setpoint_label = QLabel(tr("smu.set_current_density"))
         self.setpoint_spin = QDoubleSpinBox()
         self.setpoint_spin.setDecimals(4)
         self.setpoint_spin.setKeyboardTracking(False)
 
-        self.compliance_label = QLabel("Voltage Compliance")
+        self.compliance_label = QLabel(tr("smu.voltage_compliance"))
         self.compliance_spin = QDoubleSpinBox()
         self.compliance_spin.setDecimals(4)
         self.compliance_spin.setKeyboardTracking(False)
 
-        self.output_button = QPushButton("輸出")
+        self.output_button = QPushButton(tr("smu.output"))
         self.output_button.setObjectName("manualOutputToggle")
-        self.handover_button = QPushButton("安全交接至手動控制")
+        self.handover_button = QPushButton(tr("smu.safe_handover_manual"))
         self.handover_button.setVisible(False)
 
         form = QFormLayout()
-        form.addRow("輸出通道", self.channel_combo)
-        form.addRow("輸出模式", self.mode_combo)
-        form.addRow("元件面積", self.area_spin)
+        form.addRow(tr("smu.output_channel"), self.channel_combo)
+        form.addRow(tr("smu.output_mode"), self.mode_combo)
+        form.addRow(tr("smu.device_area"), self.area_spin)
         form.addRow(self.setpoint_label, self.setpoint_spin)
         form.addRow(self.compliance_label, self.compliance_spin)
 
         self.output_value = QLabel("OFF")
         self.active_channel_value = QLabel("—")
-        self.factor_value = QLabel("待輸出確認")
+        self.factor_value = QLabel(tr("smu.awaiting_output_confirmation"))
         self.voltage_value = QLabel("— V")
         self.current_density_value = QLabel("— mA/cm²")
         self.compliance_value = QLabel("—")
         self.compliance_value.setStyleSheet("color: #b3261e; font-weight: 600;")
         readback = QFormLayout()
-        readback.addRow("輸出狀態", self.output_value)
-        readback.addRow("目前通道", self.active_channel_value)
-        readback.addRow("極性", self.factor_value)
-        readback.addRow("量測電壓", self.voltage_value)
-        readback.addRow("量測電流密度", self.current_density_value)
-        readback.addRow("Compliance 狀態", self.compliance_value)
+        readback.addRow(tr("smu.output_status"), self.output_value)
+        readback.addRow(tr("smu.channel_current"), self.active_channel_value)
+        readback.addRow(tr("smu.polarity"), self.factor_value)
+        readback.addRow(tr("smu.voltage_measured"), self.voltage_value)
+        readback.addRow(tr("smu.current_density_measured"), self.current_density_value)
+        readback.addRow(tr("smu.compliance_status"), self.compliance_value)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 10)
@@ -170,19 +172,19 @@ class ManualSMUPanel(QWidget):
         )
         self.output_value.setText(display_output_state.value)
         if display_output_state is SMUOutputState.ON:
-            self.output_button.setText("停止")
+            self.output_button.setText(tr("common.stop"))
         elif display_output_state is SMUOutputState.UNKNOWN:
-            self.output_button.setText("安全復歸")
+            self.output_button.setText(tr("smu.safe_recovery"))
         elif state.operation is SMUOperationState.BUSY:
-            self.output_button.setText("正在確認極性…")
+            self.output_button.setText(tr("smu.confirming_polarity"))
         elif state.operation is SMUOperationState.SHUTTING_DOWN:
-            self.output_button.setText("停止中…")
+            self.output_button.setText(tr("common.stopping"))
         else:
-            self.output_button.setText("輸出")
+            self.output_button.setText(tr("smu.output"))
         self.state_message.setText(state.manual_lock_reason)
         if state.operation is SMUOperationState.FAULT:
-            self.active_channel_value.setText("故障")
-            self.factor_value.setText("待確認")
+            self.active_channel_value.setText(tr("common.fault"))
+            self.factor_value.setText(tr("common.pending_confirmation"))
         self.setToolTip(state.manual_lock_reason)
         self._update_enabled()
 
@@ -195,7 +197,7 @@ class ManualSMUPanel(QWidget):
 
     def update_polarity(self, result: object) -> None:
         if not isinstance(result, ManualPolarityResult):
-            self.factor_value.setText("待輸出確認")
+            self.factor_value.setText(tr("smu.awaiting_output_confirmation"))
             return
         labels = {
             PolarityState.UNKNOWN: "待輸出確認",
@@ -242,18 +244,18 @@ class ManualSMUPanel(QWidget):
             self.current_density_value.setText(f"{density:.2f} mA/cm²")
         if reading.compliance_tripped:
             kind = "Current" if self.mode == "CV" else "Voltage"
-            self.compliance_value.setText(f"⚠ {kind} Compliance Active")
+            self.compliance_value.setText(tr("smu.compliance_active", kind=kind))
         else:
             self.compliance_value.setText("—")
 
     def reset_for_output_off(self) -> None:
-        self.factor_value.setText("待輸出確認")
+        self.factor_value.setText(tr("smu.awaiting_output_confirmation"))
         self.voltage_value.setText("— V")
         self.current_density_value.setText("— mA/cm²")
         self.compliance_value.setText("—")
         self.active_channel_value.setText("—")
         if not self._ui_state.output_enabled:
-            self.output_button.setText("輸出")
+            self.output_button.setText(tr("smu.output"))
 
     def _update_mode(self) -> None:
         new_mode = self.mode
@@ -272,24 +274,24 @@ class ManualSMUPanel(QWidget):
             QSignalBlocker(self.compliance_spin),
         )
         if mode == "CV":
-            self.setpoint_label.setText("設定電壓")
+            self.setpoint_label.setText(tr("smu.set_voltage"))
             self.setpoint_spin.setRange(limits.minimum_voltage_v, limits.maximum_voltage_v)
             self.setpoint_spin.setSuffix(" V")
             self.setpoint_spin.setSingleStep(0.05)
-            self.compliance_label.setText("Current Compliance")
+            self.compliance_label.setText(tr("smu.current_compliance"))
             maximum_density = (
                 limits.maximum_current_compliance_a * 1000.0 / self.area_cm2
             )
             self.compliance_spin.setRange(min(0.001, maximum_density), maximum_density)
             self.compliance_spin.setSuffix(" mA/cm²")
         else:
-            self.setpoint_label.setText("設定電流密度")
+            self.setpoint_label.setText(tr("smu.set_current_density"))
             maximum_density = limits.maximum_current_a * 1000.0 / self.area_cm2
             minimum_density = limits.minimum_current_a * 1000.0 / self.area_cm2
             self.setpoint_spin.setRange(minimum_density, maximum_density)
             self.setpoint_spin.setSuffix(" mA/cm²")
             self.setpoint_spin.setSingleStep(0.1)
-            self.compliance_label.setText("Voltage Compliance")
+            self.compliance_label.setText(tr("smu.voltage_compliance"))
             maximum_voltage_v = limits.maximum_voltage_compliance_v
             self.compliance_spin.setRange(min(0.001, maximum_voltage_v), maximum_voltage_v)
             self.compliance_spin.setSuffix(" V")

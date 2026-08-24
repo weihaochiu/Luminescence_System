@@ -540,6 +540,17 @@ class Recipe:
                 },
             })
         matrix_data = dict(data.get("el_matrix") or {})
+        legacy_output_modes = {
+            "定電流密度": "current_density",
+            "固定電流密度": "current_density",
+            "constant_current_density": "current_density",
+            "current": "current_density",
+            "定電壓": "voltage",
+            "固定電壓": "voltage",
+            "constant_voltage": "voltage",
+        }
+        raw_output_mode = str(matrix_data.get("output_mode", "current_density"))
+        matrix_data["output_mode"] = legacy_output_modes.get(raw_output_mode, raw_output_mode)
         if "dark_frame_enabled" not in matrix_data and "shared_dark_enabled" in matrix_data:
             matrix_data["dark_frame_enabled"] = bool(matrix_data["shared_dark_enabled"])
         migration_ambiguous = False
@@ -629,6 +640,28 @@ class Recipe:
             legacy_area = float((data.get("geometry") or {}).get("active_area_cm2", 0.100))
             channels = _default_channels()
             channels[0].area_cm2 = legacy_area
+        legacy_states = {"草稿": "draft", "啟用": "active", "停用": "disabled"}
+        legacy_polarities = {"正向為正": "positive", "正向為負": "negative"}
+        legacy_directions = {
+            "正向": "forward", "反向": "reverse", "雙向": "bidirectional"
+        }
+        legacy_compliance_actions = {"確認後繼續": "confirm", "立即中止": "abort"}
+        geometry_data = dict(data.get("geometry") or {})
+        geometry_data["forward_polarity"] = legacy_polarities.get(
+            str(geometry_data.get("forward_polarity", "positive")),
+            str(geometry_data.get("forward_polarity", "positive")),
+        )
+        dark_iv_data = dict(data.get("dark_iv") or {})
+        dark_iv_data["direction"] = legacy_directions.get(
+            str(dark_iv_data.get("direction", "forward")),
+            str(dark_iv_data.get("direction", "forward")),
+        )
+        dark_iv_data["compliance_action"] = legacy_compliance_actions.get(
+            str(dark_iv_data.get("compliance_action", "abort")),
+            str(dark_iv_data.get("compliance_action", "abort")),
+        )
+        raw_state = str(data.get("state", "draft"))
+        canonical_state = legacy_states.get(raw_state, raw_state)
         return cls(
             recipe_id=str(data.get("recipe_id") or uuid4()),
             name=str(data.get("name", "未命名 Recipe")),
@@ -638,15 +671,15 @@ class Recipe:
             state=(
                 "draft"
                 if original_measurement_type == "el_single_current" or migration_ambiguous
-                else str(data.get("state", "draft"))
+                else canonical_state
             ),
             created_at=str(data.get("created_at", _now())),
             modified_at=str(data.get("modified_at", _now())),
-            geometry=_dataclass_from_dict(GeometryRecipe, data.get("geometry")),
+            geometry=_dataclass_from_dict(GeometryRecipe, geometry_data),
             channels=channels,
             el_matrix=_dataclass_from_dict(ELMatrixRecipe, matrix_data),
             polarity=_dataclass_from_dict(PolarityRecipe, data.get("polarity")),
-            dark_iv=_dataclass_from_dict(DarkIVRecipe, data.get("dark_iv")),
+            dark_iv=_dataclass_from_dict(DarkIVRecipe, dark_iv_data),
             output=_dataclass_from_dict(OutputRecipe, output_data),
             import_review_items=[str(item) for item in data.get("import_review_items", [])]
             if isinstance(data.get("import_review_items", []), list) else [],

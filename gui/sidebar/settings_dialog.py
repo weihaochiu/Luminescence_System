@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import tr
+
 from .registry import SidebarItemState, SidebarRegistry
 
 
@@ -30,10 +32,10 @@ class SidebarSettingsDialog(QDialog):
     def __init__(self, registry: SidebarRegistry, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.registry = registry
-        self.setWindowTitle("左側工具列設定")
+        self.setWindowTitle(tr("settings.sidebar_title"))
         self.setMinimumSize(430, 430)
 
-        intro = QLabel("勾選要顯示的功能，並拖曳項目調整主畫面左側的排列順序。")
+        intro = QLabel(tr("settings.sidebar_description"))
         intro.setWordWrap(True)
 
         self.item_list = QListWidget()
@@ -44,8 +46,8 @@ class SidebarSettingsDialog(QDialog):
         self.item_list.setDropIndicatorShown(True)
         self.item_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
 
-        self.show_all_button = QPushButton("全部顯示")
-        self.reset_button = QPushButton("恢復預設")
+        self.show_all_button = QPushButton(tr("settings.show_all"))
+        self.reset_button = QPushButton(tr("settings.restore_defaults"))
         utility_buttons = QHBoxLayout()
         utility_buttons.addWidget(self.show_all_button)
         utility_buttons.addWidget(self.reset_button)
@@ -56,9 +58,9 @@ class SidebarSettingsDialog(QDialog):
             | QDialogButtonBox.StandardButton.Cancel
             | QDialogButtonBox.StandardButton.Apply
         )
-        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("確定")
-        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
-        self.buttons.button(QDialogButtonBox.StandardButton.Apply).setText("套用")
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("common.ok"))
+        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("common.cancel"))
+        self.buttons.button(QDialogButtonBox.StandardButton.Apply).setText(tr("common.apply"))
 
         layout = QVBoxLayout(self)
         layout.addWidget(intro)

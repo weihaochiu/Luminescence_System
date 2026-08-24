@@ -9,6 +9,8 @@ from PySide6.QtCore import QSettings, QStandardPaths, QTimer
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMessageBox
 
+from core.error_reporter import ErrorReporter
+from core.i18n import configure_i18n, i18n, tr
 from . import __version__
 from .camera_auto_exposure_settings import load_auto_exposure_target_percent
 from .camera_auto_exposure_settings_dialog import (
@@ -18,11 +20,13 @@ from .camera_controller import CameraController
 from .camera_temperature_chart import CameraTemperatureChart
 from .camera_temperature_monitor import CameraTemperatureMonitor
 from .emergency_manager import EmergencyManager
+from .general_settings_dialog import GeneralSettingsDialog
 from .instrument_state_manager import InstrumentStateManager
 from .main_window_devices import MainWindowDeviceMixin
 from .main_window_ui import MainWindowUIMixin
 from .main_window_measurement import attach_measurement_handlers
 from .main_window_close import attach_close_handlers
+from .main_window_errors import attach_error_handlers
 from .recipe_dialog import RecipeManagerDialog
 from .recipe_store import Recipe, RecipeStore
 from .polarity_settings import PolaritySettingsStore
@@ -40,11 +44,12 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"EL 量測設備控制程式 v{__version__}")
+        self.settings = QSettings()
+        configure_i18n(self.settings)
+        self.setWindowTitle(tr("app.title", version=__version__))
         self.resize(1500, 900)
         self.setMinimumSize(800, 600)
 
-        self.settings = QSettings()
         app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
         application_directory = Path(app_data) if app_data else Path.cwd()
         self.controller = CameraController(
@@ -94,6 +99,11 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             self.relay_service,
             parent=self,
         )
+        self.error_reporter = ErrorReporter(parent=self)
+        self.error_reporter.presenter = self._present_error
+        self._error_center_dialog = None
+        self._error_dialogs: set[object] = set()
+        self.emergency_manager.completed.connect(self._on_emergency_completed)
         self.selected_recipe: Recipe | None = None
         self.devices: list[Any] = []
         self.camera_info: dict[str, Any] = {}
@@ -114,6 +124,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self._build_central_ui()
         self._build_status_bar()
         self._connect_signals()
+        i18n.language_changed.connect(self._retranslate_application_shell)
         self._set_camera_controls_enabled(False)
         self.refresh_recipes()
 
@@ -134,11 +145,25 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         QTimer.singleShot(300, self.auto_connect_smu_on_startup)
         QTimer.singleShot(500, self.refresh_relay_connection)
 
+    def _retranslate_application_shell(self, _language: str = "") -> None:
+        self.setWindowTitle(tr("app.title", version=__version__))
+        if hasattr(self, "general_settings_action"):
+            self.general_settings_action.setText(tr("settings.general"))
+        if hasattr(self, "error_center_action"):
+            self.error_center_action.setText(tr("error_center.title"))
+
+    def open_general_settings(self) -> None:
+        GeneralSettingsDialog(self).exec()
+
     def refresh_recipes(self) -> None:
         try:
             self.recipe_store.load()
         except RuntimeError as exc:
-            QMessageBox.warning(self, "Recipe 讀取錯誤", str(exc))
+            self.report_error(
+                "REC-101",
+                context={"operation": "load_recipe_store", "resource": str(self.recipe_store.path)},
+                exception=exc,
+            )
             return
         preferred = str(self.settings.value("recipe/last_selected_id", ""))
         self.device_panel.set_recipes(
@@ -161,7 +186,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
                 [channel.channel for channel in self.selected_recipe.enabled_channels()]
             )
             self.status_message.setText(
-                f"已選擇 Recipe：{self.selected_recipe.name} v{self.selected_recipe.version}"
+                tr("recipe.selected_status", name=self.selected_recipe.name, version=self.selected_recipe.version)
             )
         else:
             self.measurement_control_bar.set_active_channels([])
@@ -180,9 +205,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
     def open_polarity_settings(self) -> None:
         dialog = PolaritySettingsDialog(self.polarity_settings_store, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.status_message.setText(
-                "極性確認共用設定已更新；後續手動輸出與 Recipe 將使用新設定"
-            )
+            self.status_message.setText(tr("settings.polarity_updated"))
 
     def open_camera_auto_exposure_settings(self) -> None:
         dialog = CameraAutoExposureSettingsDialog(
@@ -195,9 +218,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             self.controller.set_auto_exposure_target_percent(
                 dialog.target_percent
             )
-            self.status_message.setText(
-                f"相機 DN 自動曝光目標已更新為 {dialog.target_percent}%"
-            )
+            self.status_message.setText(tr("camera.ae_target_updated", value=dialog.target_percent))
 
     def open_smu_safety_settings(self) -> None:
         dialog = SMUSafetyDialog(
@@ -208,10 +229,10 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
                 self.settings
             )
             self.refresh_recipes()
-            self.status_message.setText("全域安全 / SMU 設定已更新")
+            self.status_message.setText(tr("settings.smu_safety_updated"))
 
     def choose_measurement_output_root(self) -> None:
-        selected = QFileDialog.getExistingDirectory(self, "選擇量測資料儲存位置")
+        selected = QFileDialog.getExistingDirectory(self, tr("file.select_measurement_output"))
         if selected:
             self.measurement_path_edit.setText(selected)
             self.settings.setValue("measurement/output_root", selected)
@@ -224,50 +245,45 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         if not hasattr(self, "start_measurement_button"):
             return
         if self.selected_recipe is None:
-            self.selected_recipe_label.setText("尚未選擇")
-            reason = "請先從左側選擇已啟用且通過驗證的 Recipe。"
+            self.selected_recipe_label.setText(tr("common.not_selected"))
+            reason = tr("measurement.select_valid_recipe")
         else:
             counts = self._effective_capture_counts(self.selected_recipe)
             self.selected_recipe_label.setText(
-                f"{self.selected_recipe.name} v{self.selected_recipe.version}\n"
-                f"{len(self.selected_recipe.enabled_channels())} Channels｜"
-                f"{counts['overall']} captures"
+                tr("recipe.list_summary", name=self.selected_recipe.name,
+                   version=self.selected_recipe.version,
+                   channels=len(self.selected_recipe.enabled_channels()),
+                   captures=counts["overall"])
             )
             blockers = []
-            if not self.controller.is_open: blockers.append("相機未連線")
-            if not self.smu_manager.is_connected: blockers.append("SMU 未連線")
-            if not self.relay_controller.connected: blockers.append("Relay 未連線")
+            if not self.controller.is_open: blockers.append(tr("camera.not_connected"))
+            if not self.smu_manager.is_connected: blockers.append(tr("smu.not_connected"))
+            if not self.relay_controller.connected: blockers.append(tr("relay.not_connected"))
             if not self.measurement_path_edit.text().strip():
-                blockers.append("尚未設定輸出位置")
+                blockers.append(tr("measurement.output_not_set"))
             missing_samples = self.measurement_control_bar.missing_sample_channels()
             if missing_samples:
-                blockers.append("尚未設定樣品 ID：" + "、".join(missing_samples))
-            reason = "；".join(blockers) if blockers else "開始多 Channel EL Matrix 自動量測"
+                blockers.append(tr("measurement.sample_ids_missing", channels=", ".join(missing_samples)))
+            reason = "; ".join(blockers) if blockers else tr("measurement.start_matrix")
         running = self._measurement_worker is not None
         if running:
-            reason = "EL Matrix 量測進行中"
+            reason = tr("measurement.running")
         self.start_measurement_button.setEnabled(
             bool(self.selected_recipe is not None and not blockers and not running)
             if self.selected_recipe else False
         )
         self.start_measurement_button.setToolTip(reason)
         self.stop_measurement_button.setEnabled(self._measurement_worker is not None)
-        self.stop_measurement_button.setToolTip("執行既有 Measurement Safe Stop。")
+        self.stop_measurement_button.setToolTip(tr("measurement.safe_stop_tooltip"))
 
     def show_about(self) -> None:
         QMessageBox.about(
             self,
-            "關於 EL 量測設備控制程式",
-            f"EL 量測設備控制程式 v{__version__}\n\n"
-            "功能：即時預覽、手動曝光、手動 gain、持續自動曝光、"
-            "單次自動曝光後拍攝、TIFF／PNG／JPEG 儲存，"
-            "VISA SMU 掃描、選擇、安全連線、手動 CV／CC，以及 Recipe 建立、驗證與選擇。\n\n"
-            "SMU 支援：Keysight B2900 系列（手動輸出需先進行實機安全驗證）\n"
-            "Recipe：全 Channel 極性 → Shared Dark → 每 Channel Dark I–V → J → Gain → Exposure → Repeat\n"
-            "支援多 Channel EL Matrix 自動量測、即時進度與安全停止\n"
-            "相機介面：RisingCam SDK 57.27250.20241216",
+            tr("app.about_title"),
+            tr("app.about_text", version=__version__),
         )
 
 attach_relay_handlers(MainWindow)
 attach_measurement_handlers(MainWindow)
 attach_close_handlers(MainWindow)
+attach_error_handlers(MainWindow)

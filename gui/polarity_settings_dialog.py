@@ -21,7 +21,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import tr
+
 from .polarity_settings import PolarityMeasurementSettings, PolaritySettingsStore
+from .error_reporting import report_error
 
 
 def _double(minimum: float, maximum: float, suffix: str, decimals: int = 3) -> QDoubleSpinBox:
@@ -37,29 +40,27 @@ class PolaritySettingsDialog(QDialog):
     def __init__(self, store: PolaritySettingsStore, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.store = store
-        self.setWindowTitle("極性確認設定")
+        self.setWindowTitle(tr("settings.polarity_title"))
         self.resize(620, 720)
         self._build_ui()
         self._write(store.settings)
 
     def _build_ui(self) -> None:
-        intro = QLabel(
-            "這份設定由 SMU 手動輸出與 Recipe 極性確認共用；每次量測會另存當次設定與結果快照。"
-        )
+        intro = QLabel(tr("settings.polarity_description"))
         intro.setWordWrap(True)
         intro.setStyleSheet("background:#edf5fa; border:1px solid #b6cedd; padding:8px;")
 
         self.light_stabilization = QSpinBox()
         self.light_stabilization.setRange(0, 600000)
         self.light_stabilization.setSuffix(" ms")
-        light = self._group("白光", (("白光開啟後穩定等待時間", self.light_stabilization),))
+        light = self._group(tr("relay.white_light"), ((tr("settings.white_light_stabilization"), self.light_stabilization),))
 
-        self.anti_flicker = QCheckBox("啟用抗光源閃爍量測")
+        self.anti_flicker = QCheckBox(tr("settings.anti_flicker"))
         self.mains_frequency = _double(40, 70, " Hz", 2)
         self.integration_nplc = _double(0.001, 100, " PLC", 3)
         flicker = self._group(
-            "抗閃爍",
-            (("", self.anti_flicker), ("市電頻率", self.mains_frequency), ("Integration / Aperture", self.integration_nplc)),
+            tr("settings.flicker_reduction"),
+            (("", self.anti_flicker), (tr("settings.mains_frequency"), self.mains_frequency), (tr("settings.integration_aperture"), self.integration_nplc)),
         )
 
         self.jsc_settle = self._milliseconds()
@@ -71,10 +72,10 @@ class PolaritySettingsDialog(QDialog):
         jsc = self._group(
             "Jsc",
             (
-                ("Settle Time", self.jsc_settle),
-                ("取樣次數", self.jsc_samples),
-                ("統計方式", self.jsc_aggregation),
-                ("Current Compliance", self.jsc_compliance),
+                (tr("measurement.settle_time"), self.jsc_settle),
+                (tr("measurement.sample_count"), self.jsc_samples),
+                (tr("measurement.aggregation"), self.jsc_aggregation),
+                (tr("smu.current_compliance"), self.jsc_compliance),
             ),
         )
 
@@ -87,23 +88,23 @@ class PolaritySettingsDialog(QDialog):
         voc = self._group(
             "Voc",
             (
-                ("Settle Time", self.voc_settle),
-                ("取樣次數", self.voc_samples),
-                ("統計方式", self.voc_aggregation),
-                ("Voltage Compliance", self.voc_compliance),
+                (tr("measurement.settle_time"), self.voc_settle),
+                (tr("measurement.sample_count"), self.voc_samples),
+                (tr("measurement.aggregation"), self.voc_aggregation),
+                (tr("smu.voltage_compliance"), self.voc_compliance),
             ),
         )
         decision = self._group(
-            "判定條件",
+            tr("settings.decision_criteria"),
             (
-                ("最小有效 |Jsc|", self.jsc_minimum),
-                ("Jsc 最大允許變異", self.jsc_variation),
-                ("最小有效 |Voc|", self.voc_minimum),
-                ("Voc 最大允許變異", self.voc_variation),
+                (tr("settings.minimum_valid_jsc"), self.jsc_minimum),
+                (tr("settings.maximum_jsc_variation"), self.jsc_variation),
+                (tr("settings.minimum_valid_voc"), self.voc_minimum),
+                (tr("settings.maximum_voc_variation"), self.voc_variation),
             ),
         )
 
-        self.restore_defaults = QPushButton("恢復預設值")
+        self.restore_defaults = QPushButton(tr("settings.restore_defaults"))
         self.restore_defaults.clicked.connect(
             lambda: self._write(PolarityMeasurementSettings())
         )
@@ -144,11 +145,10 @@ class PolaritySettingsDialog(QDialog):
         widget.setRange(1, 1000)
         return widget
 
-    @staticmethod
-    def _aggregation() -> QComboBox:
+    def _aggregation(self) -> QComboBox:
         widget = QComboBox()
-        widget.addItem("Median", "median")
-        widget.addItem("Mean", "mean")
+        widget.addItem(tr("measurement.median"), "median")
+        widget.addItem(tr("measurement.mean"), "mean")
         return widget
 
     def _write(self, value: PolarityMeasurementSettings) -> None:
@@ -193,13 +193,22 @@ class PolaritySettingsDialog(QDialog):
         value = self._read()
         errors = value.validate()
         if errors:
-            QMessageBox.warning(self, "極性確認設定無效", "• " + "\n• ".join(errors))
+            report_error(
+                self,
+                "CFG-101",
+                context={"operation": "validate_polarity_settings", "actual": errors},
+            )
             return
         self.store.settings = value
         try:
             self.store.save()
         except Exception as exc:
-            QMessageBox.critical(self, "無法保存極性確認設定", str(exc))
+            report_error(
+                self,
+                "CFG-101",
+                context={"operation": "save_polarity_settings"},
+                exception=exc,
+            )
             return
         self.accept()
 

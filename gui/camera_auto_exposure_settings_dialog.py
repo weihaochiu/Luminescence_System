@@ -17,6 +17,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from core.i18n import tr
+
+from .error_reporting import report_error
+
 from .camera_auto_exposure_settings import (
     AUTO_EXPOSURE_TARGET_PERCENT_OPTIONS,
     load_auto_exposure_target_percent,
@@ -32,13 +36,13 @@ class AECalibrationProgressDialog(QDialog):
         self.controller = controller
         self.success = False
         self.result_message = ""
-        self.setWindowTitle("AE Calibration")
+        self.setWindowTitle(tr("camera.ae_calibration"))
         self.setModal(True)
         self.setMinimumWidth(430)
 
         self.point_value = QLabel("--")
         self.sdk_target_value = QLabel("--")
-        self.state_value = QLabel("準備中…")
+        self.state_value = QLabel(tr("common.preparing"))
         self.exposure_value = QLabel("--")
         self.gain_value = QLabel("--")
         self.dn_value = QLabel("--")
@@ -46,18 +50,18 @@ class AECalibrationProgressDialog(QDialog):
         self.remaining_value = QLabel("--")
         self.progress = QProgressBar()
         self.progress.setRange(0, 15)
-        self.cancel_button = QPushButton("取消")
+        self.cancel_button = QPushButton(tr("common.cancel"))
         self.cancel_button.clicked.connect(self._cancel)
 
         form = QFormLayout()
-        form.addRow("Point", self.point_value)
-        form.addRow("SDK Target", self.sdk_target_value)
-        form.addRow("狀態", self.state_value)
-        form.addRow("Exposure", self.exposure_value)
-        form.addRow("Gain", self.gain_value)
-        form.addRow("Effective DN", self.dn_value)
-        form.addRow("Signal", self.signal_value)
-        form.addRow("Estimated remaining time", self.remaining_value)
+        form.addRow(tr("common.point"), self.point_value)
+        form.addRow(tr("camera.sdk_target"), self.sdk_target_value)
+        form.addRow(tr("common.status"), self.state_value)
+        form.addRow(tr("camera.exposure_time"), self.exposure_value)
+        form.addRow(tr("camera.gain"), self.gain_value)
+        form.addRow(tr("camera.effective_dn"), self.dn_value)
+        form.addRow(tr("camera.signal"), self.signal_value)
+        form.addRow(tr("progress.estimated_remaining"), self.remaining_value)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(self.progress)
@@ -68,11 +72,11 @@ class AECalibrationProgressDialog(QDialog):
 
     def start(self) -> None:
         if not self.controller.start_ae_calibration():
-            self.result_message = "無法啟動 AE Calibration"
+            self.result_message = tr("camera.ae_calibration_start_failed")
 
     def _cancel(self) -> None:
         self.cancel_button.setEnabled(False)
-        self.state_value.setText("正在取消並關閉 Camera AE…")
+        self.state_value.setText(tr("camera.ae_calibration_cancelling"))
         self.controller.cancel_ae_calibration()
 
     def reject(self) -> None:
@@ -134,7 +138,7 @@ class CameraAutoExposureSettingsDialog(QDialog):
         self._settings = settings
         self._controller = controller
         self._measurement_running = measurement_running or (lambda: False)
-        self.setWindowTitle("相機自動曝光設定")
+        self.setWindowTitle(tr("camera.auto_exposure_settings"))
         self.setModal(True)
         self.setMinimumWidth(500)
 
@@ -150,29 +154,26 @@ class CameraAutoExposureSettingsDialog(QDialog):
         )
 
         target_form = QFormLayout()
-        target_form.addRow("自動曝光目標", self.target_percent_combo)
+        target_form.addRow(tr("camera.auto_exposure_target"), self.target_percent_combo)
 
-        calibration_group = QGroupBox("Calibration")
+        calibration_group = QGroupBox(tr("camera.calibration"))
         calibration_form = QFormLayout(calibration_group)
-        self.calibration_status_value = QLabel("尚未校正")
+        self.calibration_status_value = QLabel(tr("camera.not_calibrated"))
         self.calibration_camera_value = QLabel("--")
         self.calibration_resolution_value = QLabel("--")
         self.calibration_date_value = QLabel("--")
-        self.calibrate_button = QPushButton("執行 AE 校正")
-        self.clear_calibration_button = QPushButton("清除目前校正")
+        self.calibrate_button = QPushButton(tr("camera.run_ae_calibration"))
+        self.clear_calibration_button = QPushButton(tr("camera.clear_calibration"))
         self.calibrate_button.clicked.connect(self._run_calibration)
         self.clear_calibration_button.clicked.connect(self._clear_calibration)
-        calibration_form.addRow("狀態", self.calibration_status_value)
-        calibration_form.addRow("Camera", self.calibration_camera_value)
-        calibration_form.addRow("Resolution", self.calibration_resolution_value)
-        calibration_form.addRow("Calibration date", self.calibration_date_value)
+        calibration_form.addRow(tr("common.status"), self.calibration_status_value)
+        calibration_form.addRow(tr("camera.model"), self.calibration_camera_value)
+        calibration_form.addRow(tr("camera.resolution"), self.calibration_resolution_value)
+        calibration_form.addRow(tr("camera.calibration_date"), self.calibration_date_value)
         calibration_form.addRow(self.calibrate_button)
         calibration_form.addRow(self.clear_calibration_button)
 
-        explanation = QLabel(
-            "RisingCam SDK 的 AutoExpoTarget 與 Scientific DN 百分比不是相同尺度。\n"
-            "校正會建立兩者的實機對應關係。"
-        )
+        explanation = QLabel(tr("camera.calibration_explanation"))
         explanation.setWordWrap(True)
 
         buttons = QDialogButtonBox(
@@ -205,13 +206,13 @@ class CameraAutoExposureSettingsDialog(QDialog):
         if self._controller is None:
             self.calibrate_button.setEnabled(False)
             self.clear_calibration_button.setEnabled(False)
-            self.calibrate_button.setToolTip("請先連線相機")
+            self.calibrate_button.setToolTip(tr("camera.connect_first"))
             self._update_target_tooltip()
             return
         status = self._controller.ae_calibration_status()
         calibrated = bool(status.get("calibrated"))
         self.calibration_status_value.setText(
-            "已校正" if calibrated else "目前解析度尚未校正"
+            tr("camera.calibrated") if calibrated else tr("camera.resolution_not_calibrated")
         )
         camera = status.get("camera_model") or "--"
         serial = status.get("camera_serial") or ""
@@ -224,7 +225,7 @@ class CameraAutoExposureSettingsDialog(QDialog):
         ready = bool(status.get("ready")) and not measurement_locked
         self.calibrate_button.setEnabled(ready and not status.get("running"))
         tooltip = (
-            "Measurement 正在執行，禁止 AE calibration。"
+            tr("camera.calibration_blocked_measurement")
             if measurement_locked
             else str(status.get("unavailable_reason", ""))
         )
@@ -236,27 +237,27 @@ class CameraAutoExposureSettingsDialog(QDialog):
 
     def _update_target_tooltip(self) -> None:
         if self._controller is None:
-            self.target_percent_combo.setToolTip("目前使用未校正 SDK Target guess。")
+            self.target_percent_combo.setToolTip(tr("camera.uncalibrated_sdk_target"))
             return
         target, applied = self._controller.calibrated_sdk_target(self.target_percent)
         self.target_percent_combo.setToolTip(
-            f"Calibrated SDK Target = {target}"
+            tr("camera.calibrated_sdk_target", target=target)
             if applied
-            else f"目前使用未校正 SDK Target guess = {target}。"
+            else tr("camera.uncalibrated_sdk_target_value", target=target)
         )
 
     def _run_calibration(self) -> None:
         if self._measurement_running():
-            QMessageBox.warning(
-                self, "無法執行 AE 校正", "Measurement 正在執行，禁止 Calibration。"
+            report_error(
+                self,
+                "CAM-202",
+                context={"operation": "ae_calibration", "actual": "measurement is running"},
             )
             return
         answer = QMessageBox.question(
             self,
-            "執行 AE 校正",
-            "校正期間請保持目前場景與照明穩定。\n"
-            "程式會多次調整 RisingCam SDK Auto Exposure Target，\n"
-            "過程中畫面亮度會改變。",
+            tr("camera.run_ae_calibration"),
+            tr("camera.calibration_confirmation"),
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -267,15 +268,19 @@ class CameraAutoExposureSettingsDialog(QDialog):
         progress.exec()
         self.refresh_calibration_status()
         if progress.success:
-            QMessageBox.information(self, "AE Calibration", progress.result_message)
+            QMessageBox.information(self, tr("camera.ae_calibration"), progress.result_message)
         elif progress.result_message:
-            QMessageBox.warning(self, "AE Calibration", progress.result_message)
+            report_error(
+                self,
+                "CAM-202",
+                context={"operation": "ae_calibration", "actual": progress.result_message},
+            )
 
     def _clear_calibration(self) -> None:
         answer = QMessageBox.question(
             self,
-            "清除目前校正",
-            "確定要清除目前相機與解析度的 AE Calibration profile？",
+            tr("camera.clear_calibration"),
+            tr("camera.clear_calibration_confirmation"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )

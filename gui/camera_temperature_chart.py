@@ -11,6 +11,8 @@ from PySide6.QtCore import QDateTime, QPointF, Qt, Slot
 from PySide6.QtGui import QCloseEvent, QPainter
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout
 
+from core.i18n import tr
+
 from .camera_temperature_monitor import MAX_CHART_SAMPLES, TemperatureSample
 
 
@@ -25,16 +27,16 @@ class CameraTemperatureChart(QDialog):
         display_minutes: int = 30,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Camera Temperature vs Time")
+        self.setWindowTitle(tr("camera.temperature_chart_title"))
         self.setMinimumSize(720, 440)
         self._samples: deque[TemperatureSample] = deque(maxlen=max(1, max_samples))
         self._session_min_c: float | None = None
         self._session_max_c: float | None = None
         self._display_minutes = max(1, display_minutes)
 
-        self._current_value = QLabel("目前：N/A")
-        self._minimum_value = QLabel("本次最低：N/A")
-        self._maximum_value = QLabel("本次最高：N/A")
+        self._current_value = QLabel(tr("camera.temperature_current_na"))
+        self._minimum_value = QLabel(tr("camera.temperature_min_na"))
+        self._maximum_value = QLabel(tr("camera.temperature_max_na"))
         summary = QHBoxLayout()
         summary.addWidget(self._current_value)
         summary.addStretch(1)
@@ -42,17 +44,17 @@ class CameraTemperatureChart(QDialog):
         summary.addWidget(self._maximum_value)
 
         self._series = QLineSeries(self)
-        self._series.setName("相機溫度")
+        self._series.setName(tr("camera.temperature"))
         self._chart = QChart()
-        self._chart.setTitle("Camera Temperature vs Time")
+        self._chart.setTitle(tr("camera.temperature_chart_title"))
         self._chart.addSeries(self._series)
 
         self._time_axis = QDateTimeAxis()
-        self._time_axis.setTitleText("時間")
+        self._time_axis.setTitleText(tr("common.time"))
         self._time_axis.setFormat("HH:mm:ss")
         self._time_axis.setTickCount(7)
         self._temperature_axis = QValueAxis()
-        self._temperature_axis.setTitleText("Temperature (°C)")
+        self._temperature_axis.setTitleText(tr("camera.temperature_axis"))
         self._temperature_axis.setLabelFormat("%.1f")
         self._chart.addAxis(self._time_axis, Qt.AlignmentFlag.AlignBottom)
         self._chart.addAxis(self._temperature_axis, Qt.AlignmentFlag.AlignLeft)
@@ -83,9 +85,9 @@ class CameraTemperatureChart(QDialog):
         self._session_min_c = None
         self._session_max_c = None
         self._series.clear()
-        self._current_value.setText("目前：N/A")
-        self._minimum_value.setText("本次最低：N/A")
-        self._maximum_value.setText("本次最高：N/A")
+        self._current_value.setText(tr("camera.temperature_current_na"))
+        self._minimum_value.setText(tr("camera.temperature_min_na"))
+        self._maximum_value.setText(tr("camera.temperature_max_na"))
 
     @Slot(object)
     def add_sample(self, sample: TemperatureSample) -> None:
@@ -141,9 +143,9 @@ class CameraTemperatureChart(QDialog):
         visible_max = max(values)
         padding = max(0.5, (visible_max - visible_min) * 0.1)
         self._temperature_axis.setRange(visible_min - padding, visible_max + padding)
-        self._current_value.setText(f"目前：{latest.value_c:.1f} °C")
-        self._minimum_value.setText(f"本次最低：{self._session_min_c:.1f} °C")
-        self._maximum_value.setText(f"本次最高：{self._session_max_c:.1f} °C")
+        self._current_value.setText(tr("camera.temperature_chart_current", value=f"{latest.value_c:.1f}"))
+        self._minimum_value.setText(tr("camera.temperature_chart_min", value=f"{self._session_min_c:.1f}"))
+        self._maximum_value.setText(tr("camera.temperature_chart_max", value=f"{self._session_max_c:.1f}"))
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API
         self.hide()

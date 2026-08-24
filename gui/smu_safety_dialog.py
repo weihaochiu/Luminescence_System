@@ -5,6 +5,8 @@ from __future__ import annotations
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout
 
+from core.i18n import tr
+
 from .smu_control import SMUSafetyLimits, SMUSafetyService
 
 
@@ -40,7 +42,7 @@ class SMUSafetyDialog(QDialog):
         super().__init__(parent)
         self.safety = safety
         self.settings = settings
-        self.setWindowTitle("安全 / SMU")
+        self.setWindowTitle(tr("smu.safety_settings"))
         form = QFormLayout(self)
         limits, max_recipe, max_output = load_global_safety(settings)
         self.max_voltage = self._spin(0.001, 210, limits.maximum_voltage_v, " V")
@@ -54,13 +56,13 @@ class SMUSafetyDialog(QDialog):
         )
         self.max_recipe_time = self._spin(0.1, 86400, max_recipe, " s")
         self.max_output_time = self._spin(0.1, 86400, max_output, " s")
-        form.addRow("最大允許電壓", self.max_voltage)
-        form.addRow("最大允許電流", self.max_current)
-        form.addRow("最大允許功率", self.max_power)
-        form.addRow("最大 Voltage compliance", self.max_voltage_compliance)
-        form.addRow("最大 Current compliance", self.max_current_compliance)
-        form.addRow("單次 Recipe 最長時間", self.max_recipe_time)
-        form.addRow("單一 J OUTPUT 最長時間", self.max_output_time)
+        form.addRow(tr("smu.maximum_voltage"), self.max_voltage)
+        form.addRow(tr("smu.maximum_current"), self.max_current)
+        form.addRow(tr("smu.maximum_power"), self.max_power)
+        form.addRow(tr("smu.maximum_voltage_compliance"), self.max_voltage_compliance)
+        form.addRow(tr("smu.maximum_current_compliance"), self.max_current_compliance)
+        form.addRow(tr("smu.maximum_recipe_time"), self.max_recipe_time)
+        form.addRow(tr("smu.maximum_output_time"), self.max_output_time)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
