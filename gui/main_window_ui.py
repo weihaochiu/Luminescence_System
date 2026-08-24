@@ -306,7 +306,8 @@ class MainWindowUIMixin:
         temperature_layout.addWidget(self.temperature_chart_button)
 
         self.manual_smu_panel = ManualSMUPanel(
-            limits=self.smu_manager.control.safety.limits
+            limits=self.smu_manager.control.safety.limits,
+            settings=self.settings,
         )
 
         info_content = QWidget()

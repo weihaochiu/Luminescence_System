@@ -3,8 +3,9 @@ from __future__ import annotations
 """Presentation-only widget for polarity-checked Manual SMU output."""
 
 import logging
+from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSignalBlocker, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -16,6 +17,11 @@ from PySide6.QtWidgets import (
 )
 
 from .instrument_state_manager import SMUInstrumentState, SMUUIState
+from .manual_smu_settings import (
+    MANUAL_SMU_CHANNELS,
+    ManualSMUSettings,
+    ManualSMUSettingsStore,
+)
 from .smu_control import (
     ManualPolarityResult,
     PolarityState,
@@ -38,16 +44,20 @@ class ManualSMUPanel(QWidget):
         self,
         parent: QWidget | None = None,
         limits: SMUSafetyLimits | None = None,
+        settings: Any | None = None,
     ) -> None:
         super().__init__(parent)
         self._limits = limits or SMUSafetyLimits()
         self._ui_state = SMUUIState.disconnected()
+        self._settings_store = (
+            ManualSMUSettingsStore(settings) if settings is not None else None
+        )
 
         self.state_message = QLabel(self._ui_state.manual_lock_reason)
         self.state_message.setWordWrap(True)
 
         self.channel_combo = QComboBox()
-        for channel_id in ("Ch1", "Ch2", "Ch3", "Ch4"):
+        for channel_id in MANUAL_SMU_CHANNELS:
             self.channel_combo.addItem(channel_id, channel_id)
 
         self.mode_combo = QComboBox()
@@ -106,11 +116,28 @@ class ManualSMUPanel(QWidget):
         layout.addWidget(self.handover_button)
         layout.addLayout(readback)
 
-        self.mode_combo.currentIndexChanged.connect(self._update_mode)
-        self.area_spin.valueChanged.connect(self._update_area_limits)
         self.output_button.clicked.connect(self._emit_toggle)
         self.handover_button.clicked.connect(self.handover_requested)
-        self._update_mode()
+        self._active_mode = "CC"
+        self._mode_values = {
+            "CC": [0.0, 1.0],
+            "CV": [0.0, 1.0],
+        }
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(300)
+        self._save_timer.timeout.connect(self.flush_persistent_settings)
+
+        self._configure_mode_widgets(self._active_mode)
+        self._apply_mode_values(self._active_mode)
+        if self._settings_store is not None:
+            self._apply_persistent_settings(self._settings_store.load())
+
+        self.mode_combo.currentIndexChanged.connect(self._update_mode)
+        self.area_spin.valueChanged.connect(self._update_area_limits)
+        self.channel_combo.currentIndexChanged.connect(self._schedule_settings_save)
+        self.setpoint_spin.valueChanged.connect(self._on_mode_value_changed)
+        self.compliance_spin.valueChanged.connect(self._on_mode_value_changed)
         self._update_enabled()
 
     @property
@@ -216,11 +243,24 @@ class ManualSMUPanel(QWidget):
             self.output_button.setText("輸出")
 
     def _update_mode(self) -> None:
+        new_mode = self.mode
+        if new_mode == self._active_mode:
+            return
+        self._capture_mode_values(self._active_mode)
+        self._active_mode = new_mode
+        self._configure_mode_widgets(new_mode)
+        self._apply_mode_values(new_mode)
+        self._schedule_settings_save()
+
+    def _configure_mode_widgets(self, mode: str) -> None:
         limits = self._limits
-        if self.mode == "CV":
+        blockers = (
+            QSignalBlocker(self.setpoint_spin),
+            QSignalBlocker(self.compliance_spin),
+        )
+        if mode == "CV":
             self.setpoint_label.setText("設定電壓")
             self.setpoint_spin.setRange(limits.minimum_voltage_v, limits.maximum_voltage_v)
-            self.setpoint_spin.setValue(0.0)
             self.setpoint_spin.setSuffix(" V")
             self.setpoint_spin.setSingleStep(0.05)
             self.compliance_label.setText("Current Compliance")
@@ -228,21 +268,19 @@ class ManualSMUPanel(QWidget):
                 limits.maximum_current_compliance_a * 1000.0 / self.area_cm2
             )
             self.compliance_spin.setRange(min(0.001, maximum_density), maximum_density)
-            self.compliance_spin.setValue(min(1.0, maximum_density))
             self.compliance_spin.setSuffix(" mA/cm²")
         else:
             self.setpoint_label.setText("設定電流密度")
             maximum_density = limits.maximum_current_a * 1000.0 / self.area_cm2
             minimum_density = limits.minimum_current_a * 1000.0 / self.area_cm2
             self.setpoint_spin.setRange(minimum_density, maximum_density)
-            self.setpoint_spin.setValue(0.0)
             self.setpoint_spin.setSuffix(" mA/cm²")
             self.setpoint_spin.setSingleStep(0.1)
             self.compliance_label.setText("Voltage Compliance")
             maximum_voltage_v = limits.maximum_voltage_compliance_v
             self.compliance_spin.setRange(min(0.001, maximum_voltage_v), maximum_voltage_v)
-            self.compliance_spin.setValue(min(1.0, maximum_voltage_v))
             self.compliance_spin.setSuffix(" V")
+        del blockers
 
     def _emit_toggle(self) -> None:
         if self._ui_state.output_enabled or self._ui_state.manual_off_enabled:
@@ -264,17 +302,121 @@ class ManualSMUPanel(QWidget):
         )
 
     def _update_area_limits(self, _area: float) -> None:
-        limits = self._limits
-        if self.mode == "CC":
-            self.setpoint_spin.setRange(
-                limits.minimum_current_a * 1000.0 / self.area_cm2,
-                limits.maximum_current_a * 1000.0 / self.area_cm2,
+        self._capture_mode_values(self._active_mode)
+        for mode in self._mode_values:
+            self._mode_values[mode] = list(
+                self._clamp_mode_values(mode, *self._mode_values[mode])
             )
-        else:
-            maximum_density = (
+        self._configure_mode_widgets(self._active_mode)
+        self._apply_mode_values(self._active_mode)
+        self._schedule_settings_save()
+
+    def _on_mode_value_changed(self, _value: float) -> None:
+        self._capture_mode_values(self._active_mode)
+        self._schedule_settings_save()
+
+    def _capture_mode_values(self, mode: str) -> None:
+        if mode not in self._mode_values:
+            return
+        self._mode_values[mode] = [
+            float(self.setpoint_spin.value()),
+            float(self.compliance_spin.value()),
+        ]
+
+    def _apply_mode_values(self, mode: str) -> None:
+        setpoint, compliance = self._clamp_mode_values(
+            mode,
+            *self._mode_values[mode],
+        )
+        self._mode_values[mode] = [setpoint, compliance]
+        blockers = (
+            QSignalBlocker(self.setpoint_spin),
+            QSignalBlocker(self.compliance_spin),
+        )
+        self.setpoint_spin.setValue(setpoint)
+        self.compliance_spin.setValue(compliance)
+        del blockers
+
+    def _clamp_mode_values(
+        self,
+        mode: str,
+        setpoint: float,
+        compliance: float,
+    ) -> tuple[float, float]:
+        limits = self._limits
+        if mode == "CV":
+            setpoint_minimum = limits.minimum_voltage_v
+            setpoint_maximum = limits.maximum_voltage_v
+            compliance_maximum = (
                 limits.maximum_current_compliance_a * 1000.0 / self.area_cm2
             )
-            self.compliance_spin.setRange(min(0.001, maximum_density), maximum_density)
+        else:
+            setpoint_minimum = limits.minimum_current_a * 1000.0 / self.area_cm2
+            setpoint_maximum = limits.maximum_current_a * 1000.0 / self.area_cm2
+            compliance_maximum = limits.maximum_voltage_compliance_v
+        compliance_minimum = min(0.001, compliance_maximum)
+        return (
+            min(max(float(setpoint), setpoint_minimum), setpoint_maximum),
+            min(max(float(compliance), compliance_minimum), compliance_maximum),
+        )
+
+    def _apply_persistent_settings(self, saved: ManualSMUSettings) -> None:
+        blockers = (
+            QSignalBlocker(self.channel_combo),
+            QSignalBlocker(self.mode_combo),
+            QSignalBlocker(self.area_spin),
+        )
+        self.area_spin.setValue(saved.area_cm2)
+        channel_index = self.channel_combo.findData(saved.channel)
+        self.channel_combo.setCurrentIndex(max(0, channel_index))
+        self._mode_values = {
+            "CC": [
+                saved.cc_current_density_ma_cm2,
+                saved.cc_voltage_compliance_v,
+            ],
+            "CV": [
+                saved.cv_voltage_v,
+                saved.cv_current_compliance_ma_cm2,
+            ],
+        }
+        for mode in self._mode_values:
+            self._mode_values[mode] = list(
+                self._clamp_mode_values(mode, *self._mode_values[mode])
+            )
+        mode_index = self.mode_combo.findData(saved.mode)
+        self.mode_combo.setCurrentIndex(max(0, mode_index))
+        self._active_mode = self.mode
+        self._configure_mode_widgets(self._active_mode)
+        self._apply_mode_values(self._active_mode)
+        del blockers
+
+    def _settings_snapshot(self) -> ManualSMUSettings:
+        self._capture_mode_values(self._active_mode)
+        return ManualSMUSettings(
+            channel=str(self.channel_combo.currentData()),
+            mode=self.mode,
+            area_cm2=self.area_cm2,
+            cc_current_density_ma_cm2=self._mode_values["CC"][0],
+            cc_voltage_compliance_v=self._mode_values["CC"][1],
+            cv_voltage_v=self._mode_values["CV"][0],
+            cv_current_compliance_ma_cm2=self._mode_values["CV"][1],
+        )
+
+    def _schedule_settings_save(self, _value: object = None) -> None:
+        if self._settings_store is not None:
+            self._save_timer.start()
+
+    def flush_persistent_settings(self) -> None:
+        if self._settings_store is None:
+            return
+        self._save_timer.stop()
+        self._settings_store.save(self._settings_snapshot())
+
+    def reset_persistent_settings(self) -> None:
+        """Reset input parameters without changing any SMU or Relay state."""
+
+        self._apply_persistent_settings(ManualSMUSettings())
+        self.flush_persistent_settings()
 
     def _update_enabled(self) -> None:
         editable = self._ui_state.manual_editable
