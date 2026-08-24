@@ -19,6 +19,9 @@ from gui.manual_smu_settings import (
     CHANNEL_KEY,
     CV_CURRENT_COMPLIANCE_KEY,
     CV_VOLTAGE_KEY,
+    ManualSMUSettings,
+    ManualSMUSettingsStore,
+    ManualSMUSettingsWriteError,
     MODE_KEY,
 )
 from gui.main_window import MainWindow
@@ -41,6 +44,43 @@ class FakeCloseEvent:
         self.accepted = False
 
 
+class FakeStatusSettings:
+    """In-memory QSettings fake whose sync status is test-controlled."""
+
+    def __init__(self, *statuses: QSettings.Status) -> None:
+        self._statuses = list(statuses)
+        self._status = QSettings.Status.NoError
+        self._persisted: dict[str, object] = {}
+        self._pending: dict[str, object] = {}
+        self.sync_calls = 0
+
+    def queue_status(self, status: QSettings.Status) -> None:
+        self._statuses.append(status)
+
+    def value(self, key: str, default: object = None) -> object:
+        return self._persisted.get(key, default)
+
+    def setValue(self, key: str, value: object) -> None:  # noqa: N802 - Qt API
+        self._pending[key] = value
+
+    def sync(self) -> None:
+        self.sync_calls += 1
+        self._status = (
+            self._statuses.pop(0)
+            if self._statuses
+            else QSettings.Status.NoError
+        )
+        if self._status == QSettings.Status.NoError:
+            self._persisted.update(self._pending)
+            self._pending.clear()
+
+    def status(self) -> QSettings.Status:
+        return self._status
+
+    def allKeys(self) -> list[str]:  # noqa: N802 - Qt API
+        return list(self._persisted)
+
+
 class ManualSMUSettingsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -53,6 +93,157 @@ class ManualSMUSettingsTests(unittest.TestCase):
 
     def settings(self) -> QSettings:
         return QSettings(str(self.settings_path), QSettings.Format.IniFormat)
+
+    def production_boundaries(
+        self,
+        panel: ManualSMUPanel,
+    ) -> tuple[SMUControlManager, Mock, Mock, Mock, Mock]:
+        control = SMUControlManager()
+        driver = Mock(spec=SMUDriver)
+        control.bind_driver(driver, output_confirmed_off=True)
+        manual_sequence = Mock(
+            name="SMUControlManager.request_manual_output_sequence"
+        )
+        control.request_manual_output_sequence = manual_sequence
+        relay_service = Mock(spec=RelayService)
+
+        class MainWindowHarness(MainWindowDeviceMixin):
+            pass
+
+        handler_host = MainWindowHarness()
+        handler_host.emergency_manager = SimpleNamespace(
+            begin_operator_operation=Mock()
+        )
+        handler_host.smu_manager = SimpleNamespace(control=control)
+        handler_host.relay_service = relay_service
+        handler_host.polarity_settings_store = SimpleNamespace(settings=Mock())
+        handler_host.status_message = SimpleNamespace(setText=Mock())
+        handler_host.show_smu_error = Mock()
+        manual_handler = Mock(wraps=handler_host.request_manual_smu_output)
+        panel.output_requested.connect(manual_handler)
+        return control, driver, manual_sequence, relay_service, manual_handler
+
+    def close_window(
+        self,
+        panel: ManualSMUPanel,
+        control: SMUControlManager,
+        relay_service: Mock,
+        confirmations: list[bool],
+    ) -> tuple[SimpleNamespace, FakeCloseEvent, list[str]]:
+        events: list[str] = []
+        original_flush = panel.flush_persistent_settings
+
+        def flush_settings() -> None:
+            events.append("SETTINGS_FLUSH")
+            original_flush()
+
+        panel.flush_persistent_settings = flush_settings
+        relay_service.shutdown.side_effect = lambda: events.append("RELAY_SHUTDOWN")
+        smu_manager = SimpleNamespace(
+            is_connected=True,
+            control=control,
+            confirm_safe_for_close=lambda: (
+                events.append("SMU_CONFIRM_OFF") or confirmations.pop(0)
+            ),
+            shutdown=lambda **kwargs: events.append(f"SMU_SHUTDOWN:{kwargs}"),
+        )
+        window = SimpleNamespace(
+            _close_in_progress=False,
+            manual_smu_panel=panel,
+            setEnabled=lambda enabled: events.append(f"GUI_ENABLED:{enabled}"),
+            _cancel_measurement_for_emergency=lambda: events.append("STOP_WORKERS"),
+            smu_monitor=SimpleNamespace(
+                stop=lambda: events.append("MONITOR_STOP"),
+                start=lambda: events.append("MONITOR_START"),
+            ),
+            smu_manager=smu_manager,
+            relay_service=relay_service,
+            controller=SimpleNamespace(
+                close_camera=lambda: events.append("CAMERA_CLOSE")
+            ),
+            emergency_manager=SimpleNamespace(trigger=Mock()),
+        )
+        window._cancel_close_after_safety_failure = (
+            lambda event: MainWindow._cancel_close_after_safety_failure(window, event)
+        )
+        window._unsafe_smu_close_decision = Mock(return_value="cancel")
+        window._confirm_forced_close = Mock(return_value=False)
+        return window, FakeCloseEvent(), events
+
+    def test_store_accepts_no_error_status_after_sync(self) -> None:
+        settings = FakeStatusSettings(QSettings.Status.NoError)
+
+        ManualSMUSettingsStore(settings).save(ManualSMUSettings(channel="Ch4"))
+
+        self.assertEqual(1, settings.sync_calls)
+        self.assertEqual("Ch4", settings.value(CHANNEL_KEY))
+
+    def test_store_raises_for_access_error_status_without_sync_exception(self) -> None:
+        settings = FakeStatusSettings(QSettings.Status.AccessError)
+
+        with self.assertRaisesRegex(
+            ManualSMUSettingsWriteError,
+            r"sync failed: AccessError",
+        ):
+            ManualSMUSettingsStore(settings).save(ManualSMUSettings())
+
+        self.assertEqual(1, settings.sync_calls)
+
+    def test_store_raises_for_format_error_status(self) -> None:
+        settings = FakeStatusSettings(QSettings.Status.FormatError)
+
+        with self.assertRaisesRegex(
+            ManualSMUSettingsWriteError,
+            r"sync failed: FormatError",
+        ):
+            ManualSMUSettingsStore(settings).save(ManualSMUSettings())
+
+    def test_dirty_state_clears_only_after_successful_sync(self) -> None:
+        settings = FakeStatusSettings(QSettings.Status.NoError)
+        panel = ManualSMUPanel(settings=settings)
+        try:
+            self.assertFalse(panel.persistent_settings_dirty)
+            panel.channel_combo.setCurrentIndex(3)
+            self.assertTrue(panel.persistent_settings_dirty)
+
+            panel.flush_persistent_settings()
+            self.assertFalse(panel.persistent_settings_dirty)
+
+            settings.queue_status(QSettings.Status.AccessError)
+            panel.area_spin.setValue(0.92)
+            self.assertTrue(panel.persistent_settings_dirty)
+            with self.assertRaises(ManualSMUSettingsWriteError):
+                panel.flush_persistent_settings()
+
+            self.assertTrue(panel.persistent_settings_dirty)
+            self.assertTrue(panel._save_timer.isActive())
+            self.assertGreaterEqual(panel._save_timer.interval(), 1000)
+        finally:
+            panel._save_timer.stop()
+            panel.deleteLater()
+
+    def test_debounce_failure_is_logged_and_schedules_slow_retry(self) -> None:
+        settings = FakeStatusSettings(QSettings.Status.FormatError)
+        panel = ManualSMUPanel(settings=settings)
+        try:
+            panel.area_spin.setValue(0.92)
+
+            with self.assertLogs("gui.smu_manual_panel", level="ERROR") as captured:
+                panel._flush_persistent_settings_from_timer()
+
+            self.assertTrue(panel.persistent_settings_dirty)
+            self.assertTrue(panel._save_timer.isActive())
+            self.assertGreaterEqual(panel._save_timer.interval(), 1000)
+            self.assertTrue(
+                any(
+                    "Manual SMU settings save failed" in message
+                    and "FormatError" in message
+                    for message in captured.output
+                )
+            )
+        finally:
+            panel._save_timer.stop()
+            panel.deleteLater()
 
     def test_first_launch_uses_existing_defaults(self) -> None:
         panel = ManualSMUPanel(settings=self.settings())
@@ -303,6 +494,157 @@ class ManualSMUSettingsTests(unittest.TestCase):
             self.assertEqual(3.0, restored.compliance_spin.value())
             restored.deleteLater()
         finally:
+            panel.deleteLater()
+
+    def test_access_error_on_close_does_not_block_safe_shutdown(self) -> None:
+        settings = FakeStatusSettings(QSettings.Status.AccessError)
+        panel = ManualSMUPanel(settings=settings)
+        (
+            control,
+            driver,
+            manual_sequence,
+            relay_service,
+            manual_handler,
+        ) = self.production_boundaries(panel)
+        output_requested = QSignalSpy(panel.output_requested)
+        output_off_requested = QSignalSpy(panel.output_off_requested)
+        handover_requested = QSignalSpy(panel.handover_requested)
+        panel.channel_combo.setCurrentIndex(3)
+        window, event, events = self.close_window(
+            panel,
+            control,
+            relay_service,
+            [True],
+        )
+
+        try:
+            with self.assertLogs("gui.main_window_close", level="ERROR") as captured:
+                MainWindow.closeEvent(window, event)
+
+            self.assertTrue(event.accepted)
+            self.assertTrue(panel.persistent_settings_dirty)
+            self.assertTrue(panel._save_timer.isActive())
+            self.assertLess(
+                events.index("SETTINGS_FLUSH"),
+                events.index("GUI_ENABLED:False"),
+            )
+            self.assertLess(
+                events.index("GUI_ENABLED:False"),
+                events.index("MONITOR_STOP"),
+            )
+            self.assertLess(
+                events.index("MONITOR_STOP"),
+                events.index("SMU_CONFIRM_OFF"),
+            )
+            self.assertLess(
+                events.index("SMU_CONFIRM_OFF"),
+                events.index("RELAY_SHUTDOWN"),
+            )
+            self.assertLess(
+                events.index("RELAY_SHUTDOWN"),
+                events.index("SMU_SHUTDOWN:{'safety_confirmed': True}"),
+            )
+            self.assertLess(
+                events.index("SMU_SHUTDOWN:{'safety_confirmed': True}"),
+                events.index("CAMERA_CLOSE"),
+            )
+            self.assertTrue(
+                any(
+                    "Manual SMU settings flush failed during application close"
+                    in message
+                    and "AccessError" in message
+                    for message in captured.output
+                )
+            )
+            self.assertEqual(0, output_requested.count())
+            self.assertEqual(0, output_off_requested.count())
+            self.assertEqual(0, handover_requested.count())
+            manual_handler.assert_not_called()
+            manual_sequence.assert_not_called()
+            driver.set_output_enabled.assert_not_called()
+            relay_service.select_smu_output_channel.assert_not_called()
+            relay_service.clear_smu_output_channels.assert_not_called()
+        finally:
+            panel._save_timer.stop()
+            control.shutdown(safety_confirmed=True)
+            panel.deleteLater()
+
+    def test_cancel_after_access_error_keeps_dirty_retry_and_saves_all_values(
+        self,
+    ) -> None:
+        settings = FakeStatusSettings(
+            QSettings.Status.AccessError,
+            QSettings.Status.NoError,
+        )
+        panel = ManualSMUPanel(settings=settings)
+        (
+            control,
+            driver,
+            manual_sequence,
+            relay_service,
+            manual_handler,
+        ) = self.production_boundaries(panel)
+        output_requested = QSignalSpy(panel.output_requested)
+        output_off_requested = QSignalSpy(panel.output_off_requested)
+        handover_requested = QSignalSpy(panel.handover_requested)
+
+        panel.channel_combo.setCurrentIndex(3)
+        panel.area_spin.setValue(0.92)
+        panel.setpoint_spin.setValue(15.0)
+        panel.compliance_spin.setValue(3.0)
+        panel.mode_combo.setCurrentIndex(1)
+        panel.setpoint_spin.setValue(1.2)
+        panel.compliance_spin.setValue(20.0)
+        window, event, events = self.close_window(
+            panel,
+            control,
+            relay_service,
+            [False],
+        )
+
+        try:
+            with self.assertLogs("gui.main_window_close", level="ERROR"):
+                MainWindow.closeEvent(window, event)
+
+            self.assertFalse(event.accepted)
+            self.assertFalse(window._close_in_progress)
+            self.assertIn("GUI_ENABLED:True", events)
+            self.assertIn("MONITOR_START", events)
+            self.assertNotIn("RELAY_SHUTDOWN", events)
+            self.assertTrue(panel.persistent_settings_dirty)
+            self.assertTrue(panel._save_timer.isActive())
+            self.assertGreaterEqual(panel._save_timer.interval(), 1000)
+            self.assertIsNone(settings.value(CHANNEL_KEY))
+
+            panel._flush_persistent_settings_from_timer()
+
+            self.assertFalse(panel.persistent_settings_dirty)
+            self.assertFalse(panel._save_timer.isActive())
+            restored = ManualSMUPanel(settings=settings)
+            self.assertEqual("Ch4", restored.channel_combo.currentData())
+            self.assertEqual("CV", restored.mode)
+            self.assertEqual(0.92, restored.area_cm2)
+            self.assertEqual(1.2, restored.setpoint_spin.value())
+            self.assertEqual(20.0, restored.compliance_spin.value())
+            restored.mode_combo.setCurrentIndex(0)
+            self.assertEqual(15.0, restored.setpoint_spin.value())
+            self.assertEqual(3.0, restored.compliance_spin.value())
+
+            self.assertEqual(0, output_requested.count())
+            self.assertEqual(0, output_off_requested.count())
+            self.assertEqual(0, handover_requested.count())
+            manual_handler.assert_not_called()
+            manual_sequence.assert_not_called()
+            driver.set_output_enabled.assert_not_called()
+            relay_service.select_smu_output_channel.assert_not_called()
+            relay_service.clear_smu_output_channels.assert_not_called()
+            self.assertIs(PolarityState.UNKNOWN, control.manual_polarity.state)
+            self.assertEqual("—", panel.active_channel_value.text())
+            self.assertEqual("OFF", panel.output_value.text())
+            restored.deleteLater()
+        finally:
+            panel._save_timer.stop()
+            control.shutdown(safety_confirmed=True)
             panel.deleteLater()
 
     def test_invalid_values_fall_back_or_clamp_without_exception(self) -> None:

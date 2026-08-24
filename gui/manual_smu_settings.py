@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import math
 from typing import Any
 
+from PySide6.QtCore import QSettings
+
 
 MANUAL_SMU_CHANNELS = ("Ch1", "Ch2", "Ch3", "Ch4")
 MANUAL_SMU_MODES = ("CC", "CV")
@@ -17,6 +19,10 @@ CC_CURRENT_DENSITY_KEY = "manual_smu/cc/current_density_ma_cm2"
 CC_VOLTAGE_COMPLIANCE_KEY = "manual_smu/cc/voltage_compliance_v"
 CV_VOLTAGE_KEY = "manual_smu/cv/voltage_v"
 CV_CURRENT_COMPLIANCE_KEY = "manual_smu/cv/current_compliance_ma_cm2"
+
+
+class ManualSMUSettingsWriteError(RuntimeError):
+    """Raised when Qt reports that Manual SMU settings were not persisted."""
 
 
 @dataclass(frozen=True)
@@ -88,6 +94,12 @@ class ManualSMUSettingsStore:
         for key, value in entries.items():
             self._settings.setValue(key, value)
         self._settings.sync()
+        status = self._settings.status()
+        if status != QSettings.Status.NoError:
+            status_name = getattr(status, "name", type(status).__name__)
+            raise ManualSMUSettingsWriteError(
+                f"Manual SMU settings sync failed: {status_name}"
+            )
 
     def reset(self) -> ManualSMUSettings:
         defaults = ManualSMUSettings()

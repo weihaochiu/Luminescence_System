@@ -34,6 +34,9 @@ from .smu_control import (
 
 LOG = logging.getLogger(__name__)
 
+PERSISTENCE_DEBOUNCE_INTERVAL_MS = 300
+PERSISTENCE_RETRY_INTERVAL_MS = 2000
+
 
 class ManualSMUPanel(QWidget):
     output_requested = Signal(str, str, float, float, float)
@@ -52,6 +55,7 @@ class ManualSMUPanel(QWidget):
         self._settings_store = (
             ManualSMUSettingsStore(settings) if settings is not None else None
         )
+        self._settings_dirty = False
 
         self.state_message = QLabel(self._ui_state.manual_lock_reason)
         self.state_message.setWordWrap(True)
@@ -125,8 +129,8 @@ class ManualSMUPanel(QWidget):
         }
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
-        self._save_timer.setInterval(300)
-        self._save_timer.timeout.connect(self.flush_persistent_settings)
+        self._save_timer.setInterval(PERSISTENCE_DEBOUNCE_INTERVAL_MS)
+        self._save_timer.timeout.connect(self._flush_persistent_settings_from_timer)
 
         self._configure_mode_widgets(self._active_mode)
         self._apply_mode_values(self._active_mode)
@@ -146,6 +150,10 @@ class ManualSMUPanel(QWidget):
     @property
     def area_cm2(self) -> float:
         return float(self.area_spin.value())
+
+    @property
+    def persistent_settings_dirty(self) -> bool:
+        return self._settings_dirty
 
     def apply_ui_state(self, state: SMUUIState) -> None:
         self._ui_state = state
@@ -403,24 +411,40 @@ class ManualSMUPanel(QWidget):
 
     def _schedule_settings_save(self, _value: object = None) -> None:
         if self._settings_store is not None:
-            self._save_timer.start()
+            self._settings_dirty = True
+            self._save_timer.start(PERSISTENCE_DEBOUNCE_INTERVAL_MS)
 
     def flush_persistent_settings(self) -> None:
         if self._settings_store is None:
             return
         self._save_timer.stop()
-        self._settings_store.save(self._settings_snapshot())
+        try:
+            self._settings_store.save(self._settings_snapshot())
+        except Exception:
+            self._settings_dirty = True
+            self._save_timer.start(PERSISTENCE_RETRY_INTERVAL_MS)
+            raise
+        self._settings_dirty = False
+
+    def _flush_persistent_settings_from_timer(self) -> None:
+        try:
+            self.flush_persistent_settings()
+        except Exception:
+            LOG.exception("Manual SMU settings save failed")
 
     def restore_persistent_settings(self) -> None:
         """Restore only validated Manual SMU input parameters into the GUI."""
 
         if self._settings_store is not None:
+            self._save_timer.stop()
             self._apply_persistent_settings(self._settings_store.load())
+            self._settings_dirty = False
 
     def reset_persistent_settings(self) -> None:
         """Reset input parameters without changing any SMU or Relay state."""
 
         self._apply_persistent_settings(ManualSMUSettings())
+        self._settings_dirty = self._settings_store is not None
         self.flush_persistent_settings()
 
     def _update_enabled(self) -> None:
