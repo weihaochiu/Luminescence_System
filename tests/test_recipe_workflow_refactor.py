@@ -250,6 +250,16 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
         summary = _measurement_summary(owner, plan)
         self.assertIn("樣品：CH1=A/1 / CH2=B 2", summary)
 
+        recipe.el_matrix.output_mode = "voltage"
+        recipe.el_matrix.voltage_v = [0.8, 1.0]
+        voltage_summary = _measurement_summary(
+            owner,
+            ELMatrixPlan(recipe, sample_ids={"CH1": "A/1", "CH2": "B 2"}),
+        )
+        self.assertIn("Voltage：0.8, 1.0 V", voltage_summary)
+        self.assertNotIn("Current Density：", voltage_summary)
+        self.assertIn("Electrical Setpoint OUTPUT ON", voltage_summary)
+
     def test_uint16_tiff_exact_match_and_derived_outputs_do_not_mutate_source(self) -> None:
         source = np.array([[0, 1, 255, 256, 1024, 2048, 4095]], dtype=np.uint16)
         before = source.copy()

@@ -46,8 +46,16 @@ def build_measurement_snapshot(
             "result": dict(polarity_result or {}),
         },
         "el_matrix": {
+            "output_mode": str(recipe.el_matrix.output_mode),
             "current_density_ma_cm2": list(
                 recipe.el_matrix.current_density_ma_cm2
+            ),
+            "voltage_v": list(recipe.el_matrix.voltage_v),
+            "voltage_compliance_v": float(
+                recipe.el_matrix.voltage_compliance_v
+            ),
+            "current_compliance_ma": float(
+                recipe.el_matrix.current_compliance_ma
             ),
             "gains_percent": list(recipe.el_matrix.gains_percent),
             "exposures_ms": list(recipe.el_matrix.exposures_ms),
@@ -144,6 +152,7 @@ def build_el_matrix_snapshot(
             "system_settings": polarity_settings.snapshot()
             if hasattr(polarity_settings, "snapshot") else _plain(polarity_settings),
         },
+        "el_matrix": _plain(recipe.el_matrix),
         "dark_iv": _plain(recipe.dark_iv),
         "camera": _plain(camera),
         "smu": _plain(smu),

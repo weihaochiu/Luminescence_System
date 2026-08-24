@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from .recipe_store import Recipe
+from .numeric import format_voltage_number
 
 
 @dataclass(frozen=True)
@@ -62,8 +63,8 @@ def _matrix_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
     matrix = recipe.el_matrix
     axes = effective_matrix_capture_axes(recipe)
     for channel in recipe.enabled_channels():
-        density_steps: list[ExecutionStep] = []
-        for density in matrix.current_density_ma_cm2:
+        electrical_steps: list[ExecutionStep] = []
+        for setpoint in matrix.active_electrical_setpoints():
             gain_steps = tuple(
                 ExecutionStep(
                     f"gain_{gain}",
@@ -82,10 +83,14 @@ def _matrix_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
                 )
                 for gain in axes.gains_percent
             )
-            density_steps.append(
+            voltage_mode = matrix.output_mode == "voltage"
+            electrical_steps.append(
                 ExecutionStep(
-                    f"density_{density:g}",
-                    f"Current Density {density:g} mA/cm²",
+                    f"voltage_{format_voltage_number(setpoint)}"
+                    if voltage_mode else f"density_{setpoint:g}",
+                    f"Voltage {format_voltage_number(setpoint)} V"
+                    if voltage_mode
+                    else f"Current Density {setpoint:g} mA/cm²",
                     gain_steps,
                 )
             )
@@ -102,7 +107,9 @@ def _matrix_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
                     ),
                 )
             )
-        channel_steps.append(ExecutionStep("el_matrix", "EL Matrix", tuple(density_steps)))
+        channel_steps.append(
+            ExecutionStep("el_matrix", "EL Matrix", tuple(electrical_steps))
+        )
         yield ExecutionStep(
             f"channel_{channel.channel.lower()}", channel.channel, tuple(channel_steps)
         )

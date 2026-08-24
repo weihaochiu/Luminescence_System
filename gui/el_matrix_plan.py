@@ -16,7 +16,9 @@ class MatrixCapture:
     channel: str
     sample_id: str
     area_cm2: float | None
+    output_mode: str | None
     current_density_ma_cm2: float | None
+    commanded_voltage_v: float | None
     gain_percent: int
     exposure_ms: float
     repeat_index: int
@@ -37,9 +39,15 @@ class MatrixEstimate:
     overall_captures: int
     exposure_time_s: float
     total_time_s: float
-    output_on_per_j_s: float
+    output_on_per_setpoint_s: float
     dark_iv_per_channel_s: float
     estimated_finish: datetime
+
+    @property
+    def output_on_per_j_s(self) -> float:
+        """Backward-compatible name for callers predating voltage mode."""
+
+        return self.output_on_per_setpoint_s
 
 
 class ELMatrixPlan:
@@ -63,11 +71,12 @@ class ELMatrixPlan:
         self.gains_percent = axes.gains_percent
         self.exposures_ms = axes.exposures_ms
         self.repeat = axes.repeat
+        self.electrical_setpoints = self.matrix.active_electrical_setpoints()
 
     def capture_counts(self) -> dict[str, int]:
         combination = len(self.gains_percent) * len(self.exposures_ms) * self.repeat
         dark = combination if self.matrix.dark_frame_enabled else 0
-        per_channel = len(self.matrix.current_density_ma_cm2) * combination
+        per_channel = len(self.electrical_setpoints) * combination
         total_el = len(self.channels) * per_channel
         return {
             "shared_dark": dark,
@@ -88,19 +97,21 @@ class ELMatrixPlan:
             exposure_sum_s
             * len(self.gains_percent)
             * self.repeat
-            * len(self.matrix.current_density_ma_cm2)
+            * len(self.electrical_setpoints)
             * len(self.channels)
         )
         exposure_time_s = dark_exposure_s + el_exposure_s
-        captures_per_j = len(self.gains_percent) * len(self.exposures_ms) * self.repeat
-        output_on_per_j_s = (
+        captures_per_setpoint = (
+            len(self.gains_percent) * len(self.exposures_ms) * self.repeat
+        )
+        output_on_per_setpoint_s = (
             self.matrix.stabilization_ms / 1000.0
             + exposure_sum_s * len(self.gains_percent) * self.repeat
-            + captures_per_j * self.matrix.estimated_capture_overhead_s
+            + captures_per_setpoint * self.matrix.estimated_capture_overhead_s
         )
         stabilization_s = (
             len(self.channels)
-            * len(self.matrix.current_density_ma_cm2)
+            * len(self.electrical_setpoints)
             * self.matrix.stabilization_ms
             / 1000.0
         )
@@ -137,7 +148,7 @@ class ELMatrixPlan:
             overall_captures=counts["overall"],
             exposure_time_s=exposure_time_s,
             total_time_s=total_time_s,
-            output_on_per_j_s=output_on_per_j_s,
+            output_on_per_setpoint_s=output_on_per_setpoint_s,
             dark_iv_per_channel_s=self.recipe.dark_iv_estimated_time_s(),
             estimated_finish=now + timedelta(seconds=total_time_s),
         )
@@ -154,7 +165,7 @@ class ELMatrixPlan:
                         overall += 1
                         dark_index += 1
                         yield MatrixCapture(
-                            "DARK", "SHARED", applicable, None, None,
+                            "DARK", "SHARED", applicable, None, None, None, None,
                             int(gain), float(exposure), repeat_index, self.repeat,
                             channel_capture_index=dark_index,
                             channel_capture_total=estimate.shared_dark_captures,
@@ -163,7 +174,7 @@ class ELMatrixPlan:
                         )
         for channel_index, channel in enumerate(self.channels, start=1):
             channel_capture_index = 0
-            for density in self.matrix.current_density_ma_cm2:
+            for setpoint in self.electrical_setpoints:
                 for gain in self.gains_percent:
                     for exposure in self.exposures_ms:
                         for repeat_index in range(1, self.repeat + 1):
@@ -173,7 +184,12 @@ class ELMatrixPlan:
                                 "EL", channel.channel,
                                 self.sample_ids.get(channel.channel, ""),
                                 channel.area_cm2,
-                                float(density), int(gain), float(exposure), repeat_index,
+                                self.matrix.output_mode,
+                                float(setpoint)
+                                if self.matrix.output_mode == "current_density" else None,
+                                float(setpoint)
+                                if self.matrix.output_mode == "voltage" else None,
+                                int(gain), float(exposure), repeat_index,
                                 self.repeat, channel_index, len(self.channels),
                                 channel_capture_index, estimate.el_per_channel,
                                 overall, estimate.overall_captures,

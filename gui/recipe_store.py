@@ -66,8 +66,12 @@ def _default_channels() -> list[ChannelRecipe]:
 class ELMatrixRecipe:
     """One shared matrix executed for every enabled logical channel."""
 
+    output_mode: str = "current_density"
     current_density_ma_cm2: list[float] = field(
         default_factory=lambda: [2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
+    )
+    voltage_v: list[float] = field(
+        default_factory=lambda: [0.8, 1.0, 1.1, 1.2]
     )
     gains_percent: list[int] = field(default_factory=lambda: [100, 200, 300, 400, 500])
     exposures_ms: list[float] = field(
@@ -78,6 +82,7 @@ class ELMatrixRecipe:
     )
     repeat: int = 1
     voltage_compliance_v: float = 3.0
+    current_compliance_ma: float = 20.0
     stabilization_ms: int = 0
     dark_frame_enabled: bool = True
     capture_timeout_s: float = 20.0
@@ -85,6 +90,14 @@ class ELMatrixRecipe:
     estimated_polarity_duration_s: float = 8.0
     estimated_routing_transition_s: float = 0.5
     estimated_shared_dark_overhead_s: float = 1.0
+
+    def active_electrical_setpoints(self) -> tuple[float, ...]:
+        values = (
+            self.voltage_v
+            if self.output_mode == "voltage"
+            else self.current_density_ma_cm2
+        )
+        return tuple(float(value) for value in values)
 
 @dataclass
 class DarkIVRecipe:
@@ -265,7 +278,7 @@ class Recipe:
 
         from .el_matrix_plan import ELMatrixPlan
 
-        return ELMatrixPlan(self).estimate().output_on_per_j_s
+        return ELMatrixPlan(self).estimate().output_on_per_setpoint_s
 
     def matrix_estimated_time_s(self) -> float:
         from .el_matrix_plan import ELMatrixPlan
@@ -273,6 +286,12 @@ class Recipe:
         return ELMatrixPlan(self).estimate().total_time_s
 
     def matrix_worst_power_mw(self) -> float:
+        if self.el_matrix.output_mode == "voltage":
+            maximum_voltage = max(
+                (abs(float(value)) for value in self.el_matrix.voltage_v),
+                default=0.0,
+            )
+            return maximum_voltage * self.el_matrix.current_compliance_ma
         currents = [
             self.matrix_source_current_ma(channel, float(density))
             for channel in self.enabled_channels()
@@ -313,11 +332,19 @@ class Recipe:
                 errors.append(f"{channel.channel} 的 Device Area 必須大於 0")
 
         matrix = self.el_matrix
-        if not matrix.current_density_ma_cm2 or any(
-            not math.isfinite(float(value)) or float(value) <= 0
-            for value in matrix.current_density_ma_cm2
+        if matrix.output_mode not in {"current_density", "voltage"}:
+            errors.append("EL Matrix Output Mode 必須是 current_density 或 voltage")
+        elif matrix.output_mode == "current_density":
+            if not matrix.current_density_ma_cm2 or any(
+                not math.isfinite(float(value)) or float(value) <= 0
+                for value in matrix.current_density_ma_cm2
+            ):
+                errors.append("Current Density 必須包含大於 0 的有限數值")
+        elif not matrix.voltage_v or any(
+            not math.isfinite(float(value))
+            for value in matrix.voltage_v
         ):
-            errors.append("Current Density 必須包含大於 0 的有限數值")
+            errors.append("Voltage List 必須包含有限數值")
         if not matrix.exposures_ms or any(
             not math.isfinite(float(value)) or float(value) <= 0
             for value in matrix.exposures_ms
@@ -328,7 +355,7 @@ class Recipe:
         if matrix.repeat < 1:
             errors.append("每條件拍攝張數必須大於或等於 1")
         if matrix.stabilization_ms < 0:
-            errors.append("J Stabilization Time 不可小於 0")
+            errors.append("Output Stabilization Time 不可小於 0")
         if matrix.capture_timeout_s <= 0:
             errors.append("相機 timeout 必須大於 0")
         longest_exposure_s = max(
@@ -350,16 +377,30 @@ class Recipe:
         maximum_current_compliance_ma = float(
             getattr(global_safety, "maximum_current_compliance_a", 0.050)
         ) * 1000.0
-        if not math.isfinite(matrix.voltage_compliance_v) or not (
-            0 < matrix.voltage_compliance_v <= maximum_voltage_compliance_v
-        ):
-            errors.append("EL Matrix Voltage Compliance 超過全域安全設定")
-        if any(
-            self.matrix_source_current_ma(channel, float(density)) > maximum_current_ma
-            for channel in enabled_channels
-            for density in matrix.current_density_ma_cm2
-        ):
-            errors.append("EL Matrix 計算出的 Source Current 超過全域安全設定")
+        if matrix.output_mode == "current_density":
+            if not math.isfinite(matrix.voltage_compliance_v) or not (
+                0 < matrix.voltage_compliance_v <= maximum_voltage_compliance_v
+            ):
+                errors.append("EL Matrix Voltage Compliance 超過全域安全設定")
+            if any(
+                self.matrix_source_current_ma(channel, float(density)) > maximum_current_ma
+                for channel in enabled_channels
+                for density in matrix.current_density_ma_cm2
+            ):
+                errors.append("EL Matrix 計算出的 Source Current 超過全域安全設定")
+        elif matrix.output_mode == "voltage":
+            if any(
+                not maximum_voltage_v >= float(voltage) >= float(
+                    getattr(global_safety, "minimum_voltage_v", -maximum_voltage_v)
+                )
+                for voltage in matrix.voltage_v
+                if math.isfinite(float(voltage))
+            ):
+                errors.append("EL Matrix Voltage List 超過全域安全設定")
+            if not math.isfinite(matrix.current_compliance_ma) or not (
+                0 < matrix.current_compliance_ma <= maximum_current_compliance_ma
+            ):
+                errors.append("EL Matrix Current Compliance 超過全域安全設定")
         if self.matrix_worst_power_mw() > maximum_power_mw:
             errors.append("EL Matrix 最壞 Compliance 功率超過全域安全設定")
 
@@ -413,7 +454,7 @@ class Recipe:
             len(axes.gains_percent) * len(axes.exposures_ms) * axes.repeat
         )
         dark = combination if matrix.dark_frame_enabled else 0
-        per_channel = len(matrix.current_density_ma_cm2) * combination
+        per_channel = len(matrix.active_electrical_setpoints()) * combination
         total_el = channels * per_channel
         return {
             "shared_dark": dark,
@@ -522,6 +563,14 @@ class Recipe:
                     for point in legacy_points
                 ]
                 matrix_data["current_density_ma_cm2"] = list(dict.fromkeys(densities))
+            elif basis == "voltage" and legacy_points:
+                matrix_data["output_mode"] = "voltage"
+                matrix_data["voltage_v"] = list(dict.fromkeys(
+                    float(point.setpoint) for point in legacy_points
+                ))
+                matrix_data["current_compliance_ma"] = float(
+                    sweep.current_compliance_ma
+                )
             else:
                 migration_ambiguous = True
                 LOG.warning(
@@ -545,7 +594,11 @@ class Recipe:
                     sweep.voltage_compliance_v
                 )
                 combinations = (
-                    len(matrix_data.get("current_density_ma_cm2", []))
+                    len(
+                        matrix_data.get("voltage_v", [])
+                        if matrix_data.get("output_mode") == "voltage"
+                        else matrix_data.get("current_density_ma_cm2", [])
+                    )
                     * len(matrix_data["gains_percent"])
                     * len(matrix_data["exposures_ms"])
                 )
@@ -603,7 +656,7 @@ class Recipe:
 class RecipeStore:
     """JSON-backed Recipe repository stored in the user's application-data folder."""
 
-    schema_version = 10
+    schema_version = 11
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -662,7 +715,7 @@ class RecipeStore:
             )
             if deprecated_sections:
                 raise ValueError(
-                    "Recipe schema v10 不可包含已移除欄位："
+                    f"Recipe schema v{self.schema_version} 不可包含已移除欄位："
                     + ", ".join(deprecated_sections)
                 )
             sections: tuple[tuple[str, type[Any]], ...] = (

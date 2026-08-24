@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +14,7 @@ class RecipeStoreTests(unittest.TestCase):
         self.assertEqual([], recipe.validate())
         self.assertEqual(("TIFF", "JPG with Footer"), recipe.output.selected_formats())
 
-    def test_v10_round_trip_contains_only_formal_recipe_sections(self) -> None:
+    def test_v11_round_trip_contains_only_formal_recipe_sections(self) -> None:
         recipe = Recipe()
         recipe.name = "Round trip"
         recipe.state = "active"
@@ -24,7 +25,10 @@ class RecipeStoreTests(unittest.TestCase):
             store.upsert(recipe)
             loaded = RecipeStore(path).recipes[0]
         payload = loaded.to_dict()
-        self.assertEqual(10, RecipeStore.schema_version)
+        self.assertEqual(11, RecipeStore.schema_version)
+        self.assertEqual("current_density", loaded.el_matrix.output_mode)
+        self.assertEqual([0.8, 1.0, 1.1, 1.2], loaded.el_matrix.voltage_v)
+        self.assertEqual(20.0, loaded.el_matrix.current_compliance_ma)
         for removed in ("camera", "el_sweep", "dark_frames", "smu", "safety"):
             self.assertNotIn(removed, payload)
         self.assertNotIn("sample_id", payload["channels"][0])
@@ -42,6 +46,23 @@ class RecipeStoreTests(unittest.TestCase):
             ("TIFF", "PNG", "JPG", "JPG with Footer"),
             loaded.output.selected_formats(),
         )
+
+    def test_v10_recipe_file_loads_as_current_density_without_reconfiguration(self) -> None:
+        recipe = Recipe().to_dict()
+        recipe["el_matrix"].pop("output_mode")
+        recipe["el_matrix"].pop("voltage_v")
+        recipe["el_matrix"].pop("current_compliance_ma")
+        recipe["el_matrix"]["current_density_ma_cm2"] = [2.0, 4.0]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recipes.json"
+            path.write_text(
+                json.dumps({"schema_version": 10, "recipes": [recipe]}),
+                encoding="utf-8",
+            )
+            loaded = RecipeStore(path).recipes[0]
+        self.assertEqual("current_density", loaded.el_matrix.output_mode)
+        self.assertEqual([2.0, 4.0], loaded.el_matrix.current_density_ma_cm2)
+        self.assertEqual([], loaded.validate())
 
     def test_dark_profiles_are_camera_agnostic(self) -> None:
         recipe = Recipe()

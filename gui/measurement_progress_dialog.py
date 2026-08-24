@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from .el_matrix_plan import format_duration, format_finish_time
 from .el_matrix_runner import MatrixRuntimeProgress
+from .numeric import format_voltage_number
 from .pixel_csv_postprocessor import PixelCSVProgress
 
 
@@ -76,11 +77,19 @@ class MeasurementProgressDialog(QDialog):
             if progress.channel_index else progress.channel or "—"
         )
         self.sample_value.setText(progress.sample_id or "—")
-        if progress.current_density_ma_cm2 is None:
+        if (
+            progress.current_density_ma_cm2 is None
+            and progress.commanded_voltage_v is None
+        ):
             self.condition_value.setText(progress.message or "—")
         else:
+            electrical = (
+                f"V={format_voltage_number(progress.commanded_voltage_v)} V"
+                if progress.output_mode == "voltage"
+                else f"J={progress.current_density_ma_cm2:g} mA/cm²"
+            )
             self.condition_value.setText(
-                f"J={progress.current_density_ma_cm2:g} mA/cm² | Gain={progress.gain_percent}% | "
+                f"{electrical} | Gain={progress.gain_percent}% | "
                 f"Exposure={progress.exposure_ms:g} ms | "
                 f"Repeat={progress.repeat_index}/{progress.repeat_total}"
             )

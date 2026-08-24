@@ -29,6 +29,7 @@ from .measurement_snapshot import (
     snapshot_payload,
 )
 from .recipe_store import ChannelRecipe, Recipe
+from .numeric import format_voltage_number
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,9 @@ class MatrixRuntimeProgress:
     sample_id: str = ""
     channel_index: int = 0
     channel_total: int = 0
+    output_mode: str | None = None
     current_density_ma_cm2: float | None = None
+    commanded_voltage_v: float | None = None
     gain_percent: int | None = None
     exposure_ms: float | None = None
     repeat_index: int = 0
@@ -70,6 +73,7 @@ class ELMatrixHardware(Protocol):
     def prepare_channel_dark(self) -> None: ...
     def run_dark_iv(self, settings: Any, check_cancel: Callable[[], None]) -> list[dict[str, Any]]: ...
     def set_current(self, current_a: float, voltage_compliance_v: float) -> float: ...
+    def set_voltage(self, voltage_v: float, current_compliance_ma: float) -> float: ...
     def readback(self) -> Any: ...
     def capture(self, exposure_ms: float, gain_percent: int, timeout_s: float,
                 check_cancel: Callable[[], None]) -> CapturedFrame: ...
@@ -190,7 +194,7 @@ class ELMatrixRunner:
         self._eta = _RuntimeETA(self.plan)
         self._polarity: dict[str, dict[str, Any]] = {}
         self._run_started = 0.0
-        self._j_output_started: float | None = None
+        self._output_started: float | None = None
         self._last_remaining = self.plan.estimate().total_time_s
         self._last_finish: datetime | None = None
         self._shared_dark_frames: dict[tuple[int, float], list[np.ndarray]] = {}
@@ -202,10 +206,12 @@ class ELMatrixRunner:
         if self._run_started and monotonic() - self._run_started > self.max_recipe_time_s:
             raise RuntimeError("Runtime watchdog: max_recipe_time_s exceeded")
         if (
-            self._j_output_started is not None
-            and monotonic() - self._j_output_started > self.max_output_time_s
+            self._output_started is not None
+            and monotonic() - self._output_started > self.max_output_time_s
         ):
-            raise RuntimeError("Runtime watchdog: max_output_time_s exceeded for Channel/J")
+            raise RuntimeError(
+                "Runtime watchdog: max_output_time_s exceeded for electrical setpoint"
+            )
 
     def run(self) -> dict[str, Any]:
         self.run_directory.mkdir(parents=True, exist_ok=False)
@@ -235,7 +241,7 @@ class ELMatrixRunner:
                 "completed_at": self.now().isoformat(timespec="seconds"),
             }
         finally:
-            self._j_output_started = None
+            self._output_started = None
             shutdown_result = self.hardware.safe_shutdown()
         normalized = dict(shutdown_result)
         required = (
@@ -309,8 +315,8 @@ class ELMatrixRunner:
                 for repeat_index in range(1, self.plan.repeat + 1):
                     dark_index += 1
                     capture = MatrixCapture(
-                        "DARK", "SHARED", ", ".join(applicable), None, None,
-                        gain, exposure, repeat_index, self.plan.repeat,
+                        "DARK", "SHARED", ", ".join(applicable), None,
+                        None, None, None, gain, exposure, repeat_index, self.plan.repeat,
                         channel_capture_index=dark_index,
                         channel_capture_total=dark_total,
                         overall_index=self._completed + 1,
@@ -336,12 +342,31 @@ class ELMatrixRunner:
         channel_capture_total = self.plan.estimate().el_per_channel
         channel_completed = 0
         try:
-            for density in self.plan.matrix.current_density_ma_cm2:
+            for setpoint in self.plan.electrical_setpoints:
                 self.check_cancel()
-                current_ma = self.recipe.matrix_source_current_ma(channel, density)
-                self.hardware.set_current(current_ma / 1000.0, self.plan.matrix.voltage_compliance_v)
-                self._j_output_started = monotonic()
-                self._phase("J Stabilization", f"{channel.channel} — J={density:g} mA/cm²", channel, channel_index)
+                if self.plan.matrix.output_mode == "voltage":
+                    density = None
+                    voltage = float(setpoint)
+                    self.hardware.set_voltage(
+                        voltage, self.plan.matrix.current_compliance_ma
+                    )
+                    condition = f"V={format_voltage_number(voltage)} V"
+                else:
+                    density = float(setpoint)
+                    voltage = None
+                    current_ma = self.recipe.matrix_source_current_ma(channel, density)
+                    self.hardware.set_current(
+                        current_ma / 1000.0,
+                        self.plan.matrix.voltage_compliance_v,
+                    )
+                    condition = f"J={density:g} mA/cm²"
+                self._output_started = monotonic()
+                self._phase(
+                    "Output Stabilization",
+                    f"{channel.channel} — {condition}",
+                    channel,
+                    channel_index,
+                )
                 interruptible_wait(self.plan.matrix.stabilization_ms / 1000.0, self.check_cancel)
                 for gain in self.plan.gains_percent:
                     for exposure in self.plan.exposures_ms:
@@ -350,7 +375,8 @@ class ELMatrixRunner:
                             capture = MatrixCapture(
                                 "EL", channel.channel,
                                 self.sample_ids[channel.channel], channel.area_cm2,
-                                density, gain, exposure, repeat_index, self.plan.repeat,
+                                self.plan.matrix.output_mode, density, voltage,
+                                gain, exposure, repeat_index, self.plan.repeat,
                                 channel_index, len(self.plan.channels), channel_completed,
                                 channel_capture_total, self._completed + 1,
                                 self.plan.estimate().overall_captures,
@@ -358,9 +384,9 @@ class ELMatrixRunner:
                             self._capture_and_save(capture, channel, None)
                 self.check_cancel()
                 self.hardware.output_off()
-                self._j_output_started = None
+                self._output_started = None
         finally:
-            self._j_output_started = None
+            self._output_started = None
             self.hardware.output_off()
             self.hardware.clear_routing()
 
@@ -438,14 +464,44 @@ class ELMatrixRunner:
         voltage_v = getattr(readback, "voltage_v", None) if readback is not None else None
         current_ma = None if current_a is None else float(current_a) * 1000.0
         measured_density = None if current_ma is None or channel is None else current_ma / channel.area_cm2
+        current_mode = capture.output_mode == "current_density"
+        calculated_current_ma = (
+            self.recipe.matrix_source_current_ma(
+                channel, float(capture.current_density_ma_cm2)
+            )
+            if current_mode and channel is not None
+            and capture.current_density_ma_cm2 is not None
+            else None
+        )
         metadata: dict[str, Any] = {
             "RecipeName": self.recipe.name, "MeasurementRunID": self.run_id,
             "MeasurementType": capture.measurement_type, "Channel": capture.channel,
             "SampleID": capture.sample_id, "DeviceArea": None if channel is None else channel.area_cm2,
+            "OutputMode": capture.output_mode,
+            "SetCurrentDensityMaCm2": capture.current_density_ma_cm2,
             "CommandedCurrentDensity": capture.current_density_ma_cm2,
-            "CalculatedSourceCurrentMa": None if channel is None else self.recipe.matrix_source_current_ma(channel, float(capture.current_density_ma_cm2)),
-            "MeasuredCurrentMa": current_ma, "MeasuredCurrentDensity": measured_density,
-            "MeasuredVoltage": voltage_v, "VoltageCompliance": self.plan.matrix.voltage_compliance_v,
+            "CalculatedSourceCurrentA": (
+                None if calculated_current_ma is None else calculated_current_ma / 1000.0
+            ),
+            "CalculatedSourceCurrentMa": calculated_current_ma,
+            "SetVoltageV": capture.commanded_voltage_v,
+            "CommandedVoltageV": capture.commanded_voltage_v,
+            "MeasuredCurrentA": current_a,
+            "MeasuredCurrentMa": current_ma,
+            "MeasuredCurrentDensityMaCm2": measured_density,
+            "MeasuredCurrentDensity": measured_density,
+            "MeasuredVoltageV": voltage_v,
+            "MeasuredVoltage": voltage_v,
+            "VoltageComplianceV": (
+                self.plan.matrix.voltage_compliance_v if current_mode else None
+            ),
+            "VoltageCompliance": (
+                self.plan.matrix.voltage_compliance_v if current_mode else None
+            ),
+            "CurrentComplianceMa": (
+                self.plan.matrix.current_compliance_ma
+                if capture.output_mode == "voltage" else None
+            ),
             "Gain": capture.gain_percent, "Exposure": capture.exposure_ms,
             "RepeatIndex": capture.repeat_index, "RepeatTotal": capture.repeat_total,
             "CameraTemperature": frame.camera_temperature_c, "Timestamp": timestamp,
@@ -478,10 +534,15 @@ class ELMatrixRunner:
                 f"E{exposure}_R{capture.repeat_index}"
             )
         safe_sample = sanitize_filename(self.sample_ids[channel.channel])
-        density = sanitize_filename(f"{capture.current_density_ma_cm2:g}")
+        if capture.output_mode == "voltage":
+            electrical = "V" + sanitize_filename(
+                format_voltage_number(float(capture.commanded_voltage_v))
+            )
+        else:
+            electrical = "J" + sanitize_filename(f"{capture.current_density_ma_cm2:g}")
         return self.run_directory / f"{channel.channel}_{safe_sample}" / "EL", (
             f"N{capture.overall_index:06d}_{safe_sample}_{channel.channel}_"
-            f"J{density}_G{capture.gain_percent}_E{exposure}_R{capture.repeat_index}"
+            f"{electrical}_G{capture.gain_percent}_E{exposure}_R{capture.repeat_index}"
         )
 
     def _write_final_files_manifest(self) -> Path:
@@ -514,7 +575,9 @@ class ELMatrixRunner:
             total=self.plan.estimate().overall_captures, channel=capture.channel,
             sample_id=capture.sample_id, channel_index=capture.channel_index,
             channel_total=capture.channel_total,
+            output_mode=capture.output_mode,
             current_density_ma_cm2=capture.current_density_ma_cm2,
+            commanded_voltage_v=capture.commanded_voltage_v,
             gain_percent=capture.gain_percent, exposure_ms=capture.exposure_ms,
             repeat_index=capture.repeat_index, repeat_total=capture.repeat_total,
             channel_completed=capture.channel_capture_index,

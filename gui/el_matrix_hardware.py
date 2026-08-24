@@ -124,6 +124,11 @@ class ELMatrixHardwareAdapter:
     def set_current(self, current_a: float, voltage_compliance_v: float) -> float:
         return self.control.recipe_output("CC", current_a, voltage_compliance_v)
 
+    def set_voltage(self, voltage_v: float, current_compliance_ma: float) -> float:
+        return self.control.recipe_output(
+            "CV", voltage_v, current_compliance_ma / 1000.0
+        )
+
     def readback(self) -> Any:
         return self.control.recipe_readback()
 

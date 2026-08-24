@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFileDialog, QListWidgetItem, QMessageBox, QTreeWidgetItem
 
 from .measurement_execution_plan import build_measurement_execution_plan
+from .numeric import format_voltage_number
 from .recipe_store import ChannelRecipe, Recipe
 
 
@@ -99,8 +100,12 @@ class RecipeDialogLogicMixin:
 
         matrix = recipe.el_matrix
         self.dark_frame_enabled_check.setChecked(matrix.dark_frame_enabled)
+        self._set_combo_data(self.matrix_output_mode_combo, matrix.output_mode)
         self.matrix_current_density_edit.setText(
             ", ".join(f"{value:g}" for value in matrix.current_density_ma_cm2)
+        )
+        self.matrix_voltage_edit.setText(
+            ", ".join(format_voltage_number(value) for value in matrix.voltage_v)
         )
         self.matrix_gain_edit.setText(", ".join(str(value) for value in matrix.gains_percent))
         self.matrix_exposure_edit.setText(
@@ -108,6 +113,7 @@ class RecipeDialogLogicMixin:
         )
         self.matrix_repeat_spin.setValue(matrix.repeat)
         self.matrix_voltage_compliance_spin.setValue(matrix.voltage_compliance_v)
+        self.matrix_current_compliance_spin.setValue(matrix.current_compliance_ma)
         self.matrix_stabilization_spin.setValue(matrix.stabilization_ms)
         self.matrix_capture_timeout_spin.setValue(matrix.capture_timeout_s)
 
@@ -169,8 +175,12 @@ class RecipeDialogLogicMixin:
         )
 
         recipe.el_matrix.dark_frame_enabled = self.dark_frame_enabled_check.isChecked()
+        recipe.el_matrix.output_mode = str(self.matrix_output_mode_combo.currentData())
         recipe.el_matrix.current_density_ma_cm2 = _parse_numbers(
             self.matrix_current_density_edit.text(), float
+        )
+        recipe.el_matrix.voltage_v = _parse_numbers(
+            self.matrix_voltage_edit.text(), float
         )
         recipe.el_matrix.gains_percent = _parse_numbers(
             self.matrix_gain_edit.text(), int
@@ -180,6 +190,7 @@ class RecipeDialogLogicMixin:
         )
         recipe.el_matrix.repeat = self.matrix_repeat_spin.value()
         recipe.el_matrix.voltage_compliance_v = self.matrix_voltage_compliance_spin.value()
+        recipe.el_matrix.current_compliance_ma = self.matrix_current_compliance_spin.value()
         recipe.el_matrix.stabilization_ms = self.matrix_stabilization_spin.value()
         recipe.el_matrix.capture_timeout_s = self.matrix_capture_timeout_spin.value()
 
@@ -229,9 +240,11 @@ class RecipeDialogLogicMixin:
             self.dark_step_spin, self.dark_direction_combo, self.dark_dwell_spin,
             self.dark_compliance_spin, self.dark_nplc_spin, self.dark_repeat_spin,
             self.dark_inter_delay_spin, self.dark_frame_enabled_check,
-            self.matrix_current_density_edit,
+            self.matrix_output_mode_combo, self.matrix_current_density_edit,
+            self.matrix_voltage_edit,
             self.matrix_gain_edit, self.matrix_exposure_edit, self.matrix_repeat_spin,
-            self.matrix_voltage_compliance_spin, self.matrix_stabilization_spin,
+            self.matrix_voltage_compliance_spin, self.matrix_current_compliance_spin,
+            self.matrix_stabilization_spin,
             self.matrix_capture_timeout_spin, self.resolution_combo,
             self.output_tiff_check, self.output_png_check, self.output_jpg_check,
             self.output_jpg_footer_check, self.export_pixel_csv_check,

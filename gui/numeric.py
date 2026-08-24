@@ -32,6 +32,13 @@ def format_scpi_number(value: float | int | str | Decimal) -> str:
     return "0" if text in {"", "-0"} else text
 
 
+def format_voltage_number(value: float | int | str | Decimal) -> str:
+    """Render recipe voltages with an explicit decimal for integral values."""
+
+    text = format_scpi_number(value)
+    return text if "." in text else text + ".0"
+
+
 def normalize_json_numbers(value: Any) -> Any:
     """Recursively quantize finite floats before recipe JSON serialization."""
     if isinstance(value, float):

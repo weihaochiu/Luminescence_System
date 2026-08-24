@@ -18,6 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 from PySide6.QtGui import QImage
 
 from .scientific_dn import effective_dn_to_uint8
+from .numeric import format_voltage_number
 
 
 INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
@@ -36,9 +37,16 @@ def _number(value: float | int | None, decimals: int = 3) -> str:
 
 
 def format_el_footer(metadata: dict[str, Any]) -> tuple[str, str, str]:
+    if metadata.get("OutputMode", "current_density") == "voltage":
+        electrical = f"V={format_voltage_number(metadata['SetVoltageV'])} V"
+    else:
+        density = metadata.get(
+            "SetCurrentDensityMaCm2", metadata.get("CommandedCurrentDensity")
+        )
+        electrical = f"J={_number(density)} mA/cm²"
     return (
         f"Sample ID: {metadata['SampleID']}",
-        f"{metadata['Channel']} | J={_number(metadata['CommandedCurrentDensity'])} mA/cm² | "
+        f"{metadata['Channel']} | {electrical} | "
         f"Gain={int(metadata['Gain'])}% | Exposure={_number(metadata['Exposure'], 3)} ms | "
         f"Repeat={metadata['RepeatIndex']}/{metadata['RepeatTotal']}",
         f"Measured: I={_number(metadata.get('MeasuredCurrentMa'))} mA | "
@@ -266,14 +274,23 @@ def save_matrix_capture(
         str(metadata.get("RawValueAlignment", "unknown")),
     )
 
-    tiff_path = output_stem.with_suffix(".tiff") if output_options.format_tiff else None
-    png_path = output_stem.with_suffix(".png") if output_options.format_png else None
-    jpeg_path = output_stem.with_suffix(".jpg") if output_options.format_jpg else None
+    tiff_path = (
+        output_stem.with_name(output_stem.name + ".tiff")
+        if output_options.format_tiff else None
+    )
+    png_path = (
+        output_stem.with_name(output_stem.name + ".png")
+        if output_options.format_png else None
+    )
+    jpeg_path = (
+        output_stem.with_name(output_stem.name + ".jpg")
+        if output_options.format_jpg else None
+    )
     footer_path = (
         output_stem.with_name(output_stem.name + "_footer.jpg")
         if output_options.format_jpg_with_footer else None
     )
-    metadata_path = output_stem.with_suffix(".json")
+    metadata_path = output_stem.with_name(output_stem.name + ".json")
     if tiff_path is not None:
         save_scientific_tiff(tiff_path, scientific)
     if png_path is not None:

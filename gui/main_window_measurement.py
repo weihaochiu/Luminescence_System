@@ -30,6 +30,7 @@ from .pixel_csv_postprocessor import (
 )
 from .polarity_settings import PolarityMeasurementSettings
 from .recipe_store import Recipe
+from .numeric import format_voltage_number
 from .smu_control import SMUInterlockError, SMUOwnership
 
 
@@ -305,13 +306,29 @@ def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
         f"{channel.channel}={plan.sample_ids.get(channel.channel, '')}"
         for channel in plan.channels
     )
+    if recipe.el_matrix.output_mode == "voltage":
+        electrical = (
+            "Voltage："
+            + ", ".join(
+                format_voltage_number(value) for value in recipe.el_matrix.voltage_v
+            )
+            + " V"
+        )
+    else:
+        electrical = (
+            "Current Density："
+            + ", ".join(
+                f"{value:g}" for value in recipe.el_matrix.current_density_ma_cm2
+            )
+            + " mA/cm²"
+        )
     return (
         "量測摘要\n\n"
         f"正式順序：{order}\n\n"
         f"Channels：{' / '.join(channel.channel for channel in plan.channels)}\n"
         f"Channel 數量：{len(plan.channels)}\n\n"
         f"樣品：{samples}\n\n"
-        f"Current Density：{', '.join(f'{value:g}' for value in recipe.el_matrix.current_density_ma_cm2)} mA/cm²\n"
+        f"{electrical}\n"
         f"Gain：{', '.join(str(value) for value in plan.gains_percent)} %\n"
         f"Exposure：{', '.join(f'{value:g}' for value in plan.exposures_ms)} ms\n"
         f"每條件：{plan.repeat} 張\n\n"
@@ -321,7 +338,8 @@ def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
         f"Total：{estimate.overall_captures} 張\n\n"
         f"預估純曝光時間：{format_duration(estimate.exposure_time_s)}\n"
         f"預估總量測時間：{format_duration(estimate.total_time_s)}\n"
-        f"最長單一 J OUTPUT ON：{format_duration(estimate.output_on_per_j_s)}\n"
+        f"最長單一 Electrical Setpoint OUTPUT ON："
+        f"{format_duration(estimate.output_on_per_setpoint_s)}\n"
         f"預計完成：{format_finish_time(estimate.estimated_finish)}"
     )
 

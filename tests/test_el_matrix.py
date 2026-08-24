@@ -18,6 +18,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QImage
 
 from gui.el_matrix_plan import ELMatrixPlan
+from gui.el_matrix_hardware import ELMatrixHardwareAdapter
 from gui.el_matrix_preflight import collect_preflight_errors
 from gui.camera_capture_bridge import CameraCaptureBridge
 from gui.el_matrix_runner import CapturedFrame, ELMatrixRunner
@@ -34,6 +35,7 @@ from gui.measurement_output import (
     save_matrix_capture,
     save_pixel_csv_products,
 )
+from gui.measurement_execution_plan import build_measurement_execution_plan
 from gui.measurement_progress_dialog import MeasurementProgressDialog
 from gui.main_window_devices import MainWindowDeviceMixin
 from gui.recipe_store import Recipe
@@ -41,6 +43,7 @@ from gui.recipe_dialog import RecipeManagerDialog
 from gui.recipe_store import RecipeStore
 from gui.polarity_settings import PolarityMeasurementSettings
 from gui.relay_settings import RelaySettings
+from gui.smu_control import SMUSafetyLimits
 from tests.qt_test_utils import ensure_qapplication
 
 
@@ -89,6 +92,10 @@ class _FakeHardware:
     def set_current(self, current_a, compliance):
         self.events.append(("set_current", current_a, compliance))
         return current_a
+
+    def set_voltage(self, voltage_v, compliance_ma):
+        self.events.append(("set_voltage", voltage_v, compliance_ma))
+        return voltage_v
 
     def readback(self):
         self.events.append("readback")
@@ -171,6 +178,82 @@ class ELMatrixRecipeAndPlanTests(unittest.TestCase):
             self.assertTrue(dialog.dark_frame_enabled_check.isChecked())
             self.assertEqual(4, dialog.tabs.count())
             dialog.close()
+
+    def test_recipe_model_defaults_round_trip_and_legacy_default(self) -> None:
+        default = Recipe()
+        self.assertEqual("current_density", default.el_matrix.output_mode)
+        current_round_trip = Recipe.from_dict(default.to_dict())
+        self.assertEqual("current_density", current_round_trip.el_matrix.output_mode)
+        voltage = Recipe()
+        voltage.el_matrix.output_mode = "voltage"
+        voltage.el_matrix.voltage_v = [0.75, 1.05]
+        voltage.el_matrix.current_compliance_ma = 12.5
+        loaded = Recipe.from_dict(voltage.to_dict())
+        self.assertEqual("voltage", loaded.el_matrix.output_mode)
+        self.assertEqual([0.75, 1.05], loaded.el_matrix.voltage_v)
+        self.assertEqual(12.5, loaded.el_matrix.current_compliance_ma)
+        legacy = Recipe.from_dict({
+            "el_matrix": {
+                "current_density_ma_cm2": [3.0, 7.0],
+                "voltage_compliance_v": 2.5,
+            }
+        })
+        self.assertEqual("current_density", legacy.el_matrix.output_mode)
+        self.assertEqual([3.0, 7.0], legacy.el_matrix.current_density_ma_cm2)
+
+    def test_dialog_mode_switch_preserves_both_lists_and_compliance_values(self) -> None:
+        recipe = Recipe()
+        recipe.el_matrix.current_density_ma_cm2 = [2.0, 9.0]
+        recipe.el_matrix.voltage_v = [0.8, 1.15]
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecipeStore(Path(directory) / "recipes.json")
+            store.upsert(recipe)
+            dialog = RecipeManagerDialog(store)
+            try:
+                self.app.processEvents()
+                self.assertEqual(
+                    "current_density", dialog.matrix_output_mode_combo.currentData()
+                )
+                self.assertFalse(dialog.matrix_current_density_edit.isHidden())
+                self.assertTrue(dialog.matrix_voltage_edit.isHidden())
+                self.assertFalse(dialog.matrix_voltage_compliance_spin.isHidden())
+                self.assertTrue(dialog.matrix_current_compliance_spin.isHidden())
+                dialog.matrix_output_mode_combo.setCurrentIndex(
+                    dialog.matrix_output_mode_combo.findData("voltage")
+                )
+                self.app.processEvents()
+                self.assertTrue(dialog.matrix_current_density_edit.isHidden())
+                self.assertFalse(dialog.matrix_voltage_edit.isHidden())
+                self.assertTrue(dialog.matrix_voltage_compliance_spin.isHidden())
+                self.assertFalse(dialog.matrix_current_compliance_spin.isHidden())
+                dialog.matrix_voltage_edit.setText("0.9, 1.2")
+                dialog.matrix_current_compliance_spin.setValue(18.0)
+                serialized_plan = json.dumps(
+                    build_measurement_execution_plan(
+                        dialog._read_form_to_recipe()
+                    ).to_dict(),
+                    ensure_ascii=False,
+                )
+                self.assertIn("Voltage 0.9 V", serialized_plan)
+                preview_titles = []
+                root = dialog.execution_tree.invisibleRootItem()
+                pending = [root.child(index) for index in range(root.childCount())]
+                while pending:
+                    item = pending.pop()
+                    preview_titles.append(item.text(0))
+                    pending.extend(
+                        item.child(index) for index in range(item.childCount())
+                    )
+                self.assertTrue(any("Voltage 0.9 V" in title for title in preview_titles))
+                dialog.matrix_output_mode_combo.setCurrentIndex(
+                    dialog.matrix_output_mode_combo.findData("current_density")
+                )
+                result = dialog._read_form_to_recipe()
+                self.assertEqual([2.0, 9.0], result.el_matrix.current_density_ma_cm2)
+                self.assertEqual([0.9, 1.2], result.el_matrix.voltage_v)
+                self.assertEqual(18.0, result.el_matrix.current_compliance_ma)
+            finally:
+                dialog.close()
     def test_enabled_channels_are_fixed_order_and_disabled_are_skipped(self) -> None:
         recipe = _small_recipe(3)
         recipe.channels[1].enabled = False
@@ -211,6 +294,64 @@ class ELMatrixRecipeAndPlanTests(unittest.TestCase):
         self.assertEqual(("CH1", 2, 100, 2, 1), keys[2])
         self.assertLess(keys.index(("CH1", 4, 100, 1, 1)), keys.index(("CH2", 2, 100, 1, 1)))
 
+    def test_voltage_plan_uses_v_gain_exposure_repeat_and_dark_is_unchanged(self) -> None:
+        recipe = _small_recipe(1)
+        recipe.el_matrix.output_mode = "voltage"
+        recipe.el_matrix.voltage_v = [0.8, 1.0, 1.2]
+        recipe.el_matrix.current_density_ma_cm2 = [2.0] * 9
+        recipe.el_matrix.exposures_ms = [1.0, 2.0]
+        recipe.el_matrix.repeat = 2
+        plan = ELMatrixPlan(recipe)
+        counts = plan.capture_counts()
+        self.assertEqual(8, counts["shared_dark"])
+        self.assertEqual(24, counts["el_per_channel"])
+        el = [item for item in plan.captures() if item.measurement_type == "EL"]
+        keys = [
+            (
+                item.commanded_voltage_v,
+                item.gain_percent,
+                item.exposure_ms,
+                item.repeat_index,
+            )
+            for item in el
+        ]
+        self.assertEqual((0.8, 100, 1.0, 1), keys[0])
+        self.assertEqual((0.8, 100, 1.0, 2), keys[1])
+        self.assertEqual((0.8, 100, 2.0, 1), keys[2])
+        self.assertLess(keys.index((1.0, 100, 1.0, 1)), keys.index((1.2, 100, 1.0, 1)))
+        payload = json.dumps(
+            build_measurement_execution_plan(recipe).to_dict(), ensure_ascii=False
+        )
+        self.assertIn("Voltage 0.8 V", payload)
+        self.assertNotIn("Current Density 2", payload)
+
+    def test_mode_specific_safety_validation_and_power(self) -> None:
+        limits = SMUSafetyLimits()
+        current = _small_recipe(1)
+        current.el_matrix.voltage_v = [float("nan")]
+        current.el_matrix.current_compliance_ma = float("inf")
+        self.assertEqual([], current.validate(limits))
+        current.el_matrix.current_density_ma_cm2 = [600.0]
+        self.assertTrue(any("Source Current" in item for item in current.validate(limits)))
+
+        voltage = _small_recipe(1)
+        voltage.el_matrix.output_mode = "voltage"
+        voltage.el_matrix.voltage_v = [1.0, 1.2]
+        voltage.el_matrix.current_density_ma_cm2 = [float("nan")]
+        voltage.el_matrix.voltage_compliance_v = float("inf")
+        self.assertEqual([], voltage.validate(limits))
+        voltage.el_matrix.voltage_v = [float("nan")]
+        self.assertTrue(any("Voltage List" in item for item in voltage.validate(limits)))
+        voltage.el_matrix.voltage_v = [6.0]
+        self.assertTrue(any("Voltage List 超過" in item for item in voltage.validate(limits)))
+        voltage.el_matrix.voltage_v = [1.0]
+        voltage.el_matrix.current_compliance_ma = 60.0
+        self.assertTrue(any("Current Compliance" in item for item in voltage.validate(limits)))
+        voltage.el_matrix.voltage_v = [5.0]
+        voltage.el_matrix.current_compliance_ma = 50.0
+        self.assertEqual(250.0, voltage.matrix_worst_power_mw())
+        self.assertTrue(any("最壞 Compliance 功率" in item for item in voltage.validate(limits)))
+
     def test_eta_dark_once_stabilization_per_channel_j_and_mock_finish(self) -> None:
         recipe = _small_recipe(2)
         recipe.el_matrix.stabilization_ms = 500
@@ -250,6 +391,13 @@ class ELMatrixRunnerTests(unittest.TestCase):
             )
             self.assertIn("Sample/A", manifest)
             self.assertIn("Sample B", manifest)
+            current_metadata = json.loads(
+                next(run_directory.rglob("*_J2_*.json")).read_text(encoding="utf-8")
+            )
+            self.assertEqual("current_density", current_metadata["OutputMode"])
+            self.assertEqual(2.0, current_metadata["SetCurrentDensityMaCm2"])
+            self.assertAlmostEqual(0.0002, current_metadata["CalculatedSourceCurrentA"])
+            self.assertIsNone(current_metadata["SetVoltageV"])
         self.assertEqual(1, hardware.events.count("prepare_dark"))
         self.assertEqual(2, hardware.polarity_calls)
         self.assertEqual(2, hardware.events.count("dark_iv"))
@@ -273,6 +421,70 @@ class ELMatrixRunnerTests(unittest.TestCase):
         recipe.polarity.enabled = False
         self.assertEqual([], recipe.validate())
         self.assertEqual(3, len(ELMatrixPlan(recipe).channels))
+
+    def test_voltage_runner_sets_cv_once_per_setpoint_and_writes_v_outputs(self) -> None:
+        recipe = _small_recipe(1)
+        recipe.el_matrix.output_mode = "voltage"
+        recipe.el_matrix.voltage_v = [0.8, 1.0]
+        recipe.el_matrix.current_compliance_ma = 15.0
+        hardware = _FakeHardware()
+        progress = []
+        with tempfile.TemporaryDirectory() as directory:
+            result = ELMatrixRunner(
+                recipe,
+                hardware,
+                directory,
+                report_progress=progress.append,
+                is_cancel_requested=lambda: False,
+            ).run()
+            run_directory = Path(result["output_directory"])
+            voltage_json = next(run_directory.rglob("*_V0.8_*.json"))
+            self.assertTrue(any(run_directory.rglob("*_V1.0_*.json")))
+            metadata = json.loads(voltage_json.read_text(encoding="utf-8"))
+            manifest = (run_directory / "measurement_manifest.csv").read_text(
+                encoding="utf-8-sig"
+            )
+        voltage_events = [
+            event for event in hardware.events
+            if isinstance(event, tuple) and event[0] == "set_voltage"
+        ]
+        self.assertEqual(
+            [("set_voltage", 0.8, 15.0), ("set_voltage", 1.0, 15.0)],
+            voltage_events,
+        )
+        self.assertFalse(any(
+            isinstance(event, tuple) and event[0] == "set_current"
+            for event in hardware.events
+        ))
+        self.assertEqual("voltage", metadata["OutputMode"])
+        self.assertEqual(0.8, metadata["SetVoltageV"])
+        self.assertIsNone(metadata["SetCurrentDensityMaCm2"])
+        self.assertIsNone(metadata["CalculatedSourceCurrentA"])
+        self.assertEqual(0.0008, metadata["MeasuredCurrentA"])
+        self.assertEqual(8.0, metadata["MeasuredCurrentDensityMaCm2"])
+        self.assertIn("OutputMode", manifest)
+        capture_progress = [item for item in progress if item.commanded_voltage_v is not None]
+        self.assertEqual(0.8, capture_progress[0].commanded_voltage_v)
+        dialog = MeasurementProgressDialog("Voltage")
+        try:
+            dialog.update_progress(capture_progress[-1])
+            self.assertIn("V=1.0 V", dialog.condition_value.text())
+            self.assertNotIn("J=", dialog.condition_value.text())
+        finally:
+            dialog.set_stopped()
+            dialog.close()
+
+    def test_hardware_adapter_cv_uses_recipe_output_and_converts_ma_to_a(self) -> None:
+        calls = []
+        control = SimpleNamespace(
+            recipe_output=lambda *args: calls.append(args) or args[1]
+        )
+        adapter = ELMatrixHardwareAdapter(
+            control, SimpleNamespace(), SimpleNamespace(), SimpleNamespace()
+        )
+        self.assertEqual(0.001, adapter.set_current(0.001, 3.0))
+        self.assertEqual(1.1, adapter.set_voltage(1.1, 20.0))
+        self.assertEqual([("CC", 0.001, 3.0), ("CV", 1.1, 0.02)], calls)
 
     def test_all_polarities_precede_shared_dark_and_channel_dark_iv(self) -> None:
         recipe = _small_recipe(2)
@@ -410,6 +622,17 @@ class MatrixImageOutputTests(unittest.TestCase):
         self.assertNotIn("J=0", dark_lines)
         self.assertEqual("perovskite_TOPCon", sanitize_filename("perovskite/TOPCon"))
 
+    def test_voltage_footer_identifies_commanded_voltage(self) -> None:
+        metadata = self._metadata()
+        metadata.update({
+            "OutputMode": "voltage",
+            "SetVoltageV": 1.05,
+            "CommandedCurrentDensity": None,
+        })
+        rendered = "\n".join(format_el_footer(metadata))
+        self.assertIn("V=1.05 V", rendered)
+        self.assertNotIn("J=", rendered)
+
     def test_pixel_csv_products_follow_output_options(self) -> None:
         recipe = Recipe()
         recipe.output.export_pixel_csv = True
@@ -440,6 +663,10 @@ class MeasurementSnapshotAndPreflightTests(unittest.TestCase):
         self.assertNotIn("sample_id", snapshot["recipe"]["complete_snapshot"]["channels"][0])
         self.assertEqual("ORIGINAL", snapshot["channels"][0]["sample_id"])
         self.assertTrue(verify_snapshot_hash(snapshot))
+        self.assertEqual("current_density", snapshot["el_matrix"]["output_mode"])
+        self.assertEqual([0.8, 1.0, 1.1, 1.2], list(snapshot["el_matrix"]["voltage_v"]))
+        self.assertEqual(3.0, snapshot["el_matrix"]["voltage_compliance_v"])
+        self.assertEqual(20.0, snapshot["el_matrix"]["current_compliance_ma"])
         with self.assertRaises(TypeError):
             snapshot["camera"]["CameraModel"] = "changed"
 

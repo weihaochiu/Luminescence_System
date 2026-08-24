@@ -174,7 +174,11 @@ class RecipeDialogPagesMixin:
         form = QFormLayout(page)
         self.dark_frame_enabled_check = QCheckBox("拍攝 Dark Frame")
         self.dark_frame_enabled_check.setChecked(True)
+        self.matrix_output_mode_combo = QComboBox()
+        self.matrix_output_mode_combo.addItem("定電流密度", "current_density")
+        self.matrix_output_mode_combo.addItem("定電壓", "voltage")
         self.matrix_current_density_edit = QLineEdit("2, 4, 6, 8, 10, 12")
+        self.matrix_voltage_edit = QLineEdit("0.8, 1.0, 1.1, 1.2")
         self.matrix_gain_edit = QLineEdit("100, 200, 300, 400, 500")
         self.matrix_exposure_edit = QLineEdit(
             "0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 15000"
@@ -182,17 +186,33 @@ class RecipeDialogPagesMixin:
         self.matrix_repeat_spin = QSpinBox()
         self.matrix_repeat_spin.setRange(1, 999)
         self.matrix_voltage_compliance_spin = _double_spin(0.000001, 210, 3, " V", 6)
+        self.matrix_current_compliance_spin = _double_spin(
+            0.000001, 10000, 20, " mA", 6
+        )
         self.matrix_stabilization_spin = QSpinBox()
         self.matrix_stabilization_spin.setRange(0, 3_600_000)
         self.matrix_stabilization_spin.setSuffix(" ms")
         self.matrix_capture_timeout_spin = _double_spin(0.1, 3600, 20, " s")
         form.addRow(self.dark_frame_enabled_check)
-        form.addRow("Current Density List (mA/cm²)", self.matrix_current_density_edit)
+        form.addRow("輸出模式", self.matrix_output_mode_combo)
+        self.matrix_current_density_label = QLabel("Current Density List (mA/cm²)")
+        self.matrix_voltage_label = QLabel("Voltage List (V)")
+        form.addRow(self.matrix_current_density_label, self.matrix_current_density_edit)
+        form.addRow(self.matrix_voltage_label, self.matrix_voltage_edit)
         form.addRow("Gain List (%)", self.matrix_gain_edit)
         form.addRow("Exposure List (ms)", self.matrix_exposure_edit)
         form.addRow("每條件拍攝張數", self.matrix_repeat_spin)
-        form.addRow("Voltage Compliance", self.matrix_voltage_compliance_spin)
-        form.addRow("J Stabilization Time", self.matrix_stabilization_spin)
+        self.matrix_voltage_compliance_label = QLabel("Voltage Compliance")
+        self.matrix_current_compliance_label = QLabel("Current Compliance")
+        form.addRow(
+            self.matrix_voltage_compliance_label,
+            self.matrix_voltage_compliance_spin,
+        )
+        form.addRow(
+            self.matrix_current_compliance_label,
+            self.matrix_current_compliance_spin,
+        )
+        form.addRow("Output Stabilization Time", self.matrix_stabilization_spin)
         form.addRow("Capture timeout", self.matrix_capture_timeout_spin)
         note = QLabel(
             "Gain、Exposure 與每條件拍攝張數是正式量測唯一的拍攝序列來源。"
@@ -200,7 +220,28 @@ class RecipeDialogPagesMixin:
         note.setWordWrap(True)
         note.setStyleSheet("background:#edf5fa; border:1px solid #b6cedd; padding:8px;")
         form.addRow(note)
+        self.matrix_output_mode_combo.currentIndexChanged.connect(
+            self._set_el_matrix_output_mode_ui
+        )
+        self._set_el_matrix_output_mode_ui()
         return page
+
+    def _set_el_matrix_output_mode_ui(self, *_args: object) -> None:
+        voltage_mode = self.matrix_output_mode_combo.currentData() == "voltage"
+        for widget in (
+            self.matrix_voltage_label,
+            self.matrix_voltage_edit,
+            self.matrix_current_compliance_label,
+            self.matrix_current_compliance_spin,
+        ):
+            widget.setVisible(voltage_mode)
+        for widget in (
+            self.matrix_current_density_label,
+            self.matrix_current_density_edit,
+            self.matrix_voltage_compliance_label,
+            self.matrix_voltage_compliance_spin,
+        ):
+            widget.setVisible(not voltage_mode)
 
     def _build_output_tab(self) -> QWidget:
         page = QWidget()
