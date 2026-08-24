@@ -44,41 +44,90 @@ class FakeCloseEvent:
         self.accepted = False
 
 
-class FakeStatusSettings:
-    """In-memory QSettings fake whose sync status is test-controlled."""
+class FakeSettingsBackend:
+    def __init__(self) -> None:
+        self.persisted: dict[str, object] = {}
 
-    def __init__(self, *statuses: QSettings.Status) -> None:
+
+class FakeStatusSettings:
+    """QSettings fake with the same first-error status lifecycle as Qt."""
+
+    def __init__(
+        self,
+        *statuses: QSettings.Status,
+        backend: FakeSettingsBackend | None = None,
+        omitted_keys: set[str] | None = None,
+        write_overrides: dict[str, object] | None = None,
+    ) -> None:
         self._statuses = list(statuses)
         self._status = QSettings.Status.NoError
-        self._persisted: dict[str, object] = {}
+        self._backend = backend or FakeSettingsBackend()
         self._pending: dict[str, object] = {}
+        self._omitted_keys = omitted_keys or set()
+        self._write_overrides = write_overrides or {}
         self.sync_calls = 0
 
-    def queue_status(self, status: QSettings.Status) -> None:
-        self._statuses.append(status)
-
     def value(self, key: str, default: object = None) -> object:
-        return self._persisted.get(key, default)
+        return self._backend.persisted.get(key, default)
 
     def setValue(self, key: str, value: object) -> None:  # noqa: N802 - Qt API
         self._pending[key] = value
 
     def sync(self) -> None:
         self.sync_calls += 1
-        self._status = (
+        outcome = (
             self._statuses.pop(0)
             if self._statuses
             else QSettings.Status.NoError
         )
         if self._status == QSettings.Status.NoError:
-            self._persisted.update(self._pending)
+            self._status = outcome
+        if outcome == QSettings.Status.NoError:
+            persisted = {
+                key: value
+                for key, value in self._pending.items()
+                if key not in self._omitted_keys
+            }
+            persisted.update(self._write_overrides)
+            self._backend.persisted.update(persisted)
             self._pending.clear()
 
     def status(self) -> QSettings.Status:
         return self._status
 
+    def contains(self, key: str) -> bool:
+        return key in self._backend.persisted
+
     def allKeys(self) -> list[str]:  # noqa: N802 - Qt API
-        return list(self._persisted)
+        return list(self._backend.persisted)
+
+
+class FakeSettingsFactory:
+    def __init__(self, *instance_statuses: QSettings.Status) -> None:
+        self.backend = FakeSettingsBackend()
+        self._instance_statuses = list(instance_statuses)
+        self.instances: list[FakeStatusSettings] = []
+        self.omitted_keys_by_instance: dict[int, set[str]] = {}
+        self.write_overrides_by_instance: dict[int, dict[str, object]] = {}
+
+    def source(self) -> FakeStatusSettings:
+        return FakeStatusSettings(backend=self.backend)
+
+    def __call__(self) -> FakeStatusSettings:
+        index = len(self.instances)
+        status = (
+            self._instance_statuses.pop(0)
+            if self._instance_statuses
+            else QSettings.Status.NoError
+        )
+        settings = FakeStatusSettings(
+            status,
+            backend=self.backend,
+            omitted_keys=self.omitted_keys_by_instance.get(index),
+            write_overrides=self.write_overrides_by_instance.get(index),
+        )
+        self.instances.append(settings)
+        return settings
 
 
 class ManualSMUSettingsTests(unittest.TestCase):
@@ -171,36 +220,175 @@ class ManualSMUSettingsTests(unittest.TestCase):
         return window, FakeCloseEvent(), events
 
     def test_store_accepts_no_error_status_after_sync(self) -> None:
-        settings = FakeStatusSettings(QSettings.Status.NoError)
+        factory = FakeSettingsFactory(
+            QSettings.Status.NoError,
+            QSettings.Status.NoError,
+        )
 
-        ManualSMUSettingsStore(settings).save(ManualSMUSettings(channel="Ch4"))
+        ManualSMUSettingsStore(
+            factory.source(),
+            settings_factory=factory,
+        ).save(ManualSMUSettings(channel="Ch4"))
 
-        self.assertEqual(1, settings.sync_calls)
-        self.assertEqual("Ch4", settings.value(CHANNEL_KEY))
+        self.assertEqual(1, factory.instances[0].sync_calls)
+        self.assertEqual(1, factory.instances[1].sync_calls)
+        self.assertEqual("Ch4", factory.backend.persisted[CHANNEL_KEY])
 
     def test_store_raises_for_access_error_status_without_sync_exception(self) -> None:
-        settings = FakeStatusSettings(QSettings.Status.AccessError)
+        factory = FakeSettingsFactory(QSettings.Status.AccessError)
 
         with self.assertRaisesRegex(
             ManualSMUSettingsWriteError,
             r"sync failed: AccessError",
         ):
-            ManualSMUSettingsStore(settings).save(ManualSMUSettings())
+            ManualSMUSettingsStore(
+                factory.source(),
+                settings_factory=factory,
+            ).save(ManualSMUSettings())
 
-        self.assertEqual(1, settings.sync_calls)
+        self.assertEqual(1, factory.instances[0].sync_calls)
 
     def test_store_raises_for_format_error_status(self) -> None:
-        settings = FakeStatusSettings(QSettings.Status.FormatError)
+        factory = FakeSettingsFactory(QSettings.Status.FormatError)
 
         with self.assertRaisesRegex(
             ManualSMUSettingsWriteError,
             r"sync failed: FormatError",
         ):
-            ManualSMUSettingsStore(settings).save(ManualSMUSettings())
+            ManualSMUSettingsStore(
+                factory.source(),
+                settings_factory=factory,
+            ).save(ManualSMUSettings())
+
+    def test_qsettings_error_status_is_sticky_but_fresh_instance_recovers(
+        self,
+    ) -> None:
+        blocker = Path(self.temporary_directory.name) / "blocked"
+        blocker.write_text("not a directory", encoding="utf-8")
+        settings_path = blocker / "sticky.ini"
+        poisoned = QSettings(str(settings_path), QSettings.Format.IniFormat)
+        poisoned.setValue("probe/value", 1)
+        poisoned.sync()
+        self.assertEqual(QSettings.Status.AccessError, poisoned.status())
+
+        blocker.unlink()
+        blocker.mkdir()
+        poisoned.setValue("probe/value", 2)
+        poisoned.sync()
+
+        self.assertTrue(settings_path.exists())
+        self.assertEqual(QSettings.Status.AccessError, poisoned.status())
+        fresh = QSettings(str(settings_path), QSettings.Format.IniFormat)
+        fresh.setValue("probe/value", 3)
+        fresh.sync()
+        self.assertEqual(QSettings.Status.NoError, fresh.status())
+        self.assertEqual(3, fresh.value("probe/value"))
+
+    def test_fake_status_settings_preserves_first_error_like_qt(self) -> None:
+        settings = FakeStatusSettings(
+            QSettings.Status.AccessError,
+            QSettings.Status.NoError,
+        )
+        settings.setValue("probe/value", 1)
+        settings.sync()
+        self.assertEqual(QSettings.Status.AccessError, settings.status())
+
+        settings.setValue("probe/value", 2)
+        settings.sync()
+
+        self.assertEqual(2, settings.value("probe/value"))
+        self.assertEqual(QSettings.Status.AccessError, settings.status())
+
+    def test_native_factory_preserves_production_backend_identity_without_write(
+        self,
+    ) -> None:
+        organization = "EL Measurement Lab"
+        application = "EL Measurement Equipment Control"
+        source = QSettings(
+            QSettings.Format.NativeFormat,
+            QSettings.Scope.UserScope,
+            organization,
+            application,
+        )
+        source.setFallbacksEnabled(False)
+        store = ManualSMUSettingsStore(source)
+        first = store._settings_factory()
+        second = store._settings_factory()
+        self.assertIsNot(first, second)
+        for fresh in (first, second):
+            self.assertEqual(source.format(), fresh.format())
+            self.assertEqual(source.scope(), fresh.scope())
+            self.assertEqual(organization, fresh.organizationName())
+            self.assertEqual(application, fresh.applicationName())
+            self.assertEqual(source.fileName(), fresh.fileName())
+            self.assertEqual(source.fallbacksEnabled(), fresh.fallbacksEnabled())
+            self.assertEqual(
+                source.isAtomicSyncRequired(),
+                fresh.isAtomicSyncRequired(),
+            )
+
+    def test_readback_verifies_all_seven_values_with_fresh_reader(self) -> None:
+        factory = FakeSettingsFactory(
+            QSettings.Status.NoError,
+            QSettings.Status.NoError,
+        )
+        expected = ManualSMUSettings(
+            channel="Ch4",
+            mode="CV",
+            area_cm2=0.92,
+            cc_current_density_ma_cm2=15.0,
+            cc_voltage_compliance_v=3.0,
+            cv_voltage_v=1.2,
+            cv_current_compliance_ma_cm2=20.0,
+        )
+
+        ManualSMUSettingsStore(
+            factory.source(),
+            settings_factory=factory,
+        ).save(expected)
+
+        self.assertIsNot(factory.instances[0], factory.instances[1])
+        self.assertEqual(
+            expected,
+            ManualSMUSettingsStore._load_from(factory.instances[1]),
+        )
+
+    def test_incomplete_readback_is_treated_as_persistence_failure(self) -> None:
+        factory = FakeSettingsFactory(
+            QSettings.Status.NoError,
+            QSettings.Status.NoError,
+        )
+        factory.omitted_keys_by_instance[0] = {CV_VOLTAGE_KEY}
+        panel = ManualSMUPanel(
+            settings=factory.source(),
+            settings_factory=factory,
+        )
+        try:
+            panel.mode_combo.setCurrentIndex(1)
+            panel.setpoint_spin.setValue(1.2)
+            with self.assertRaisesRegex(
+                ManualSMUSettingsWriteError,
+                "readback verification failed",
+            ):
+                panel.flush_persistent_settings()
+
+            self.assertTrue(panel.persistent_settings_dirty)
+            self.assertTrue(panel._save_timer.isActive())
+            self.assertEqual(2000, panel._save_timer.interval())
+        finally:
+            panel._save_timer.stop()
+            panel.deleteLater()
 
     def test_dirty_state_clears_only_after_successful_sync(self) -> None:
-        settings = FakeStatusSettings(QSettings.Status.NoError)
-        panel = ManualSMUPanel(settings=settings)
+        factory = FakeSettingsFactory(
+            QSettings.Status.NoError,
+            QSettings.Status.NoError,
+            QSettings.Status.AccessError,
+        )
+        panel = ManualSMUPanel(
+            settings=factory.source(),
+            settings_factory=factory,
+        )
         try:
             self.assertFalse(panel.persistent_settings_dirty)
             panel.channel_combo.setCurrentIndex(3)
@@ -209,7 +397,6 @@ class ManualSMUSettingsTests(unittest.TestCase):
             panel.flush_persistent_settings()
             self.assertFalse(panel.persistent_settings_dirty)
 
-            settings.queue_status(QSettings.Status.AccessError)
             panel.area_spin.setValue(0.92)
             self.assertTrue(panel.persistent_settings_dirty)
             with self.assertRaises(ManualSMUSettingsWriteError):
@@ -223,8 +410,11 @@ class ManualSMUSettingsTests(unittest.TestCase):
             panel.deleteLater()
 
     def test_debounce_failure_is_logged_and_schedules_slow_retry(self) -> None:
-        settings = FakeStatusSettings(QSettings.Status.FormatError)
-        panel = ManualSMUPanel(settings=settings)
+        factory = FakeSettingsFactory(QSettings.Status.FormatError)
+        panel = ManualSMUPanel(
+            settings=factory.source(),
+            settings_factory=factory,
+        )
         try:
             panel.area_spin.setValue(0.92)
 
@@ -243,6 +433,58 @@ class ManualSMUSettingsTests(unittest.TestCase):
             )
         finally:
             panel._save_timer.stop()
+            panel.deleteLater()
+
+    def test_persistent_access_errors_use_distinct_low_frequency_attempts(
+        self,
+    ) -> None:
+        factory = FakeSettingsFactory(
+            QSettings.Status.AccessError,
+            QSettings.Status.AccessError,
+            QSettings.Status.AccessError,
+        )
+        panel = ManualSMUPanel(
+            settings=factory.source(),
+            settings_factory=factory,
+        )
+        (
+            control,
+            driver,
+            manual_sequence,
+            relay_service,
+            manual_handler,
+        ) = self.production_boundaries(panel)
+        output_requested = QSignalSpy(panel.output_requested)
+        output_off_requested = QSignalSpy(panel.output_off_requested)
+        handover_requested = QSignalSpy(panel.handover_requested)
+        try:
+            panel.area_spin.setValue(0.92)
+            with self.assertLogs("gui.smu_manual_panel", level="ERROR") as captured:
+                for _ in range(3):
+                    panel._flush_persistent_settings_from_timer()
+                    self.assertTrue(panel.persistent_settings_dirty)
+                    self.assertTrue(panel._save_timer.isActive())
+                    self.assertEqual(2000, panel._save_timer.interval())
+
+            self.assertEqual(3, len(factory.instances))
+            self.assertEqual(3, len({id(item) for item in factory.instances}))
+            self.assertTrue(
+                all("AccessError" in message for message in captured.output)
+            )
+            self.assertTrue(
+                all("area_cm2" not in message for message in captured.output)
+            )
+            self.assertEqual(0, output_requested.count())
+            self.assertEqual(0, output_off_requested.count())
+            self.assertEqual(0, handover_requested.count())
+            manual_handler.assert_not_called()
+            manual_sequence.assert_not_called()
+            driver.set_output_enabled.assert_not_called()
+            relay_service.select_smu_output_channel.assert_not_called()
+            relay_service.clear_smu_output_channels.assert_not_called()
+        finally:
+            panel._save_timer.stop()
+            control.shutdown(safety_confirmed=True)
             panel.deleteLater()
 
     def test_first_launch_uses_existing_defaults(self) -> None:
@@ -497,8 +739,11 @@ class ManualSMUSettingsTests(unittest.TestCase):
             panel.deleteLater()
 
     def test_access_error_on_close_does_not_block_safe_shutdown(self) -> None:
-        settings = FakeStatusSettings(QSettings.Status.AccessError)
-        panel = ManualSMUPanel(settings=settings)
+        factory = FakeSettingsFactory(QSettings.Status.AccessError)
+        panel = ManualSMUPanel(
+            settings=factory.source(),
+            settings_factory=factory,
+        )
         (
             control,
             driver,
@@ -572,11 +817,16 @@ class ManualSMUSettingsTests(unittest.TestCase):
     def test_cancel_after_access_error_keeps_dirty_retry_and_saves_all_values(
         self,
     ) -> None:
-        settings = FakeStatusSettings(
+        factory = FakeSettingsFactory(
             QSettings.Status.AccessError,
             QSettings.Status.NoError,
+            QSettings.Status.NoError,
         )
-        panel = ManualSMUPanel(settings=settings)
+        settings = factory.source()
+        panel = ManualSMUPanel(
+            settings=settings,
+            settings_factory=factory,
+        )
         (
             control,
             driver,
@@ -620,7 +870,11 @@ class ManualSMUSettingsTests(unittest.TestCase):
 
             self.assertFalse(panel.persistent_settings_dirty)
             self.assertFalse(panel._save_timer.isActive())
-            restored = ManualSMUPanel(settings=settings)
+            self.assertIsNot(factory.instances[0], factory.instances[1])
+            restored = ManualSMUPanel(
+                settings=factory.source(),
+                settings_factory=factory,
+            )
             self.assertEqual("Ch4", restored.channel_combo.currentData())
             self.assertEqual("CV", restored.mode)
             self.assertEqual(0.92, restored.area_cm2)

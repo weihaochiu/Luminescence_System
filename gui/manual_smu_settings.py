@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import QSettings
 
@@ -41,27 +41,43 @@ class ManualSMUSettings:
 class ManualSMUSettingsStore:
     """Read and write the Manual SMU parameter namespace in QSettings."""
 
-    def __init__(self, settings: Any) -> None:
+    def __init__(
+        self,
+        settings: Any,
+        *,
+        settings_factory: Callable[[], Any] | None = None,
+    ) -> None:
         self._settings = settings
+        self._settings_factory = (
+            settings_factory
+            if settings_factory is not None
+            else self._qsettings_factory(settings)
+        )
 
     def load(self) -> ManualSMUSettings:
+        return self._load_from(self._settings)
+
+    @classmethod
+    def _load_from(cls, settings: Any) -> ManualSMUSettings:
         defaults = ManualSMUSettings()
-        channel = str(self._settings.value(CHANNEL_KEY, defaults.channel))
+        channel = str(settings.value(CHANNEL_KEY, defaults.channel))
         if channel not in MANUAL_SMU_CHANNELS:
             channel = defaults.channel
-        mode = str(self._settings.value(MODE_KEY, defaults.mode))
+        mode = str(settings.value(MODE_KEY, defaults.mode))
         if mode not in MANUAL_SMU_MODES:
             mode = defaults.mode
-        area_cm2 = self._finite_value(AREA_CM2_KEY, defaults.area_cm2)
+        area_cm2 = cls._finite_value(settings, AREA_CM2_KEY, defaults.area_cm2)
         if area_cm2 <= 0.0:
             area_cm2 = defaults.area_cm2
-        cc_voltage_compliance_v = self._finite_value(
+        cc_voltage_compliance_v = cls._finite_value(
+            settings,
             CC_VOLTAGE_COMPLIANCE_KEY,
             defaults.cc_voltage_compliance_v,
         )
         if cc_voltage_compliance_v <= 0.0:
             cc_voltage_compliance_v = defaults.cc_voltage_compliance_v
-        cv_current_compliance_ma_cm2 = self._finite_value(
+        cv_current_compliance_ma_cm2 = cls._finite_value(
+            settings,
             CV_CURRENT_COMPLIANCE_KEY,
             defaults.cv_current_compliance_ma_cm2,
         )
@@ -71,12 +87,17 @@ class ManualSMUSettingsStore:
             channel=channel,
             mode=mode,
             area_cm2=area_cm2,
-            cc_current_density_ma_cm2=self._finite_value(
+            cc_current_density_ma_cm2=cls._finite_value(
+                settings,
                 CC_CURRENT_DENSITY_KEY,
                 defaults.cc_current_density_ma_cm2,
             ),
             cc_voltage_compliance_v=cc_voltage_compliance_v,
-            cv_voltage_v=self._finite_value(CV_VOLTAGE_KEY, defaults.cv_voltage_v),
+            cv_voltage_v=cls._finite_value(
+                settings,
+                CV_VOLTAGE_KEY,
+                defaults.cv_voltage_v,
+            ),
             cv_current_compliance_ma_cm2=cv_current_compliance_ma_cm2,
         )
 
@@ -91,14 +112,33 @@ class ManualSMUSettingsStore:
             CV_VOLTAGE_KEY: safe.cv_voltage_v,
             CV_CURRENT_COMPLIANCE_KEY: safe.cv_current_compliance_ma_cm2,
         }
+        writer = self._settings_factory()
         for key, value in entries.items():
-            self._settings.setValue(key, value)
-        self._settings.sync()
-        status = self._settings.status()
+            writer.setValue(key, value)
+        writer.sync()
+        self._raise_for_status(writer, "sync")
+
+        reader = self._settings_factory()
+        if isinstance(reader, QSettings):
+            reader.setFallbacksEnabled(False)
+        reader.sync()
+        self._raise_for_status(reader, "readback sync")
+        if not all(reader.contains(key) for key in entries):
+            raise ManualSMUSettingsWriteError(
+                "Manual SMU settings readback verification failed"
+            )
+        if not self._settings_equal(safe, self._load_from(reader)):
+            raise ManualSMUSettingsWriteError(
+                "Manual SMU settings readback verification failed"
+            )
+
+    @staticmethod
+    def _raise_for_status(settings: Any, operation: str) -> None:
+        status = settings.status()
         if status != QSettings.Status.NoError:
             status_name = getattr(status, "name", type(status).__name__)
             raise ManualSMUSettingsWriteError(
-                f"Manual SMU settings sync failed: {status_name}"
+                f"Manual SMU settings {operation} failed: {status_name}"
             )
 
     def reset(self) -> ManualSMUSettings:
@@ -106,12 +146,71 @@ class ManualSMUSettingsStore:
         self.save(defaults)
         return defaults
 
-    def _finite_value(self, key: str, default: float) -> float:
+    @staticmethod
+    def _finite_value(settings: Any, key: str, default: float) -> float:
         try:
-            value = float(self._settings.value(key, default))
+            value = float(settings.value(key, default))
         except (TypeError, ValueError, OverflowError):
             return default
         return value if math.isfinite(value) else default
+
+    @staticmethod
+    def _settings_equal(
+        expected: ManualSMUSettings,
+        actual: ManualSMUSettings,
+    ) -> bool:
+        if expected.channel != actual.channel or expected.mode != actual.mode:
+            return False
+        numeric_fields = (
+            "area_cm2",
+            "cc_current_density_ma_cm2",
+            "cc_voltage_compliance_v",
+            "cv_voltage_v",
+            "cv_current_compliance_ma_cm2",
+        )
+        return all(
+            math.isclose(
+                getattr(expected, field),
+                getattr(actual, field),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+            for field in numeric_fields
+        )
+
+    @staticmethod
+    def _qsettings_factory(settings: Any) -> Callable[[], QSettings]:
+        if not isinstance(settings, QSettings):
+            raise TypeError(
+                "settings_factory is required for non-QSettings persistence backends"
+            )
+
+        settings_format = settings.format()
+        settings_scope = settings.scope()
+        organization = settings.organizationName()
+        application = settings.applicationName()
+        file_name = settings.fileName()
+        fallbacks_enabled = settings.fallbacksEnabled()
+        atomic_sync_required = settings.isAtomicSyncRequired()
+
+        if not organization and not application and not file_name:
+            raise ValueError("QSettings persistence backend has no storage identity")
+
+        def create() -> QSettings:
+            if organization or application:
+                fresh = QSettings(
+                    settings_format,
+                    settings_scope,
+                    organization,
+                    application,
+                )
+            else:
+                fresh = QSettings(file_name, settings_format)
+            fresh.setFallbacksEnabled(fallbacks_enabled)
+            fresh.setAtomicSyncRequired(atomic_sync_required)
+            return fresh
+
+        return create
 
     @staticmethod
     def _validated_for_save(values: ManualSMUSettings) -> ManualSMUSettings:

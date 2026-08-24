@@ -3,7 +3,7 @@ from __future__ import annotations
 """Presentation-only widget for polarity-checked Manual SMU output."""
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import QSignalBlocker, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -48,12 +48,18 @@ class ManualSMUPanel(QWidget):
         parent: QWidget | None = None,
         limits: SMUSafetyLimits | None = None,
         settings: Any | None = None,
+        settings_factory: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(parent)
         self._limits = limits or SMUSafetyLimits()
         self._ui_state = SMUUIState.disconnected()
         self._settings_store = (
-            ManualSMUSettingsStore(settings) if settings is not None else None
+            ManualSMUSettingsStore(
+                settings,
+                settings_factory=settings_factory,
+            )
+            if settings is not None
+            else None
         )
         self._settings_dirty = False
 
