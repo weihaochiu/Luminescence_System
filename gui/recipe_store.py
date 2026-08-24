@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
+from core.i18n import tr
+
 from .numeric import decimal_from_number, normalize_json_numbers, quantize_number
 from uuid import uuid4
 
@@ -303,9 +305,9 @@ class Recipe:
         warnings: list[str] = []
         if len(self.el_matrix.gains_percent) > 1 or len(self.el_matrix.exposures_ms) > 1:
             if len(self.el_matrix.gains_percent) > 1:
-                warnings.append("不同 EL 點使用不同 Gain；未完成 Gain 校正前不可直接建立定量 EL–I 或 k mapping")
+                warnings.append(tr("recipe.validation.multiple_gains_warning"))
             else:
-                warnings.append("不同 EL 點使用不同曝光；跨曝光比較需扣除匹配 Dark 並做曝光正規化")
+                warnings.append(tr("recipe.validation.multiple_exposures_warning"))
         return warnings
 
     def validate(
@@ -316,53 +318,53 @@ class Recipe:
 
         errors: list[str] = []
         if not self.name.strip():
-            errors.append("Recipe 名稱不可空白")
+            errors.append(tr("recipe.validation.name_required"))
         if self.measurement_type != "el_sequence":
-            errors.append("Recipe 類型必須是 EL Matrix 量測")
+            errors.append(tr("recipe.validation.measurement_type"))
         if self.geometry.active_area_cm2 <= 0:
-            errors.append("Active area 必須大於 0")
+            errors.append(tr("recipe.validation.active_area"))
         expected_channels = [f"CH{index}" for index in range(1, 5)]
         if [channel.channel for channel in self.channels] != expected_channels:
-            errors.append("Channel 必須固定且依序為 CH1～CH4")
+            errors.append(tr("recipe.validation.channels_fixed"))
         enabled_channels = self.enabled_channels()
         if not enabled_channels:
-            errors.append("至少需要啟用一個 Channel")
+            errors.append(tr("recipe.validation.channel_required"))
         for channel in enabled_channels:
             if not math.isfinite(channel.area_cm2) or channel.area_cm2 <= 0:
-                errors.append(f"{channel.channel} 的 Device Area 必須大於 0")
+                errors.append(tr("recipe.validation.channel_area", channel=channel.channel))
 
         matrix = self.el_matrix
         if matrix.output_mode not in {"current_density", "voltage"}:
-            errors.append("EL Matrix Output Mode 必須是 current_density 或 voltage")
+            errors.append(tr("recipe.validation.output_mode"))
         elif matrix.output_mode == "current_density":
             if not matrix.current_density_ma_cm2 or any(
                 not math.isfinite(float(value)) or float(value) <= 0
                 for value in matrix.current_density_ma_cm2
             ):
-                errors.append("Current Density 必須包含大於 0 的有限數值")
+                errors.append(tr("recipe.validation.current_density_values"))
         elif not matrix.voltage_v or any(
             not math.isfinite(float(value))
             for value in matrix.voltage_v
         ):
-            errors.append("Voltage List 必須包含有限數值")
+            errors.append(tr("recipe.validation.voltage_values"))
         if not matrix.exposures_ms or any(
             not math.isfinite(float(value)) or float(value) <= 0
             for value in matrix.exposures_ms
         ):
-            errors.append("Exposure 必須包含大於 0 的有限數值")
+            errors.append(tr("recipe.validation.exposure_values"))
         if not matrix.gains_percent or any(int(value) < 0 for value in matrix.gains_percent):
-            errors.append("Gain 必須包含大於或等於 0 的數值")
+            errors.append(tr("recipe.validation.gain_values"))
         if matrix.repeat < 1:
-            errors.append("每條件拍攝張數必須大於或等於 1")
+            errors.append(tr("recipe.validation.repeat"))
         if matrix.stabilization_ms < 0:
-            errors.append("Output Stabilization Time 不可小於 0")
+            errors.append(tr("recipe.validation.stabilization"))
         if matrix.capture_timeout_s <= 0:
-            errors.append("相機 timeout 必須大於 0")
+            errors.append(tr("recipe.validation.capture_timeout_positive"))
         longest_exposure_s = max(
             (float(value) / 1000.0 for value in matrix.exposures_ms), default=0.0
         )
         if matrix.capture_timeout_s < longest_exposure_s:
-            errors.append("相機 timeout 不可短於最大曝光時間")
+            errors.append(tr("recipe.validation.capture_timeout_exposure"))
 
         maximum_current_ma = float(
             getattr(global_safety, "maximum_current_a", 0.050)
@@ -381,13 +383,13 @@ class Recipe:
             if not math.isfinite(matrix.voltage_compliance_v) or not (
                 0 < matrix.voltage_compliance_v <= maximum_voltage_compliance_v
             ):
-                errors.append("EL Matrix Voltage Compliance 超過全域安全設定")
+                errors.append(tr("recipe.validation.voltage_compliance"))
             if any(
                 self.matrix_source_current_ma(channel, float(density)) > maximum_current_ma
                 for channel in enabled_channels
                 for density in matrix.current_density_ma_cm2
             ):
-                errors.append("EL Matrix 計算出的 Source Current 超過全域安全設定")
+                errors.append(tr("recipe.validation.source_current"))
         elif matrix.output_mode == "voltage":
             if any(
                 not maximum_voltage_v >= float(voltage) >= float(
@@ -396,40 +398,40 @@ class Recipe:
                 for voltage in matrix.voltage_v
                 if math.isfinite(float(voltage))
             ):
-                errors.append("EL Matrix Voltage List 超過全域安全設定")
+                errors.append(tr("recipe.validation.voltage_safety"))
             if not math.isfinite(matrix.current_compliance_ma) or not (
                 0 < matrix.current_compliance_ma <= maximum_current_compliance_ma
             ):
-                errors.append("EL Matrix Current Compliance 超過全域安全設定")
+                errors.append(tr("recipe.validation.current_compliance"))
         if self.matrix_worst_power_mw() > maximum_power_mw:
-            errors.append("EL Matrix 最壞 Compliance 功率超過全域安全設定")
+            errors.append(tr("recipe.validation.compliance_power"))
 
         if self.dark_iv.enabled:
             if self.dark_iv.step_v <= 0 or self.dark_iv.start_v == self.dark_iv.stop_v:
-                errors.append("Dark I–V 必須設定非零範圍及大於 0 的 Step")
+                errors.append(tr("recipe.validation.dark_iv_range"))
             if max(abs(self.dark_iv.start_v), abs(self.dark_iv.stop_v)) > maximum_voltage_v:
-                errors.append("Dark I–V 掃描電壓超過全域安全設定")
+                errors.append(tr("recipe.validation.dark_iv_voltage"))
             if not 0 < self.dark_iv.current_compliance_ma <= maximum_current_compliance_ma:
-                errors.append("Dark I–V current compliance 超過全域安全設定")
+                errors.append(tr("recipe.validation.dark_iv_compliance"))
 
         if not self.output.selected_formats():
-            errors.append("至少必須選擇一種影像輸出格式")
+            errors.append(tr("recipe.validation.output_format"))
         if not self.output.save_raw_frames:
-            errors.append("每次 capture 的輸出紀錄是必要輸出")
+            errors.append(tr("recipe.validation.capture_records"))
         if not self.output.save_summary_csv:
-            errors.append("Dark I–V 與 EL scan summary CSV 是必要輸出")
+            errors.append(tr("recipe.validation.summary_csv"))
         if not self.output.save_json:
-            errors.append("EL 量測必須保存 JSON metadata")
+            errors.append(tr("recipe.validation.json_metadata"))
         if not self.output.save_recipe_snapshot:
-            errors.append("EL 量測必須保存 Recipe 快照")
+            errors.append(tr("recipe.validation.recipe_snapshot"))
         if self.output.export_pixel_csv and not any((
             self.output.pixel_csv_raw,
             self.output.pixel_csv_dark_corrected,
             self.output.pixel_csv_exposure_normalized,
         )):
-            errors.append("啟用全解析度像素 CSV 時，至少要選擇一種輸出內容")
+            errors.append(tr("recipe.validation.pixel_csv_content"))
         if self.output.export_pixel_csv and not self.output.format_tiff:
-            errors.append("Pixel CSV 後處理需要 TIFF 科學影像來源")
+            errors.append(tr("recipe.validation.pixel_csv_tiff"))
         if (
             self.output.export_pixel_csv
             and (
@@ -438,7 +440,7 @@ class Recipe:
             )
             and not self.el_matrix.dark_frame_enabled
         ):
-            errors.append("Dark-corrected / Exposure-normalized Pixel CSV 需要 Shared Dark")
+            errors.append(tr("recipe.validation.pixel_csv_dark"))
         return errors
 
     def estimated_time_s(self) -> float:
@@ -657,8 +659,8 @@ class Recipe:
             str(dark_iv_data.get("direction", "forward")),
         )
         dark_iv_data["compliance_action"] = legacy_compliance_actions.get(
-            str(dark_iv_data.get("compliance_action", "abort")),
-            str(dark_iv_data.get("compliance_action", "abort")),
+            str(dark_iv_data.get("compliance_action", "confirm")),
+            str(dark_iv_data.get("compliance_action", "confirm")),
         )
         raw_state = str(data.get("state", "draft"))
         canonical_state = legacy_states.get(raw_state, raw_state)
@@ -783,7 +785,7 @@ class RecipeStore:
         important = {
             "name", "channels", "el_matrix", "polarity", "dark_iv", "output",
         }
-        review = [f"缺少重要欄位：{key}" for key in sorted(important - set(data))]
+        review = [tr("recipe.migration_missing_field", key=key) for key in sorted(important - set(data))]
         recipe = Recipe.from_dict(data)
         recipe.recipe_id = str(uuid4())
         recipe.version = 1

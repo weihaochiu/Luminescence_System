@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.i18n import tr
+from core.i18n import i18n, tr
 
 from .instrument_state_manager import SMUInstrumentState, SMUUIState
 from .manual_smu_settings import (
@@ -98,12 +98,12 @@ class ManualSMUPanel(QWidget):
         self.handover_button = QPushButton(tr("smu.safe_handover_manual"))
         self.handover_button.setVisible(False)
 
-        form = QFormLayout()
-        form.addRow(tr("smu.output_channel"), self.channel_combo)
-        form.addRow(tr("smu.output_mode"), self.mode_combo)
-        form.addRow(tr("smu.device_area"), self.area_spin)
-        form.addRow(self.setpoint_label, self.setpoint_spin)
-        form.addRow(self.compliance_label, self.compliance_spin)
+        self.form = QFormLayout()
+        self.form.addRow(tr("smu.output_channel"), self.channel_combo)
+        self.form.addRow(tr("smu.output_mode"), self.mode_combo)
+        self.form.addRow(tr("smu.device_area"), self.area_spin)
+        self.form.addRow(self.setpoint_label, self.setpoint_spin)
+        self.form.addRow(self.compliance_label, self.compliance_spin)
 
         self.output_value = QLabel("OFF")
         self.active_channel_value = QLabel("—")
@@ -112,21 +112,21 @@ class ManualSMUPanel(QWidget):
         self.current_density_value = QLabel("— mA/cm²")
         self.compliance_value = QLabel("—")
         self.compliance_value.setStyleSheet("color: #b3261e; font-weight: 600;")
-        readback = QFormLayout()
-        readback.addRow(tr("smu.output_status"), self.output_value)
-        readback.addRow(tr("smu.channel_current"), self.active_channel_value)
-        readback.addRow(tr("smu.polarity"), self.factor_value)
-        readback.addRow(tr("smu.voltage_measured"), self.voltage_value)
-        readback.addRow(tr("smu.current_density_measured"), self.current_density_value)
-        readback.addRow(tr("smu.compliance_status"), self.compliance_value)
+        self.readback_form = QFormLayout()
+        self.readback_form.addRow(tr("smu.output_status"), self.output_value)
+        self.readback_form.addRow(tr("smu.channel_current"), self.active_channel_value)
+        self.readback_form.addRow(tr("smu.polarity"), self.factor_value)
+        self.readback_form.addRow(tr("smu.voltage_measured"), self.voltage_value)
+        self.readback_form.addRow(tr("smu.current_density_measured"), self.current_density_value)
+        self.readback_form.addRow(tr("smu.compliance_status"), self.compliance_value)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 10)
         layout.addWidget(self.state_message)
-        layout.addLayout(form)
+        layout.addLayout(self.form)
         layout.addWidget(self.output_button)
         layout.addWidget(self.handover_button)
-        layout.addLayout(readback)
+        layout.addLayout(self.readback_form)
 
         self.output_button.clicked.connect(self._emit_toggle)
         self.handover_button.clicked.connect(self.handover_requested)
@@ -150,6 +150,37 @@ class ManualSMUPanel(QWidget):
         self.setpoint_spin.valueChanged.connect(self._on_mode_value_changed)
         self.compliance_spin.valueChanged.connect(self._on_mode_value_changed)
         self._update_enabled()
+        i18n.language_changed.connect(self.retranslate)
+
+    def retranslate(self, _language: str = "") -> None:
+        blocker = QSignalBlocker(self.mode_combo)
+        self.mode_combo.setItemText(self.mode_combo.findData("CC"), tr("smu.constant_current_density"))
+        self.mode_combo.setItemText(self.mode_combo.findData("CV"), tr("smu.constant_voltage"))
+        del blocker
+        form_keys = (
+            (self.channel_combo, "smu.output_channel"),
+            (self.mode_combo, "smu.output_mode"),
+            (self.area_spin, "smu.device_area"),
+        )
+        for field, key in form_keys:
+            label = self.form.labelForField(field)
+            if isinstance(label, QLabel):
+                label.setText(tr(key))
+        readback_keys = (
+            (self.output_value, "smu.output_status"),
+            (self.active_channel_value, "smu.channel_current"),
+            (self.factor_value, "smu.polarity"),
+            (self.voltage_value, "smu.voltage_measured"),
+            (self.current_density_value, "smu.current_density_measured"),
+            (self.compliance_value, "smu.compliance_status"),
+        )
+        for field, key in readback_keys:
+            label = self.readback_form.labelForField(field)
+            if isinstance(label, QLabel):
+                label.setText(tr(key))
+        self.handover_button.setText(tr("smu.safe_handover_manual"))
+        self._configure_mode_widgets(self.mode)
+        self.apply_ui_state(self._ui_state)
 
     @property
     def mode(self) -> str:
@@ -192,7 +223,7 @@ class ManualSMUPanel(QWidget):
         self.state_message.setText(message)
 
     def update_active_channel(self, channel_state: str) -> None:
-        labels = {"": "—", "SWITCHING": "切換中…", "FAULT": "故障"}
+        labels = {"": "—", "SWITCHING": tr("common.switching"), "FAULT": tr("common.fault")}
         self.active_channel_value.setText(labels.get(channel_state, channel_state))
 
     def update_polarity(self, result: object) -> None:
@@ -200,11 +231,11 @@ class ManualSMUPanel(QWidget):
             self.factor_value.setText(tr("smu.awaiting_output_confirmation"))
             return
         labels = {
-            PolarityState.UNKNOWN: "待輸出確認",
-            PolarityState.INVALID: "無效／未判定",
-            PolarityState.NORMAL: "正常",
-            PolarityState.REVERSED: "反向",
-            PolarityState.FAILED: "確認失敗",
+            PolarityState.UNKNOWN: tr("smu.polarity_unknown"),
+            PolarityState.INVALID: tr("smu.polarity_invalid"),
+            PolarityState.NORMAL: tr("smu.polarity_normal"),
+            PolarityState.REVERSED: tr("smu.polarity_reversed"),
+            PolarityState.FAILED: tr("smu.polarity_failed"),
         }
         self.factor_value.setText(labels[result.state])
         self.voltage_value.setText(
@@ -243,7 +274,7 @@ class ManualSMUPanel(QWidget):
             density = reading.current_a * 1000.0 / self.area_cm2
             self.current_density_value.setText(f"{density:.2f} mA/cm²")
         if reading.compliance_tripped:
-            kind = "Current" if self.mode == "CV" else "Voltage"
+            kind = tr("smu.current") if self.mode == "CV" else tr("smu.voltage")
             self.compliance_value.setText(tr("smu.compliance_active", kind=kind))
         else:
             self.compliance_value.setText("—")

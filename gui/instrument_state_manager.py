@@ -8,6 +8,8 @@ import logging
 
 from PySide6.QtCore import QObject, Signal
 
+from core.i18n import i18n, tr
+
 from .smu_control import (
     SMUControlManager,
     SMUOperationState,
@@ -68,8 +70,8 @@ class SMUUIState:
             manual_off_enabled=False,
             emergency_enabled=False,
             handover_enabled=False,
-            status_text="SMU 未連線",
-            manual_lock_reason="請先掃描並連線支援的 SMU。",
+            status_text=tr("smu.state.disconnected_status"),
+            manual_lock_reason=tr("smu.state.disconnected_reason"),
             output_state=SMUOutputState.UNKNOWN,
         )
 
@@ -102,6 +104,10 @@ class InstrumentStateManager(QObject):
         control.output_changed.connect(self.update_output)
         control.output_state_changed.connect(self.update_output_state)
         control.output_confirmation_changed.connect(self.update_output_confirmation)
+        i18n.language_changed.connect(self._on_language_changed)
+
+    def _on_language_changed(self, _language: str = "") -> None:
+        self._publish(force=True)
 
     @property
     def current(self) -> SMUUIState:
@@ -141,7 +147,7 @@ class InstrumentStateManager(QObject):
         )
         self._connected = False
         self._supported = False
-        self._device_label = "SMU 通訊失聯" if preserve_unknown else ""
+        self._device_label = ""
         self._ownership = (
             self._control.ownership if preserve_unknown else SMUOwnership.IDLE
         )
@@ -161,7 +167,7 @@ class InstrumentStateManager(QObject):
         self._connection_state = SMUInstrumentState.ERROR
         self._connected = False
         self._supported = False
-        self._device_label = message.strip()
+        self._device_label = ""
         self._publish()
 
     def update_ownership(self, ownership: str) -> None:
@@ -323,53 +329,53 @@ class InstrumentStateManager(QObject):
         output = self._output_state.value
         device = self._device_label or "SMU"
         if state is SMUInstrumentState.DISCONNECTED:
-            return "SMU 未連線", "請先掃描並連線支援的 SMU。"
+            return tr("smu.state.disconnected_status"), tr("smu.state.disconnected_reason")
         if state is SMUInstrumentState.CONNECTING:
-            return "SMU 連線與安全初始化中", "正在確認 OUTPUT OFF。"
+            return tr("smu.state.connecting_status"), tr("smu.state.connecting_reason")
         if state is SMUInstrumentState.EMERGENCY_STOP:
             return (
-                f"● {device} 已連線\nEmergency 已鎖定｜OUTPUT {output}",
-                "新輸出已封鎖；安全關閉正在等待目前 VISA I/O 完成。",
+                tr("smu.state.emergency_status", device=device, output=output),
+                tr("smu.state.emergency_reason"),
             )
         if state is SMUInstrumentState.AUTO_RUNNING:
             return (
-                f"● {device} 已連線\nRecipe 控制中｜OUTPUT {output}",
-                "Recipe 擁有 SMU；請使用安全交接後再手動控制。",
+                tr("smu.state.recipe_status", device=device, output=output),
+                tr("smu.state.recipe_reason"),
             )
         if state is SMUInstrumentState.UNEXPECTED_OUTPUT_ON:
             return (
-                f"⚠ {device} 已連線\n偵測到未預期 OUTPUT ON｜需要安全復歸",
-                "編輯與輸出 ON 已封鎖；請先按 OUTPUT OFF 或 Emergency OFF。",
+                tr("smu.state.unexpected_status", device=device),
+                tr("smu.state.unexpected_reason"),
             )
         if state is SMUInstrumentState.OUTPUT_UNKNOWN:
             reason = self._control.fault_reason
             if "routing" in reason.casefold():
-                warning = "SMU Routing 狀態異常，已進入安全鎖定"
+                warning = tr("smu.state.unknown_routing_reason")
             else:
-                warning = "⚠ 無法確認 SMU 輸出狀態\n請確認 SMU 前面板 OUTPUT 已關閉"
+                warning = tr("smu.state.unknown_output_reason")
             return (
-                f"⚠ {device}\nSMU 安全鎖定｜OUTPUT UNKNOWN",
+                tr("smu.state.unknown_status", device=device),
                 warning,
             )
         if state is SMUInstrumentState.MANUAL_OUTPUT_ON:
             return (
-                f"● {device} 已連線\n手動輸出中｜OUTPUT ON",
-                "手動輸出已開啟；修改設定前請先按 OUTPUT OFF。",
+                tr("smu.state.manual_on_status", device=device),
+                tr("smu.state.manual_on_reason"),
             )
         if state is SMUInstrumentState.TRANSITIONING:
             return (
-                f"● {device} 已連線\n安全切換中｜OUTPUT {output}",
-                "請等待目前的 SMU I/O 與安全確認完成。",
+                tr("smu.state.transitioning_status", device=device, output=output),
+                tr("smu.state.transitioning_reason"),
             )
         if state is SMUInstrumentState.ERROR:
             if not self._supported:
-                reason = "此 VISA 儀器沒有受支援的輸出驅動程式。"
+                reason = tr("smu.state.unsupported_reason")
             elif not self._output_confirmed_off:
-                reason = "OUTPUT OFF 尚未確認；請執行安全復歸或 Emergency OFF。"
+                reason = tr("smu.state.off_unconfirmed_reason")
             else:
-                reason = "SMU 狀態不一致或安全關閉失敗，手動輸出已封鎖。"
-            return f"⚠ {device}\nSMU 錯誤｜OUTPUT {output}", reason
+                reason = tr("smu.state.inconsistent_reason")
+            return tr("smu.state.error_status", device=device, output=output), reason
         return (
-            f"● {device} 已連線\n手動控制可用｜OUTPUT OFF",
+            tr("smu.state.ready_status", device=device),
             "",
         )

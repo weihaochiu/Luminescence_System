@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from core.error_registry import (
+    ALLOWED_ACTIONS,
     ERROR_CODE_PATTERN,
     VALID_SUBSYSTEMS,
     ErrorDefinition,
@@ -57,6 +58,21 @@ class ErrorRegistryTests(unittest.TestCase):
                         )
                     ]
                 )
+
+    def test_unknown_action_is_rejected(self) -> None:
+        self.assertEqual({"retry", "reconnect", "safe_shutdown"}, set(ALLOWED_ACTIONS))
+        with self.assertRaisesRegex(ValueError, "Invalid action"):
+            ErrorRegistry(
+                [
+                    ErrorDefinition(
+                        "CAM-999", "camera", Severity.ERROR, True,
+                        "title", "message", (), ("solution",), ("refresh_everything",),
+                    )
+                ]
+            )
+
+    def test_measurement_failure_has_no_automatic_retry(self) -> None:
+        self.assertNotIn("retry", default_error_registry.require("MEAS-201").actions)
 
 
 if __name__ == "__main__":

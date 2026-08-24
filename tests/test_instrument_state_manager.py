@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import unittest
 
+from core.i18n import Language, configure_i18n, set_language
 from gui.instrument_state_manager import InstrumentStateManager, SMUInstrumentState
 from gui.smu_control import SMUControlManager, SMUOperationState, SMUOwnership
 
 
 class InstrumentStateManagerTests(unittest.TestCase):
     def setUp(self) -> None:
+        configure_i18n(None)
         self.control = SMUControlManager()
         self.manager = InstrumentStateManager(self.control)
 
     def tearDown(self) -> None:
         self.control.shutdown()
+        configure_i18n(None)
 
     def test_connection_reaches_ready_manual_and_enables_panel(self) -> None:
         self.manager.set_connecting("B2901BL")
@@ -90,6 +93,14 @@ class InstrumentStateManagerTests(unittest.TestCase):
         self.assertTrue(state.manual_off_enabled)
         self.assertEqual("UNKNOWN", state.output_state.value)
         self.assertIn("無法確認", state.manual_lock_reason)
+
+    def test_user_visible_snapshot_rebuilds_when_language_changes(self) -> None:
+        self.assertEqual("SMU 未連線", self.manager.current.status_text)
+        set_language(Language.EN_US, persist=False)
+        self.assertEqual("SMU Disconnected", self.manager.current.status_text)
+        self.assertIn("supported SMU", self.manager.current.manual_lock_reason)
+        set_language(Language.ZH_TW, persist=False)
+        self.assertEqual("SMU 未連線", self.manager.current.status_text)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSignalBlocker, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.i18n import tr
+from core.i18n import i18n, tr
 
 from .smu_base import SMUDevice
 from .instrument_state_manager import SMUInstrumentState, SMUUIState
@@ -32,6 +32,10 @@ class DevicePanel(QWidget):
         super().__init__(parent)
         self.smu_devices: list[SMUDevice] = []
         self.recipes: list[Recipe] = []
+        self._recipe_capture_counts: dict[str, int] = {}
+        self._last_smu_ui_state: SMUUIState | None = None
+        self._status_mode = "disconnected"
+        self._status_device = ""
 
         self.camera_list = QListWidget()
         self.camera_list.setMaximumHeight(118)
@@ -92,7 +96,53 @@ class DevicePanel(QWidget):
         )
         self.smu_list.currentRowChanged.connect(self._emit_selected_address)
         self.recipe_list.currentRowChanged.connect(self._emit_selected_recipe)
+        i18n.language_changed.connect(self.retranslate)
         self._update_buttons()
+
+    def retranslate(self, _language: str = "") -> None:
+        self.smu_list.setToolTip(tr("smu.select_tooltip"))
+        self.recipe_list.setToolTip(tr("recipe.available_only_tooltip"))
+        self.recipe_empty_label.setText(tr("recipe.none_available"))
+        self.smu_scan_button.setText(tr("common.rescan"))
+        self.smu_connect_button.setText(tr("common.connect"))
+        self.smu_disconnect_button.setText(tr("common.disconnect"))
+        self._retranslate_smu_items()
+        self._retranslate_recipe_items()
+        if self._last_smu_ui_state is not None:
+            self.apply_smu_ui_state(self._last_smu_ui_state)
+        else:
+            status = {
+                "scanning": tr("common.state_scanning"),
+                "connecting": tr("common.state_connecting"),
+                "connected": tr("common.state_connected_to", device=self._status_device),
+                "error": tr("common.state_error"),
+                "disconnected": tr("common.state_disconnected"),
+            }[self._status_mode]
+            self.smu_state.setText(status)
+
+    def _retranslate_smu_items(self) -> None:
+        blocker = QSignalBlocker(self.smu_list)
+        for row, device in enumerate(self.smu_devices):
+            item = self.smu_list.item(row)
+            if item is None:
+                continue
+            suffix = tr("smu.b2900_driver_suffix") if device.supported else tr("smu.generic_scpi_suffix")
+            serial = tr("smu.serial_line", serial=device.serial_number) if device.serial_number else ""
+            item.setText(tr("smu.device_list_entry", name=device.display_name, suffix=suffix, serial=serial, resource=device.visa_address))
+        del blocker
+
+    def _retranslate_recipe_items(self) -> None:
+        blocker = QSignalBlocker(self.recipe_list)
+        for row, recipe in enumerate(self.recipes):
+            item = self.recipe_list.item(row)
+            if item is None:
+                continue
+            captures = self._recipe_capture_counts.get(
+                recipe.recipe_id, recipe.matrix_capture_counts()["overall"]
+            )
+            item.setText(tr("recipe.list_summary", name=recipe.name, version=recipe.version, channels=len(recipe.enabled_channels()), captures=captures))
+            item.setToolTip((recipe.description + "\n" if recipe.description else "") + tr("recipe.preview_tooltip"))
+        del blocker
 
     def set_smu_devices(self, devices: list[SMUDevice], preferred_address: str = "") -> None:
         self.smu_devices = list(devices)
@@ -130,6 +180,7 @@ class DevicePanel(QWidget):
         global_safety: object | None = None,
     ) -> None:
         self.recipes = list(recipes)
+        self._recipe_capture_counts = {}
         self.recipe_list.clear()
         preferred_row = -1
         for row, recipe in enumerate(self.recipes):
@@ -140,6 +191,7 @@ class DevicePanel(QWidget):
                 ).capture_counts()
             except ValueError:
                 counts = recipe.matrix_capture_counts()
+            self._recipe_capture_counts[recipe.recipe_id] = counts["overall"]
             self.recipe_list.addItem(
                 tr("recipe.list_summary", name=recipe.name, version=recipe.version,
                    channels=len(recipe.enabled_channels()), captures=counts["overall"])
@@ -161,16 +213,23 @@ class DevicePanel(QWidget):
         return self.recipes[row] if 0 <= row < len(self.recipes) else None
 
     def set_smu_scanning(self) -> None:
+        self._last_smu_ui_state = None
+        self._status_mode = "scanning"
         self.smu_state.setText(tr("common.state_scanning"))
         self.smu_state.setStyleSheet("color: #c48a00; font-weight: 600;")
         self._set_busy(True)
 
     def set_smu_connecting(self) -> None:
+        self._last_smu_ui_state = None
+        self._status_mode = "connecting"
         self.smu_state.setText(tr("common.state_connecting"))
         self.smu_state.setStyleSheet("color: #c48a00; font-weight: 600;")
         self._set_busy(True)
 
     def set_smu_connected(self, device: SMUDevice) -> None:
+        self._last_smu_ui_state = None
+        self._status_mode = "connected"
+        self._status_device = device.model or device.display_name
         self.smu_state.setText(tr("common.state_connected_to", device=device.model or device.display_name))
         self.smu_state.setStyleSheet("color: #16823b; font-weight: 600;")
         self.smu_list.setEnabled(False)
@@ -179,13 +238,16 @@ class DevicePanel(QWidget):
         self.smu_disconnect_button.setEnabled(True)
 
     def set_smu_disconnected(self, error: bool = False) -> None:
-        self.smu_state.setText("● 錯誤" if error else "● 未連線")
+        self._last_smu_ui_state = None
+        self._status_mode = "error" if error else "disconnected"
+        self.smu_state.setText(tr("common.state_error") if error else tr("common.state_disconnected"))
         color = "#c62828" if error else "#687078"
         self.smu_state.setStyleSheet(f"color: {color}; font-weight: 600;")
         self.smu_list.setEnabled(True)
         self._update_buttons()
 
     def apply_smu_ui_state(self, state: SMUUIState) -> None:
+        self._last_smu_ui_state = state
         self.smu_state.setText(state.status_text)
         colors = {
             SMUInstrumentState.DISCONNECTED: "#687078",

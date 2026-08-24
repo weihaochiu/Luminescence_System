@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.i18n import tr
+from core.i18n import i18n, tr
 
 from .responsive_layout import LayoutMode
 
@@ -60,6 +60,22 @@ class MeasurementControlBar(QFrame):
         self.grid.setVerticalSpacing(6)
         self._configure_size_policies()
         self.set_layout_mode(LayoutMode.WIDE)
+        i18n.language_changed.connect(self.retranslate)
+
+    def retranslate(self, _language: str = "") -> None:
+        self.sample_label.setText(tr("measurement.sample_information"))
+        self.path_label.setText(tr("measurement.output_directory"))
+        self.measurement_path_edit.setPlaceholderText(tr("measurement.select_output_directory"))
+        self.measurement_path_button.setText(tr("common.browse"))
+        self.recipe_label.setText("Recipe")
+        if not self.sample_id_edits:
+            self.sample_id_edit.setPlaceholderText(tr("measurement.active_channels_placeholder"))
+        else:
+            for channel, edit in self.sample_id_edits.items():
+                edit.setPlaceholderText(tr("measurement.sample_id_for_channel", channel=channel))
+        self.start_measurement_button.setText(tr("measurement.start"))
+        self.stop_measurement_button.setText(tr("common.stop"))
+        self.refresh_metrics()
 
     def set_active_channels(self, channels: tuple[str, ...] | list[str]) -> None:
         previous = self.sample_ids()

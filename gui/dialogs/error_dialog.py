@@ -35,7 +35,7 @@ class ErrorDialog(QDialog):
         event: ErrorEvent,
         parent: QWidget | None = None,
         *,
-        action_handlers: Mapping[str, Callable[[ErrorEvent], None]] | None = None,
+        action_handlers: Mapping[str, Callable[[ErrorEvent], bool | None]] | None = None,
         error_center_opener: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(parent)
@@ -94,6 +94,11 @@ class ErrorDialog(QDialog):
         self.copy_button.clicked.connect(self.copy_diagnostics)
         self.details_button.clicked.connect(self.toggle_details)
         self.center_button.clicked.connect(self.open_error_center)
+        self.action_status_label = QLabel()
+        self.action_status_label.setObjectName("errorActionStatus")
+        self.action_status_label.setWordWrap(True)
+        self.action_status_label.setVisible(False)
+        self._action_status_key = ""
 
         button_row = QHBoxLayout()
         button_row.addWidget(self.copy_button)
@@ -102,6 +107,8 @@ class ErrorDialog(QDialog):
         button_row.addStretch()
         self.action_buttons: dict[str, QPushButton] = {}
         for action in event.definition.actions:
+            if action not in self._handlers:
+                continue
             button = QPushButton()
             button.setObjectName(f"errorAction_{action}")
             button.clicked.connect(lambda _checked=False, selected=action: self._run_action(selected))
@@ -122,6 +129,7 @@ class ErrorDialog(QDialog):
         layout.addWidget(self.solutions_heading)
         layout.addWidget(self.solutions_label)
         layout.addWidget(self.details_edit, 1)
+        layout.addWidget(self.action_status_label)
         layout.addLayout(button_row)
         self.setLayout(layout)
         self._retranslate()
@@ -164,6 +172,8 @@ class ErrorDialog(QDialog):
         }
         for action, button in self.action_buttons.items():
             button.setText(tr(action_keys[action]))
+        if self._action_status_key:
+            self.action_status_label.setText(tr(self._action_status_key))
         close = self.close_buttons.button(QDialogButtonBox.StandardButton.Close)
         if close is not None:
             close.setText(tr("common.close"))
@@ -184,5 +194,23 @@ class ErrorDialog(QDialog):
     def _run_action(self, action: str) -> None:
         self.action_requested.emit(action, self.error_event)
         handler = self._handlers.get(action)
-        if handler is not None:
-            handler(self.error_event)
+        if handler is None:
+            return
+        for button in self.action_buttons.values():
+            button.setEnabled(False)
+        self._action_status_key = "errors.action_started"
+        self.action_status_label.setText(tr(self._action_status_key))
+        self.action_status_label.setVisible(True)
+        try:
+            accepted = handler(self.error_event)
+        except Exception:
+            for button in self.action_buttons.values():
+                button.setEnabled(True)
+            self._action_status_key = "errors.action_failed"
+            self.action_status_label.setText(tr(self._action_status_key))
+            raise
+        if accepted is False:
+            for button in self.action_buttons.values():
+                button.setEnabled(True)
+            self._action_status_key = "errors.action_unavailable"
+            self.action_status_label.setText(tr(self._action_status_key))

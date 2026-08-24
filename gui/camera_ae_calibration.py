@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from time import monotonic
 from typing import Any, Iterable
+
+from core.i18n import tr
 from uuid import uuid4
 
 
@@ -242,14 +244,14 @@ def validate_monotonic_points(
 ) -> tuple[bool, str]:
     usable = _usable_points(points)
     if len(usable) < 2:
-        return False, "有效且未飽和的 calibration points 不足"
+        return False, tr("camera.calibration_points_insufficient")
     previous = float(usable[0].mean_effective_dn_percent)
     for point in usable[1:]:
         current = float(point.mean_effective_dn_percent)
         if current < previous - float(tolerance):
             return (
                 False,
-                "AE Calibration 無法建立單調映射，請確認場景是否在校正期間改變。",
+                tr("camera.calibration_mapping_failed"),
             )
         previous = max(previous, current)
     return True, ""

@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
+from core.i18n import tr
+
 from .el_matrix_plan import ELMatrixPlan
 from .measurement_execution_plan import effective_matrix_capture_axes
 from .recipe_store import Recipe
@@ -51,60 +53,54 @@ def collect_preflight_errors(
 ) -> list[str]:
     errors = list(recipe.validate(global_safety))
     if not smu_metadata.get("connected"):
-        errors.append("SMU 未連線")
+        errors.append(tr("preflight.smu_disconnected"))
     if not smu_metadata.get("supported"):
-        errors.append("目前 SMU 不是已支援且完成初始化的 Keysight B2900")
+        errors.append(tr("preflight.smu_unsupported"))
     manufacturer = str(smu_metadata.get("manufacturer", "")).casefold()
     model = str(smu_metadata.get("model", "")).casefold()
     if "keysight" not in manufacturer or not model.startswith("b29"):
-        errors.append("SMU identity 與 Keysight B2900 要求不符")
+        errors.append(tr("preflight.smu_identity_mismatch"))
     if not smu_output_confirmed_off:
-        errors.append("SMU OUTPUT OFF 未經實際 readback 確認")
+        errors.append(tr("preflight.smu_off_unconfirmed"))
 
     if not relay_connected:
-        errors.append("Relay 未連線")
+        errors.append(tr("preflight.relay_disconnected"))
     try:
-        errors.extend(f"Relay 設定：{item}" for item in relay_settings.validate())
+        errors.extend(tr("preflight.relay_settings", detail=item) for item in relay_settings.validate())
         mapping = dict(relay_settings.smu_output_channels)
         expected = {f"Ch{index}" for index in range(1, 5)}
         if set(mapping) != expected or len(set(mapping.values())) != 4:
-            errors.append("Relay CH1～CH4 logical mapping 不完整或不唯一")
+            errors.append(tr("preflight.relay_mapping_invalid"))
         white = relay_settings.group("white_light")
         if white is None or not white.enabled:
-            errors.append("white_light group 不存在或未啟用")
+            errors.append(tr("preflight.white_light_missing"))
         elif set(mapping.values()) & set(white.members):
-            errors.append("Relay routing mapping 與 white_light group 重疊")
+            errors.append(tr("preflight.relay_mapping_overlap"))
     except Exception as exc:
-        errors.append(f"Relay mapping 無法驗證：{exc}")
+        errors.append(tr("preflight.relay_mapping_unverified", detail=exc))
 
     if not camera_connected:
-        errors.append("Camera 未連線")
+        errors.append(tr("preflight.camera_disconnected"))
     if current_camera.get("ScientificMeasurementReady") is not True:
-        errors.append(
-            "Camera scientific MONO16 尚未通過實際 uint16 H×W frame 驗證；"
-            "正式量測已阻擋"
-        )
+        errors.append(tr("preflight.camera_scientific_unverified"))
     exposure_range = current_camera.get("exposure_range_us")
     gain_range = current_camera.get("gain_range")
     axes = effective_matrix_capture_axes(recipe)
     if not exposure_range:
-        errors.append("Camera 未提供 Exposure SDK capability")
+        errors.append(tr("preflight.camera_exposure_capability_missing"))
     else:
         low, high = float(exposure_range[0]), float(exposure_range[1])
         if any(not low <= value * 1000.0 <= high for value in axes.exposures_ms):
-            errors.append(f"Exposure 超出 Camera SDK capability：{low:g}～{high:g} us")
+            errors.append(tr("preflight.camera_exposure_out_of_range", low=f"{low:g}", high=f"{high:g}"))
     if not gain_range:
-        errors.append("Camera 未提供 Gain SDK capability")
+        errors.append(tr("preflight.camera_gain_capability_missing"))
     else:
         low, high = int(gain_range[0]), int(gain_range[1])
         if any(not low <= value <= high for value in axes.gains_percent):
-            errors.append(f"Gain 超出 Camera SDK capability：{low}～{high}")
+            errors.append(tr("preflight.camera_gain_out_of_range", low=low, high=high))
     for key in ("ResolutionId", "Resolution", "PixelFormat", "BitDepth", "ContainerDtype"):
         if current_camera.get(key) != camera_snapshot.get(key):
-            errors.append(
-                f"Camera {key} 與 Measurement Snapshot 不符："
-                f"snapshot={camera_snapshot.get(key)!r}, current={current_camera.get(key)!r}"
-            )
+            errors.append(tr("preflight.camera_snapshot_mismatch", key=key, snapshot=repr(camera_snapshot.get(key)), current=repr(current_camera.get(key))))
 
     root = Path(output_root)
     try:
@@ -120,10 +116,8 @@ def collect_preflight_errors(
         )
         available = shutil.disk_usage(root).free
         if available < required:
-            errors.append(
-                f"輸出磁碟空間不足：estimated={required} bytes, available={available} bytes"
-            )
+            errors.append(tr("preflight.disk_space_insufficient", required=required, available=available))
     except Exception as exc:
-        errors.append(f"輸出目錄不可建立或不可寫入：{exc}")
+        errors.append(tr("preflight.output_unwritable", detail=exc))
     # Keep the dialog useful: report each unique blocker exactly once.
     return list(dict.fromkeys(errors))

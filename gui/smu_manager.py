@@ -5,6 +5,8 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from core.i18n import tr
+
 from .keysight_b2900 import KeysightB2900Driver, is_keysight_b2900
 from .smu_base import SMUDevice, SMUDriver
 from .smu_control import SMUControlManager
@@ -82,21 +84,45 @@ class SMUManager(QObject):
         if self.is_busy:
             return
         if self.is_connected:
-            self.error_occurred.emit("請先中斷目前的 SMU 連線，再重新掃描 VISA 儀器。")
+            self.error_occurred.emit(tr("smu.manager.disconnect_before_scan"))
             return
         self.scan_started.emit()
-        self.status_changed.emit("正在掃描 VISA 儀器…")
+        self.status_changed.emit(tr("smu.manager.scanning"))
         self._start_operation("scan", self._scan_worker)
 
     def connect_device(self, device: SMUDevice) -> None:
         if self.is_busy:
             return
         if self.is_connected:
-            self.error_occurred.emit("目前已有 SMU 連線；請先中斷連線再選擇其他儀器。")
+            self.error_occurred.emit(tr("smu.manager.disconnect_before_connect"))
             return
         self.connection_started.emit(device.visa_address)
-        self.status_changed.emit(f"正在連線 SMU：{device.visa_address}")
+        self.status_changed.emit(tr("smu.manager.connecting", resource=device.visa_address))
         self._start_operation("connect", lambda: self._connect_worker(device))
+
+    def reconnect_device_for_safety(self, device: SMUDevice) -> bool:
+        """Reopen one explicit SMU while preserving any fail-closed latch.
+
+        Forced transport unbinding is intentionally separate from safety fault
+        recovery. ``SMUControlManager.bind_driver`` keeps OUTPUT UNKNOWN and
+        FAULT latched across the new session; the caller must then request the
+        existing verified recovery workflow.
+        """
+
+        if self.is_busy:
+            return False
+        target = device
+        if self.is_connected:
+            if (
+                self.connected_device is None
+                or self.connected_device.visa_address != device.visa_address
+            ):
+                return False
+            if not self._close_session(safe_output=False, force_unbind=True):
+                return False
+            self.disconnected.emit()
+        self.connect_device(target)
+        return True
 
     def output_enabled(self) -> bool | None:
         if not self._driver:
@@ -115,7 +141,7 @@ class SMUManager(QObject):
                 or self.control.is_busy
             ):
                 self.error_occurred.emit(
-                    "SMU 仍有 ownership 或 I/O 工作。請先安全關閉輸出再中斷連線。"
+                    tr("smu.manager.disconnect_busy")
                 )
                 return False
             try:
@@ -124,13 +150,13 @@ class SMUManager(QObject):
                 enabled = None
             if enabled is not False:
                 self.error_occurred.emit(
-                    "無法確認 SMU Output 已關閉，請先安全關閉輸出。"
+                    tr("smu.manager.disconnect_unconfirmed")
                 )
                 return False
         if not self._close_session(safe_output=force, force_unbind=force):
             return False
         self.disconnected.emit()
-        self.status_changed.emit("SMU 已中斷連線")
+        self.status_changed.emit(tr("smu.manager.disconnected"))
         return True
 
     def connection_metadata(self, selected_address: str = "") -> dict[str, Any]:
@@ -179,7 +205,7 @@ class SMUManager(QObject):
         """Immediately attempt to put the connected SMU into a safe state."""
         stopped = self.control.safe_shutdown()
         if stopped:
-            self.status_changed.emit("SMU output disabled")
+            self.status_changed.emit(tr("smu.manager.output_disabled"))
         return stopped
 
     def _start_operation(self, operation: str, task: Callable[[], Any]) -> None:
@@ -201,17 +227,21 @@ class SMUManager(QObject):
                 self.devices = result
                 self.scan_finished.emit(self.devices)
                 if self.devices:
-                    self.status_changed.emit(f"找到 {len(self.devices)} 台可回應的 VISA 儀器")
+                    self.status_changed.emit(tr("smu.manager.devices_found", count=len(self.devices)))
                 else:
-                    self.status_changed.emit("找不到可回應的 VISA 儀器")
+                    self.status_changed.emit(tr("smu.manager.none_found"))
             elif operation == "connect":
                 resource_manager, resource, device, driver = result
                 self._adopt_connection(resource_manager, resource, device, driver)
                 self.connected.emit(device)
-                suffix = "｜手動控制可用｜OUTPUT：OFF" if device.supported else ""
-                self.status_changed.emit(f"SMU 已連線：{device.display_name}{suffix}")
+                self.status_changed.emit(
+                    tr(
+                        "smu.manager.connected_supported" if device.supported else "smu.manager.connected",
+                        device=device.display_name,
+                    )
+                )
         except Exception as exc:
-            prefix = "SMU 掃描失敗" if operation == "scan" else "SMU 連線失敗"
+            prefix = tr("smu.manager.scan_failed") if operation == "scan" else tr("smu.manager.connection_failed")
             message = f"{prefix}：{self._format_visa_error(exc)}"
             if operation == "connect":
                 self.connection_failed.emit(message)
@@ -260,17 +290,17 @@ class SMUManager(QObject):
         try:
             import pyvisa
         except ImportError as exc:
-            raise RuntimeError("尚未安裝 PyVISA；請重新執行 setup_and_run.bat") from exc
+            raise RuntimeError(tr("smu.error_pyvisa_missing")) from exc
 
         errors: list[str] = []
-        for backend, label in ((None, "系統 VISA"), ("@py", "PyVISA-py")):
+        for backend, label in ((None, tr("smu.system_visa")), ("@py", "PyVISA-py")):
             try:
                 manager = pyvisa.ResourceManager(backend) if backend else pyvisa.ResourceManager()
                 manager.list_resources()
                 return manager, label
             except Exception as exc:
                 errors.append(str(exc))
-        raise RuntimeError("無法建立 VISA 連線；請安裝 Keysight IO Libraries Suite。" + " / ".join(errors))
+        raise RuntimeError(tr("smu.error_visa_connection", details=" / ".join(errors)))
 
     @classmethod
     def _scan_worker(cls) -> list[SMUDevice]:
@@ -322,14 +352,14 @@ class SMUManager(QObject):
                 assert isinstance(driver, KeysightB2900Driver)
                 driver.set_output_enabled(False)
                 if driver.query_output_enabled() is not False:
-                    raise RuntimeError("無法確認 SMU 安全初始化時 OUTPUT 為 OFF")
+                    raise RuntimeError(tr("smu.error_initial_output_off"))
                 driver.set_auto_output_enabled(False)
                 if driver.query_auto_output_enabled() is not False:
                     raise RuntimeError(
-                        "無法確認 Keysight B2900 auto-output 已停用"
+                        tr("smu.error_auto_output_disable")
                     )
                 if driver.query_output_enabled() is not False:
-                    raise RuntimeError("無法確認 SMU 安全初始化後 OUTPUT 為 OFF")
+                    raise RuntimeError(tr("smu.error_final_output_off"))
             return manager, resource, verified, driver
         except Exception:
             if resource is not None:
@@ -368,7 +398,7 @@ class SMUManager(QObject):
                     else:
                         self._driver.safe_stop()
                 except Exception as exc:
-                    self.error_occurred.emit(f"SMU best-effort safety stop failed：{exc}")
+                    self.error_occurred.emit(tr("smu.manager.best_effort_stop_failed", detail=exc))
             try:
                 self.control.bind_driver(None, force=force_unbind)
             except Exception as exc:
@@ -378,7 +408,7 @@ class SMUManager(QObject):
             try:
                 self._driver.close(safe_stop=False)
             except Exception as exc:
-                self.error_occurred.emit(f"SMU VISA session close failed：{exc}")
+                self.error_occurred.emit(tr("smu.manager.session_close_failed", detail=exc))
         if self._resource_manager is not None:
             try:
                 self._resource_manager.close()

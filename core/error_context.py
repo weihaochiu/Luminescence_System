@@ -5,16 +5,38 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import traceback as traceback_module
+import re
 from typing import Any, Mapping
 
 
 MAX_TEXT_LENGTH = 2_000
 MAX_TRACEBACK_LENGTH = 12_000
-SENSITIVE_FRAGMENTS = ("password", "passwd", "secret", "token", "credential")
+SENSITIVE_FRAGMENTS = (
+    "password", "passwd", "secret", "token", "credential", "api_key",
+    "apikey", "authorization",
+)
+REDACTED = "[REDACTED]"
+_AUTHORIZATION_RE = re.compile(
+    r"(?i)(\bauthorization\b\s*[:=]\s*)(?:bearer\s+)?[^\s,;&]+"
+)
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)(\b(?:password|passwd|token|secret|api[_-]?key|apikey|credential)\b"
+    r"\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
+)
+_BEARER_RE = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+")
+
+
+def sanitize_text(value: object) -> str:
+    """Redact common credentials embedded in arbitrary diagnostic text."""
+
+    text = str(value)
+    text = _AUTHORIZATION_RE.sub(lambda match: match.group(1) + REDACTED, text)
+    text = _SECRET_VALUE_RE.sub(lambda match: match.group(1) + REDACTED, text)
+    return _BEARER_RE.sub(lambda match: match.group(1) + REDACTED, text)
 
 
 def _bounded(value: object, limit: int = MAX_TEXT_LENGTH) -> str:
-    text = str(value)
+    text = sanitize_text(value)
     return text if len(text) <= limit else text[:limit] + "…[truncated]"
 
 
@@ -54,8 +76,10 @@ class ErrorContext:
         clean: dict[str, Any] = {}
         extra: dict[str, str] = {}
         for key, value in source.items():
-            if value is None or any(fragment in key.casefold() for fragment in SENSITIVE_FRAGMENTS):
+            if value is None:
                 continue
+            if any(fragment in key.casefold() for fragment in SENSITIVE_FRAGMENTS):
+                value = REDACTED
             if key in known:
                 clean[key] = _bounded(value, MAX_TRACEBACK_LENGTH if key == "traceback" else MAX_TEXT_LENGTH)
             else:

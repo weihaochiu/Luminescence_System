@@ -45,10 +45,28 @@ TECHNICAL_DISPLAY_LITERALS = {
     "--", "—", "— V", "— mA/cm²", "N/A", "Unknown", "OFF",
     "FPS —", "SMU —", "0 / 0", "0.0%", "100.0%", "SDK", "Sensor",
     "Alignment", "NPLC", "Relay", "Recipe", "Raw DN", "PNG", "JPG",
+    "Dark IV", "EL Matrix", "Channels",
 }
 TECHNICAL_DISPLAY_RE = re.compile(
     r"^(?:\{[^}]+\}|v?\{[^}]+\})(?:\s*(?:/|×|%|ms|s|V|mA/cm²|bit|\||｜|—|\([^)]*\))\s*(?:\{[^}]+\})?)*$"
 )
+INDIRECT_PRESENTATION_FIELDS = re.compile(
+    r"(?:status_text|status_message|lock_reason|manual_lock_reason|display_name|"
+    r"user_message|user_title|tooltip|label|text)$",
+    re.IGNORECASE,
+)
+PRESENTATION_FUNCTIONS = re.compile(
+    r"(?:presentation|display|status|message|tooltip|label|reason|text)",
+    re.IGNORECASE,
+)
+USER_PRESENTATION_HELPERS = {
+    "show_error",
+    "show_smu_error",
+    "_abort_ae_calibration",
+    "_emit_ae_calibration_progress",
+    "_show_recipe_operation_failure",
+    "status",
+}
 
 
 def _is_technical_display(message: str) -> bool:
@@ -58,6 +76,8 @@ def _is_technical_display(message: str) -> bool:
     if TECHNICAL_DISPLAY_RE.fullmatch(compact):
         return True
     if re.fullmatch(r"Relay \{[^}]+\}", compact):
+        return True
+    if re.fullmatch(r"\{[^}]+\}-bit", compact):
         return True
     return False
 
@@ -88,6 +108,15 @@ def _owner_name(node: ast.AST) -> str:
     return ""
 
 
+def _qualified_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        owner = _qualified_name(node.value)
+        return f"{owner}.{node.attr}" if owner else node.attr
+    return ""
+
+
 def _text(node: ast.AST) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
@@ -110,10 +139,30 @@ def _text(node: ast.AST) -> str | None:
         left, right = _text(node.left), _text(node.right)
         if left is not None and right is not None:
             return left + right
+    if isinstance(node, ast.IfExp):
+        values = _texts(node)
+        return " | ".join(values) if values else None
     return None
 
 
+def _texts(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.IfExp):
+        values: list[str] = []
+        for branch in (node.body, node.orelse):
+            values.extend(_texts(branch))
+        return values
+    if isinstance(node, (ast.List, ast.Tuple)):
+        values = []
+        for item in node.elts:
+            values.extend(_texts(item))
+        return values
+    value = _text(node)
+    return [value] if value else []
+
+
 def _display_argument(call: ast.Call, name: str) -> ast.AST | None:
+    if name in {"_leaf", "ExecutionStep"}:
+        return call.args[1] if len(call.args) > 1 else None
     if name in UI_CONSTRUCTORS:
         if not call.args:
             return None
@@ -229,7 +278,8 @@ class Collector(ast.NodeVisitor):
             kind = "B. Tooltip" if name in TOOLTIP_METHODS else (
                 "C. Status bar message" if name in STATUS_METHODS else "A. UI label / button / menu"
             )
-            self._add(node, _text(display), kind, True, True, name)
+            for message in _texts(display):
+                self._add(node, message, kind, True, True, name)
         elif owner == "QMessageBox" and name in MESSAGEBOX_METHODS:
             title = _text(node.args[1]) if len(node.args) > 1 else None
             message = _text(node.args[2]) if len(node.args) > 2 else None
@@ -249,13 +299,107 @@ class Collector(ast.NodeVisitor):
             self._add(node, _text(node.args[0]) if node.args else None, kind, False, False, f"logger.{name}")
         elif name == "print":
             self._add(node, _text(node.args[0]) if node.args else None, "H. Developer-only log", False, False, "print")
+        elif name in {"_format_error", "format_user_message"} and node.args:
+            for message in _texts(node.args[0]):
+                self._add(
+                    node,
+                    message,
+                    "F. User-facing error",
+                    True,
+                    True,
+                    f"presentation helper {name}",
+                )
+        elif name in USER_PRESENTATION_HELPERS and node.args:
+            for message in _texts(node.args[0]):
+                self._add(
+                    node,
+                    message,
+                    "F. User-facing error" if "error" in name or "failure" in name else "C. Status bar message",
+                    True,
+                    True,
+                    f"presentation helper {name}",
+                )
+        elif (
+            name == "append"
+            and self.relative.startswith("gui/")
+            and isinstance(node.func, ast.Attribute)
+        ):
+            collection = _qualified_name(node.func.value).casefold()
+            if collection.rsplit(".", 1)[-1] in {"errors", "warnings", "review", "messages"}:
+                for message in (_texts(node.args[0]) if node.args else []):
+                    self._add(
+                        node,
+                        message,
+                        "F. User-facing error" if "error" in collection else "E. User-facing warning",
+                        True,
+                        True,
+                        f"user validation collection {collection}",
+                    )
         elif name == "emit" and isinstance(node.func, ast.Attribute):
-            signal = _owner_name(node.func)
-            if re.search(r"error|warning|message|status|failed|failure", signal, re.I):
-                value = _text(node.args[0]) if node.args else None
-                user = bool(re.search(r"message|status|error|warning", signal, re.I))
+            signal = _qualified_name(node.func.value)
+            if re.search(r"error|warning|message|status|failed|failure|progress|result|finished", signal, re.I):
+                values = [message for argument in node.args for message in _texts(argument)]
+                value = " | ".join(values) if values else None
+                user = bool(re.search(r"message|status|error|warning|progress|result|finished", signal, re.I))
                 kind = "F. User-facing error" if re.search(r"error|failed|failure", signal, re.I) else "C. Status bar message"
                 self._add(node, value, kind, user, user, f"signal {signal}.emit")
+        for keyword in node.keywords:
+            if keyword.arg and INDIRECT_PRESENTATION_FIELDS.search(keyword.arg):
+                for message in _texts(keyword.value):
+                    self._add(
+                        keyword,
+                        message,
+                        "A. UI label / button / menu",
+                        True,
+                        True,
+                        f"indirect presentation field {keyword.arg}",
+                    )
+        self.generic_visit(node)
+
+    def visit_Return(self, node: ast.Return) -> None:
+        if node.value is not None and PRESENTATION_FUNCTIONS.search(self.function):
+            for message in _texts(node.value):
+                self._add(
+                    node,
+                    message,
+                    "A. UI label / button / menu",
+                    True,
+                    True,
+                    f"presentation helper {self.function}",
+                )
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            name = target.id if isinstance(target, ast.Name) else (
+                target.attr if isinstance(target, ast.Attribute) else ""
+            )
+            if INDIRECT_PRESENTATION_FIELDS.search(name):
+                for message in _texts(node.value):
+                    self._add(
+                        node,
+                        message,
+                        "A. UI label / button / menu",
+                        True,
+                        True,
+                        f"indirect presentation assignment {name}",
+                    )
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        name = node.target.id if isinstance(node.target, ast.Name) else (
+            node.target.attr if isinstance(node.target, ast.Attribute) else ""
+        )
+        if node.value is not None and INDIRECT_PRESENTATION_FIELDS.search(name):
+            for message in _texts(node.value):
+                self._add(
+                    node,
+                    message,
+                    "A. UI label / button / menu",
+                    True,
+                    True,
+                    f"indirect presentation assignment {name}",
+                )
         self.generic_visit(node)
 
     def visit_Raise(self, node: ast.Raise) -> None:

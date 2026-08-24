@@ -12,6 +12,8 @@ import tifffile
 from PIL import Image
 from PySide6.QtWidgets import QMessageBox
 
+from core.i18n import tr
+
 from gui.el_matrix_plan import ELMatrixPlan
 from gui.measurement_control_bar import MeasurementControlBar
 from gui.main_window_measurement import begin_el_matrix_measurement, _measurement_summary
@@ -70,11 +72,11 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                 self.app.processEvents()
                 self.assertEqual(
                     [
-                        "1. 初始化 / 前置檢查",
-                        "2. Shared Dark Frame",
+                        f"1. {tr('plan.initialize')}",
+                        f"2. {tr('plan.shared_dark_frame')}",
                         "3. Channels",
-                        "4. 輸出（full）",
-                        "5. Safe Shutdown",
+                        f"4. {tr('plan.output', resolution='full')}",
+                        f"5. {tr('plan.safe_shutdown')}",
                     ],
                     [
                         dialog.execution_tree.topLevelItem(i).text(0)
@@ -262,8 +264,11 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
         self.assertEqual(["CH1", "CH3"], [child.title for child in polarity.children])
         self.assertEqual(
             [
-                "Routing CH1", "White Light ON", "Polarity Measurement",
-                "Determine polarity", "White Light OFF",
+                tr("plan.routing", channel="CH1"),
+                tr("plan.white_light_on"),
+                tr("plan.polarity_measurement"),
+                tr("plan.determine_polarity"),
+                tr("plan.white_light_off"),
             ],
             [child.title for child in polarity.children[0].children],
         )
@@ -273,20 +278,20 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
         payload = json.dumps(plan.to_dict(), ensure_ascii=False)
         self.assertIn("Gain 100%", payload)
         self.assertIn("Exposure 2 ms", payload)
-        self.assertIn("Repeat 2", payload)
+        self.assertIn(tr("plan.repeat", index=2), payload)
         output = next(step for step in plan.steps if step.key == "output")
         self.assertEqual(
             [
-                "TIFF", "PNG", "JPG with Footer", "Capture Records（必要）",
-                "Summary CSV（必要）",
-                "JSON Metadata（必要）", "Recipe Snapshot（必要）",
-                "Pixel CSV（Safe Shutdown 後處理）",
+                "TIFF", "PNG", tr("plan.jpg_with_footer"), tr("plan.capture_records_required"),
+                tr("plan.summary_csv_required"),
+                tr("plan.json_metadata_required"), tr("plan.recipe_snapshot_required"),
+                tr("plan.pixel_csv_postprocess"),
             ],
             [child.title for child in output.children],
         )
         pixel_csv = output.children[-1]
         self.assertEqual(
-            ["Raw DN", "Dark-corrected", "Exposure-normalized（DN/ms）"],
+            ["Raw DN", tr("plan.dark_corrected"), tr("plan.exposure_normalized")],
             [child.title for child in pixel_csv.children],
         )
         runtime = ELMatrixPlan(recipe)

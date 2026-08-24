@@ -156,12 +156,9 @@ def emergency_stop_measurement(self: Any) -> None:
     report = self.emergency_manager.trigger(workflow)
     self.manual_smu_panel.reset_for_output_off()
     self._update_white_light_control()
-    failed = "；".join(report.failures)
-    suffix = f"；注意：{failed}" if failed else ""
-    self.status_message.setText(
-        "已執行緊急停止：量測已中止，SMU OUTPUT OFF 已排程，白光與相機已停止"
-        + suffix
-    )
+    failed = "; ".join(report.failures)
+    failure_suffix = tr("measurement.emergency_failures", failures=failed) if failed else ""
+    self.status_message.setText(tr("measurement.emergency_completed", failures=failure_suffix))
 
 
 def _cancel_measurement_for_emergency(self: Any) -> None:
@@ -200,7 +197,7 @@ def _on_measurement_finished(self: Any, result: object) -> None:
         isinstance(result, dict) and result.get("hardware_measurement_completed") is True
     )
     if not hardware_completed or not verified_safe_shutdown(shutdown):
-        message = "Safe shutdown verification failed; measurement remains FAULT"
+        message = tr("measurement.safe_shutdown_failed")
         self.status_message.setText(message)
         dialog = getattr(self, "_measurement_progress_dialog", None)
         if dialog is not None:
@@ -223,7 +220,7 @@ def _on_measurement_finished(self: Any, result: object) -> None:
         postprocess = result.get("postprocess", {})
         post_status = str(postprocess.get("status", "not_requested"))
         if post_status in {"failed", "partial"}:
-            reason = str(postprocess.get("error", "Pixel CSV 後處理失敗"))
+            reason = str(postprocess.get("error", tr("progress.postprocess_failed")))
             self.status_message.setText(tr("progress.postprocess_failed"))
             self._pixel_csv_retry_context = {
                 "output_directory": result.get("output_directory"),
@@ -245,7 +242,7 @@ def _on_measurement_finished(self: Any, result: object) -> None:
         dialog.set_complete(
             post_total or total,
             tr("measurement.completed_with_pixel_csv")
-            if postprocess.get("status") == "completed" else "硬體量測完成",
+            if postprocess.get("status") == "completed" else tr("measurement.hardware_completed"),
         )
 
 
@@ -255,9 +252,9 @@ def _on_measurement_cancelled(self: Any) -> None:
             _best_effort_routing_off(self, "measurement_cancelled")
             self.relay_service.safe_white_light_off("measurement_cancelled")
     self.status_message.setText(
-        "ABORTED / EMERGENCY STOP"
+        tr("measurement.aborted_emergency")
         if self.emergency_manager.is_active
-        else "Measurement stopped safely"
+        else tr("measurement.stopped_safely")
     )
     dialog = getattr(self, "_measurement_progress_dialog", None)
     if dialog is not None:
@@ -286,27 +283,27 @@ def _on_measurement_failed(self: Any, message: str) -> None:
 def _validate_camera_matrix(self: Any) -> list[str]:
     recipe = self.selected_recipe
     if recipe is None:
-        return ["尚未選擇 Recipe"]
+        return [tr("measurement.recipe_not_selected")]
     errors = recipe.validate(self.smu_manager.control.safety.limits)
     exposure_range = self.camera_info.get("exposure_range_us")
     gain_range = self.camera_info.get("gain_range")
     axes = effective_matrix_capture_axes(recipe)
     if not axes.exposures_ms or not axes.gains_percent or axes.repeat < 1:
-        errors.append("有效的相機拍攝條件不可為空")
+        errors.append(tr("measurement.validation.capture_conditions_empty"))
     elif max(axes.exposures_ms) / 1000.0 > recipe.el_matrix.capture_timeout_s:
-        errors.append("相機 timeout 不可短於有效曝光序列的最大曝光時間")
+        errors.append(tr("measurement.validation.timeout_exposure"))
     if exposure_range:
         low, high = float(exposure_range[0]), float(exposure_range[1])
         if any(not low <= value * 1000.0 <= high for value in axes.exposures_ms):
-            errors.append(f"Exposure 超出相機支援範圍 {low / 1000:g}～{high / 1000:g} ms")
+            errors.append(tr("measurement.validation.exposure_range", low=f"{low / 1000:g}", high=f"{high / 1000:g}"))
     else:
-        errors.append("相機未提供 Exposure capability，禁止開始 Matrix")
+        errors.append(tr("measurement.validation.exposure_capability"))
     if gain_range:
         low, high = int(gain_range[0]), int(gain_range[1])
         if any(not low <= value <= high for value in axes.gains_percent):
-            errors.append(f"Gain 超出相機支援範圍 {low}～{high}%")
+            errors.append(tr("measurement.validation.gain_range", low=low, high=high))
     else:
-        errors.append("相機未提供 Gain capability，禁止開始 Matrix")
+        errors.append(tr("measurement.validation.gain_capability"))
     return errors
 
 
@@ -322,40 +319,37 @@ def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
         for channel in plan.channels
     )
     if recipe.el_matrix.output_mode == "voltage":
-        electrical = (
-            "Voltage："
-            + ", ".join(
+        electrical = tr(
+            "measurement.voltage_values",
+            values=", ".join(
                 format_voltage_number(value) for value in recipe.el_matrix.voltage_v
-            )
-            + " V"
+            ),
         )
     else:
-        electrical = (
-            "Current Density："
-            + ", ".join(
+        electrical = tr(
+            "measurement.current_density_values",
+            values=", ".join(
                 f"{value:g}" for value in recipe.el_matrix.current_density_ma_cm2
-            )
-            + " mA/cm²"
+            ),
         )
-    return (
-        "量測摘要\n\n"
-        f"正式順序：{order}\n\n"
-        f"Channels：{' / '.join(channel.channel for channel in plan.channels)}\n"
-        f"Channel 數量：{len(plan.channels)}\n\n"
-        f"樣品：{samples}\n\n"
-        f"{electrical}\n"
-        f"Gain：{', '.join(str(value) for value in plan.gains_percent)} %\n"
-        f"Exposure：{', '.join(f'{value:g}' for value in plan.exposures_ms)} ms\n"
-        f"每條件：{plan.repeat} 張\n\n"
-        f"Shared Dark：{estimate.shared_dark_captures} 張\n"
-        f"EL / Channel：{estimate.el_per_channel} 張\n"
-        f"EL Total：{estimate.total_el_captures} 張\n"
-        f"Total：{estimate.overall_captures} 張\n\n"
-        f"預估純曝光時間：{format_duration(estimate.exposure_time_s)}\n"
-        f"預估總量測時間：{format_duration(estimate.total_time_s)}\n"
-        f"最長單一 Electrical Setpoint OUTPUT ON："
-        f"{format_duration(estimate.output_on_per_setpoint_s)}\n"
-        f"預計完成：{format_finish_time(estimate.estimated_finish)}"
+    return tr(
+        "measurement.summary",
+        order=order,
+        channels=" / ".join(channel.channel for channel in plan.channels),
+        channel_count=len(plan.channels),
+        samples=samples,
+        electrical=electrical,
+        gains=", ".join(str(value) for value in plan.gains_percent),
+        exposures=", ".join(f"{value:g}" for value in plan.exposures_ms),
+        repeat=plan.repeat,
+        shared_dark=estimate.shared_dark_captures,
+        per_channel=estimate.el_per_channel,
+        el_total=estimate.total_el_captures,
+        total=estimate.overall_captures,
+        exposure_time=format_duration(estimate.exposure_time_s),
+        total_time=format_duration(estimate.total_time_s),
+        output_on_time=format_duration(estimate.output_on_per_setpoint_s),
+        finish_time=format_finish_time(estimate.estimated_finish),
     )
 
 
@@ -519,7 +513,7 @@ def begin_el_matrix_measurement(self: Any) -> None:
                 percent=0.0,
                 remaining_time_s=0.0,
                 estimated_finish=None,
-                message="硬體量測完成，SMU 已安全關閉，正在產生 Pixel CSV",
+                message=tr("progress.pixel_csv_starting"),
             ))
             try:
                 result["postprocess"] = PixelCSVPostprocessor(

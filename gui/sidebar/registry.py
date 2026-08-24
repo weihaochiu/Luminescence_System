@@ -15,7 +15,7 @@ LOGGER = logging.getLogger(__name__)
 SETTINGS_KEY = "interface/sidebar/items"
 
 
-@dataclass(frozen=True)
+@dataclass
 class SidebarItem:
     """Static metadata and the existing view container for one sidebar item."""
 
@@ -24,6 +24,7 @@ class SidebarItem:
     widget: QWidget
     default_order: int
     default_visible: bool = True
+    translation_key: str = ""
 
 
 @dataclass(frozen=True)

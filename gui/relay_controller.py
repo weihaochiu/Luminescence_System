@@ -13,6 +13,8 @@ from threading import RLock
 import time
 from typing import Any, Callable, Protocol, TYPE_CHECKING
 
+from core.i18n import tr
+
 from .relay_settings import RelayGroup, RelaySettingsStore
 
 if TYPE_CHECKING:
@@ -53,7 +55,7 @@ class HidApiTransport:
         try:
             import hid  # type: ignore[import-not-found]
         except ImportError as exc:
-            raise RelayError("未安裝 HID 支援套件，無法使用 USBRelay8") from exc
+            raise RelayError(tr("relay.hid_support_missing")) from exc
         self.hid = hid
 
     def enumerate(self, vid: int, pid: int) -> list[dict[str, Any]]:
@@ -165,9 +167,9 @@ class RelayController:
         self.disconnect()
         devices = self.discover()
         if not devices:
-            return "未偵測到 USBRelay8"
+            return tr("relay.usbrelay_not_detected")
         if len(devices) > 1:
-            return "偵測到多個相同 USBRelay8，請只保留一台後重新偵測"
+            return tr("relay.multiple_usbrelay_detected")
         assert self.transport is not None
         try:
             self.handle = self.transport.open(devices[0].path)
@@ -176,12 +178,12 @@ class RelayController:
             self.handle = None
             self.connected_device = None
             LOG.exception("Relay HID open failed")
-            return f"Relay 連線失敗：{exc}"
+            return tr("relay.connection_failed", detail=exc)
         try:
             self.refresh_hardware_state()
         except RelayError as exc:
-            return f"Relay 已連線，但狀態讀取失敗：{exc}"
-        return "Relay 已連線"
+            return tr("relay.connected_readback_failed", detail=exc)
+        return tr("relay.status_connected")
 
     def disconnect(self) -> None:
         if self.handle is not None and self.transport is not None:
@@ -206,7 +208,7 @@ class RelayController:
         """Read R00 and publish its final byte as controller state."""
         if self.handle is None or self.transport is None:
             self.channel_states = self._unknown_states()
-            raise RelayError("Relay 未連線")
+            raise RelayError(tr("relay.not_connected"))
         try:
             raw = self.transport.get_feature_report(
                 self.handle, self.STATUS_REPORT_ID, self.REPORT_LENGTH
@@ -224,7 +226,7 @@ class RelayController:
             LOG.exception("Relay hardware state read failed | %s", self._runtime_identity())
             if isinstance(exc, RelayError):
                 raise
-            raise RelayError(f"HID 狀態讀取失敗：{exc}") from exc
+            raise RelayError(tr("relay.readback_failed", detail=exc)) from exc
 
         self.last_raw_status = raw
         self.last_bitmask = bitmask
@@ -238,14 +240,14 @@ class RelayController:
     def _parse_state_bitmask(cls, raw: list[int]) -> int:
         """Parse hardware-verified R00: the final returned byte is the mask."""
         if len(raw) not in (8, 9):
-            raise RelayError(f"無效的 R00 feature report 長度：{len(raw)}（支援 8 或 9 bytes）")
+            raise RelayError(tr("relay.invalid_report_length", length=len(raw)))
         return raw[-1]
 
     def set_channel(self, channel: int, state: bool) -> None:
         if channel not in range(1, 9):
-            raise RelayError(f"無效的 Channel：CH{channel}")
+            raise RelayError(tr("relay.invalid_channel", channel=channel))
         if self.handle is None or self.transport is None:
-            raise RelayError("Relay 未連線")
+            raise RelayError(tr("relay.not_connected"))
 
         command = self.COMMAND_ON if state else self.COMMAND_OFF
         report = [0x00, command, channel, 0, 0, 0, 0, 0, 0]
@@ -350,7 +352,7 @@ class RelayService:
         try:
             return self.settings_store.settings.smu_output_channels[channel_id]
         except KeyError as exc:
-            raise RelayError(f"未知的 SMU 輸出通道：{channel_id}") from exc
+            raise RelayError(tr("relay.unknown_smu_channel", channel=channel_id)) from exc
 
     def refresh_connection(self, settings: RelaySettings | None = None) -> str:
         selected = settings or self.settings_store.settings
@@ -373,9 +375,7 @@ class RelayService:
 
     def _channel(self, channel: int, state: bool, source: str) -> None:
         if channel in self.settings_store.settings.smu_output_channels.values():
-            raise RelayError(
-                f"Relay {channel} 是 SMU routing 專用 Relay，禁止使用一般 Channel 控制"
-            )
+            raise RelayError(tr("relay.routing_channel_protected", relay=channel))
         previous = self.controller.channel_states[channel].value
         requested = "ON" if state else "OFF"
         try:
@@ -393,9 +393,7 @@ class RelayService:
         selected = group or self._enabled_group(group_id)
         routing_relays = set(self.settings_store.settings.smu_output_channels.values())
         if routing_relays & set(selected.members):
-            raise RelayError(
-                f"{selected.display_name} 包含 SMU routing 專用 Relay；禁止以一般 Group 開啟"
-            )
+            raise RelayError(tr("relay.routing_group_on_protected", group=selected.display_name))
         previous = self._group_state(selected).value
         try:
             for channel in selected.members:
@@ -425,9 +423,7 @@ class RelayService:
         selected = group or self._enabled_group(group_id)
         routing_relays = set(self.settings_store.settings.smu_output_channels.values())
         if routing_relays & set(selected.members):
-            raise RelayError(
-                f"{selected.display_name} 包含 SMU routing 專用 Relay，禁止使用一般 Group 控制"
-            )
+            raise RelayError(tr("relay.routing_group_control_protected", group=selected.display_name))
         previous = self._group_state(selected).value
         failures: list[str] = []
         for channel in selected.members:
@@ -708,7 +704,7 @@ class RelayService:
     def _enabled_group(self, group_id: str) -> RelayGroup:
         group = self.settings_store.settings.group(group_id)
         if group is None or not group.enabled:
-            raise RelayError(f"找不到已啟用的 Relay Group：{group_id}")
+            raise RelayError(tr("relay.enabled_group_not_found", group_id=group_id))
         return group
 
     def group_state(self, group_id: str, group: RelayGroup | None = None) -> RelayState:

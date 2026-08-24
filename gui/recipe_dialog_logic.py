@@ -338,11 +338,11 @@ class RecipeDialogLogicMixin:
         index = 1
         while recipe.name in existing:
             index += 1
-            recipe.name = f"新 EL Recipe {index}"
+            recipe.name = tr("recipe.default_name_numbered", index=index)
         try:
             self.store.upsert(recipe)
         except Exception as exc:
-            self._show_recipe_operation_failure("Recipe 儲存失敗", "新增", exc)
+            self._show_recipe_operation_failure(tr("recipe.save_failed"), "create", exc)
             return
         self.current_recipe = deepcopy(recipe)
         self._reload_list(preferred_id=recipe.recipe_id)
@@ -355,7 +355,7 @@ class RecipeDialogLogicMixin:
         try:
             self.store.upsert(copied)
         except Exception as exc:
-            self._show_recipe_operation_failure("Recipe 儲存失敗", "複製", exc)
+            self._show_recipe_operation_failure(tr("recipe.save_failed"), "copy", exc)
             return
         self.current_recipe = deepcopy(copied)
         self._reload_list(preferred_id=copied.recipe_id)
@@ -371,7 +371,7 @@ class RecipeDialogLogicMixin:
         try:
             self.store.delete(self.current_recipe.recipe_id)
         except Exception as exc:
-            self._show_recipe_operation_failure("Recipe 刪除失敗", "刪除", exc)
+            self._show_recipe_operation_failure(tr("recipe.delete_failed"), "delete", exc)
             return
         self.current_recipe = None
         self._reload_list()
@@ -397,7 +397,7 @@ class RecipeDialogLogicMixin:
         try:
             self.store.upsert(recipe)
         except Exception as exc:
-            self._show_recipe_operation_failure("Recipe 儲存失敗", "儲存", exc)
+            self._show_recipe_operation_failure(tr("recipe.save_failed"), "save", exc)
             return
         self.current_recipe = deepcopy(self.store.get(recipe.recipe_id) or recipe)
         self._write_recipe_to_form(self.current_recipe)
@@ -419,25 +419,25 @@ class RecipeDialogLogicMixin:
 
     def _show_validation(self, errors: list[str], warnings: list[str]) -> None:
         if errors:
-            text = "錯誤：\n• " + "\n• ".join(errors)
+            text = tr("recipe.validation_errors", details="\n• ".join(errors))
             self.validation_label.setStyleSheet("color:#a01818; padding:6px;")
         elif warnings:
-            text = "可儲存，但請確認：\n• " + "\n• ".join(warnings)
+            text = tr("recipe.validation_warnings", details="\n• ".join(warnings))
             self.validation_label.setStyleSheet("color:#8a5a00; padding:6px;")
         else:
-            text = "Recipe 驗證通過"
+            text = tr("recipe.validation_passed")
             self.validation_label.setStyleSheet("color:#16823b; padding:6px;")
         self.validation_label.setText(text)
 
     def _import_recipe(self) -> None:
-        filename, _ = QFileDialog.getOpenFileName(self, "匯入 Recipe", "", "JSON (*.json)")
+        filename, _ = QFileDialog.getOpenFileName(self, tr("recipe.import_title"), "", "JSON (*.json)")
         if not filename:
             return
         try:
             payload = json.loads(Path(filename).read_text(encoding="utf-8"))
             recipe = self.store.import_payload(payload)
         except Exception as exc:
-            self._show_recipe_operation_failure("Recipe 匯入失敗", "匯入", exc)
+            self._show_recipe_operation_failure(tr("recipe.import_failed"), "import", exc)
             return
         self.current_recipe = deepcopy(recipe)
         self._reload_list(preferred_id=recipe.recipe_id)
@@ -448,7 +448,7 @@ class RecipeDialogLogicMixin:
             return
         recipe = self._read_form_to_recipe()
         filename, _ = QFileDialog.getSaveFileName(
-            self, "匯出 Recipe JSON", f"{recipe.name}.json", "JSON (*.json)"
+            self, tr("recipe.export_title"), f"{recipe.name}.json", "JSON (*.json)"
         )
         if filename:
             Path(filename).write_text(

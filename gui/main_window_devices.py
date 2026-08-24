@@ -123,7 +123,7 @@ class MainWindowDeviceMixin:
                 self.polarity_settings_store.settings,
             )
             if not accepted:
-                raise SMUInterlockError("SMU 正忙碌，請稍後再試。")
+                raise SMUInterlockError(tr("smu.error_busy"))
             self.status_message.setText(tr("smu.routing_channel", channel=channel_id))
         except (ValueError, SMUInterlockError, RelayError) as exc:
             self.show_smu_error(str(exc))
@@ -142,6 +142,12 @@ class MainWindowDeviceMixin:
         self.instrument_state_manager.set_connected(device.display_name, device.supported)
         if device.supported:
             self.smu_monitor.start()
+        if self._smu_reconnect_safety_pending:
+            self._smu_reconnect_safety_pending = False
+            if self.smu_manager.control.output_unknown_latched:
+                self.smu_manager.control.request_safe_output_off(
+                    "post-reconnect safety verification"
+                )
 
     def on_smu_disconnected(self) -> None:
         self.smu_monitor.stop()
@@ -162,10 +168,7 @@ class MainWindowDeviceMixin:
         else:
             accepted = control.request_safe_output_off("manual panel recovery")
         if not accepted:
-            self.show_smu_error(
-                "SMU OUTPUT OFF 無法確認，系統已進入安全故障狀態。"
-                "請勿更換 Relay 或樣品，請檢查 SMU 連線。"
-            )
+            self.show_smu_error(tr("smu.error_output_off_unconfirmed"))
             return
         self.status_message.setText(tr("smu.confirming_output_off_and_routing"))
 
@@ -186,7 +189,7 @@ class MainWindowDeviceMixin:
             self._measurement_worker.request_cancel()
         self.relay_service.safe_white_light_off("recipe_to_manual_handover")
         if not self.smu_manager.control.request_recipe_handover_to_manual():
-            self.show_smu_error("無法啟動 Recipe 至手動控制的安全交接。")
+            self.show_smu_error(tr("smu.error_handover_start"))
             return
         self.status_message.setText(tr("smu.recipe_handover_waiting_safe_point"))
 
@@ -578,15 +581,15 @@ class MainWindowDeviceMixin:
         )
         error = str(status.get("AutoExposureROIError", ""))
         if verified and mode == "CustomROI":
-            text = "AE 測光：ROI ✓"
+            text = tr("camera.ae_metering_roi_verified")
         elif verified and mode == "FullImage":
-            text = "AE 測光：全畫面"
+            text = tr("camera.ae_metering_full_verified")
         elif mode == "CustomROI":
-            text = "AE 測光：ROI 驗證失敗"
+            text = tr("camera.ae_metering_roi_failed")
         elif mode == "FullImage":
-            text = "AE 測光：全畫面驗證失敗"
+            text = tr("camera.ae_metering_full_failed")
         else:
-            text = "AE 測光：--"
+            text = tr("camera.ae_metering_empty")
         tooltip_lines = [
             f"Requested: {requested}",
             f"Readback: {readback}",
@@ -646,8 +649,11 @@ class MainWindowDeviceMixin:
         ))
 
     def capture_current_frame(self) -> None:
-        if self.last_image is None:
+        if not self.controller.is_open:
             self.report_error("CAM-101", context={"operation": "capture_current_frame"})
+            return
+        if self.last_image is None:
+            self.report_error("CAM-102", context={"operation": "capture_current_frame"})
             return
         path = self._choose_capture_path("manual")
         if path:
@@ -659,8 +665,11 @@ class MainWindowDeviceMixin:
             self._save_image(path, capture_mode=mode, auto_converged=None)
 
     def auto_expose_and_capture(self) -> None:
-        if not self.controller.is_open or self.last_image is None:
+        if not self.controller.is_open:
             self.report_error("CAM-101", context={"operation": "auto_expose_and_capture"})
+            return
+        if self.last_image is None:
+            self.report_error("CAM-102", context={"operation": "auto_expose_and_capture"})
             return
         path = self._choose_capture_path("auto")
         if not path:
@@ -823,7 +832,7 @@ class MainWindowDeviceMixin:
             self,
             tr("file.save_capture_image"),
             suggested,
-            "TIFF（建議） (*.tif *.tiff);;PNG (*.png);;JPEG (*.jpg *.jpeg);;Bitmap (*.bmp)",
+            tr("file.image_filter"),
         )
         if not path:
             return ""

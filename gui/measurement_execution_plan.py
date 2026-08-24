@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from core.i18n import tr
+
 from .recipe_store import Recipe
 from .numeric import format_voltage_number
 
@@ -68,13 +70,13 @@ def _matrix_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
             gain_steps = tuple(
                 ExecutionStep(
                     f"gain_{gain}",
-                    f"Gain {gain}%",
+                    tr("plan.gain", gain=gain),
                     tuple(
                         ExecutionStep(
                             f"exposure_{exposure:g}",
-                            f"Exposure {exposure:g} ms",
+                            tr("plan.exposure", exposure=f"{exposure:g}"),
                             tuple(
-                                _leaf(f"repeat_{index}", f"Repeat {index}")
+                                _leaf(f"repeat_{index}", tr("plan.repeat", index=index))
                                 for index in range(1, axes.repeat + 1)
                             ),
                         )
@@ -88,9 +90,9 @@ def _matrix_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
                 ExecutionStep(
                     f"voltage_{format_voltage_number(setpoint)}"
                     if voltage_mode else f"density_{setpoint:g}",
-                    f"Voltage {format_voltage_number(setpoint)} V"
+                    tr("plan.voltage", value=format_voltage_number(setpoint))
                     if voltage_mode
-                    else f"Current Density {setpoint:g} mA/cm²",
+                    else tr("plan.current_density", value=f"{setpoint:g}"),
                     gain_steps,
                 )
             )
@@ -101,9 +103,9 @@ def _matrix_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
                     "dark_iv",
                     "Dark IV",
                     (
-                        _leaf("dark_iv_apply", "套用 Dark IV 設定"),
-                        _leaf("dark_iv_measure", "Sweep / Measure"),
-                        _leaf("dark_iv_save", "保存結果"),
+                        _leaf("dark_iv_apply", tr("plan.dark_iv_apply")),
+                        _leaf("dark_iv_measure", tr("plan.sweep_measure")),
+                        _leaf("dark_iv_save", tr("plan.save_results")),
                     ),
                 )
             )
@@ -122,11 +124,11 @@ def _polarity_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
             f"polarity_{channel_key}",
             channel.channel,
             (
-                _leaf(f"polarity_route_{channel_key}", f"Routing {channel.channel}"),
-                _leaf(f"white_light_on_{channel_key}", "White Light ON"),
-                _leaf(f"polarity_measure_{channel_key}", "Polarity Measurement"),
-                _leaf(f"polarity_determine_{channel_key}", "Determine polarity"),
-                _leaf(f"white_light_off_{channel_key}", "White Light OFF"),
+                _leaf(f"polarity_route_{channel_key}", tr("plan.routing", channel=channel.channel)),
+                _leaf(f"white_light_on_{channel_key}", tr("plan.white_light_on")),
+                _leaf(f"polarity_measure_{channel_key}", tr("plan.polarity_measurement")),
+                _leaf(f"polarity_determine_{channel_key}", tr("plan.determine_polarity")),
+                _leaf(f"white_light_off_{channel_key}", tr("plan.white_light_off")),
             ),
         )
 
@@ -136,13 +138,13 @@ def _shared_dark_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
     for gain in axes.gains_percent:
         yield ExecutionStep(
             f"dark_gain_{gain}",
-            f"Gain {gain}%",
+            tr("plan.gain", gain=gain),
             tuple(
                 ExecutionStep(
                     f"dark_exposure_{exposure:g}",
-                    f"Exposure {exposure:g} ms",
+                    tr("plan.exposure", exposure=f"{exposure:g}"),
                     tuple(
-                        _leaf(f"dark_repeat_{index}", f"Repeat {index}")
+                        _leaf(f"dark_repeat_{index}", tr("plan.repeat", index=index))
                         for index in range(1, axes.repeat + 1)
                     ),
                 )
@@ -152,29 +154,33 @@ def _shared_dark_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
 
 
 def _output_steps(recipe: Recipe) -> tuple[ExecutionStep, ...]:
+    output_titles = {"JPG with Footer": tr("plan.jpg_with_footer")}
     children = [
-        _leaf(f"output_{label.lower().replace(' ', '_')}", label)
+        _leaf(
+            f"output_{label.lower().replace(' ', '_')}",
+            output_titles.get(label, label),
+        )
         for label in recipe.output.selected_formats()
     ]
     children.extend((
-        _leaf("output_capture_records", "Capture Records（必要）"),
-        _leaf("output_summary_csv", "Summary CSV（必要）"),
-        _leaf("output_json_metadata", "JSON Metadata（必要）"),
-        _leaf("output_recipe_snapshot", "Recipe Snapshot（必要）"),
+        _leaf("output_capture_records", tr("plan.capture_records_required")),
+        _leaf("output_summary_csv", tr("plan.summary_csv_required")),
+        _leaf("output_json_metadata", tr("plan.json_metadata_required")),
+        _leaf("output_recipe_snapshot", tr("plan.recipe_snapshot_required")),
     ))
     if recipe.output.export_pixel_csv:
         pixel_products: list[ExecutionStep] = []
         if recipe.output.pixel_csv_raw:
             pixel_products.append(_leaf("pixel_csv_raw", "Raw DN"))
         if recipe.output.pixel_csv_dark_corrected:
-            pixel_products.append(_leaf("pixel_csv_dark_corrected", "Dark-corrected"))
+            pixel_products.append(_leaf("pixel_csv_dark_corrected", tr("plan.dark_corrected")))
         if recipe.output.pixel_csv_exposure_normalized:
             pixel_products.append(
-                _leaf("pixel_csv_exposure_normalized", "Exposure-normalized（DN/ms）")
+                _leaf("pixel_csv_exposure_normalized", tr("plan.exposure_normalized"))
             )
         children.append(
             ExecutionStep(
-                "pixel_csv", "Pixel CSV（Safe Shutdown 後處理）", tuple(pixel_products)
+                "pixel_csv", tr("plan.pixel_csv_postprocess"), tuple(pixel_products)
             )
         )
     return tuple(children)
@@ -190,11 +196,11 @@ def build_measurement_execution_plan(
     steps: list[ExecutionStep] = [
         ExecutionStep(
             "initialize",
-            "初始化 / 前置檢查",
+            tr("plan.initialize"),
             (
-                _leaf("camera_preflight", "相機連線 / 能力檢查"),
-                _leaf("smu_preflight", "SMU OUTPUT OFF / 身分確認"),
-                _leaf("output_preflight", "輸出目錄 / 空間 / 快照檢查"),
+                _leaf("camera_preflight", tr("plan.camera_preflight")),
+                _leaf("smu_preflight", tr("plan.smu_preflight")),
+                _leaf("output_preflight", tr("plan.output_preflight")),
             ),
         )
     ]
@@ -202,7 +208,7 @@ def build_measurement_execution_plan(
         steps.append(
             ExecutionStep(
                 "polarity",
-                "極性確認",
+                tr("plan.polarity"),
                 tuple(_polarity_channel_steps(recipe)),
             )
         )
@@ -210,7 +216,7 @@ def build_measurement_execution_plan(
         steps.append(
             ExecutionStep(
                 "dark_frame",
-                "Shared Dark Frame",
+                tr("plan.shared_dark_frame"),
                 tuple(_shared_dark_steps(recipe)),
             )
         )
@@ -220,9 +226,9 @@ def build_measurement_execution_plan(
     steps.append(
         ExecutionStep(
             "output",
-            f"輸出（{recipe.output.resolution_id}）",
+            tr("plan.output", resolution=recipe.output.resolution_id),
             _output_steps(recipe),
         )
     )
-    steps.append(ExecutionStep("safe_shutdown", "Safe Shutdown"))
+    steps.append(ExecutionStep("safe_shutdown", tr("plan.safe_shutdown")))
     return MeasurementExecutionPlan(tuple(steps))

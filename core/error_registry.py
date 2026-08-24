@@ -11,6 +11,7 @@ from typing import Iterable
 
 
 ERROR_CODE_PATTERN = re.compile(r"^(SMU|CAM|REL|MEAS|REC|FILE|CFG|COMM|HW|SYS|UI)-\d{3}$")
+ALLOWED_ACTIONS = frozenset({"retry", "reconnect", "safe_shutdown"})
 VALID_SUBSYSTEMS = frozenset(
     {"smu", "camera", "relay", "measurement", "recipe", "file", "config", "communication", "hardware", "system", "ui"}
 )
@@ -53,6 +54,11 @@ class ErrorRegistry:
                 action in {"ignore", "continue"} for action in definition.actions
             ):
                 raise ValueError(f"Critical error {definition.code} cannot be ignored")
+            unknown_actions = set(definition.actions) - ALLOWED_ACTIONS
+            if unknown_actions:
+                raise ValueError(
+                    f"Invalid action for {definition.code}: {sorted(unknown_actions)}"
+                )
             if not definition.solution_keys:
                 raise ValueError(f"Error {definition.code} requires at least one solution")
             self._definitions[definition.code] = definition

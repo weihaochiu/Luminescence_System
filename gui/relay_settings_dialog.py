@@ -65,7 +65,9 @@ class RelaySettingsDialog(QDialog):
             enabled = QCheckBox()
             enabled.setStyleSheet("margin-left:18px;")
             self.channel_table.setCellWidget(row, 1, enabled)
-            self.channel_table.setCellWidget(row, 2, QLineEdit())
+            name_edit = QLineEdit()
+            name_edit.setPlaceholderText(tr("relay.unused"))
+            self.channel_table.setCellWidget(row, 2, name_edit)
             self.channel_table.setCellWidget(row, 3, QLineEdit())
             self.channel_table.setItem(row, 4, QTableWidgetItem(""))
             state = QTableWidgetItem(tr("common.unknown"))
@@ -172,7 +174,7 @@ class RelaySettingsDialog(QDialog):
         enabled.setChecked(group.enabled)
         enabled.setStyleSheet("margin-left:20px;")
         self.group_table.setCellWidget(row, 3, enabled)
-        status = QTableWidgetItem("未知")
+        status = QTableWidgetItem(tr("common.unknown"))
         status.setFlags(status.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self.group_table.setItem(row, 4, status)
 
@@ -185,7 +187,7 @@ class RelaySettingsDialog(QDialog):
         settings = deepcopy(self.working)
         for row, channel in enumerate(settings.channels):
             channel.enabled = self.channel_table.cellWidget(row, 1).isChecked()
-            channel.display_name = self.channel_table.cellWidget(row, 2).text().strip() or "未使用"
+            channel.display_name = self.channel_table.cellWidget(row, 2).text().strip()
             channel.description = self.channel_table.cellWidget(row, 3).text().strip()
         groups: list[RelayGroup] = []
         for row in range(self.group_table.rowCount()):
@@ -193,7 +195,7 @@ class RelaySettingsDialog(QDialog):
             try:
                 members = [int(value.strip().removeprefix("CH").removeprefix("ch")) for value in raw_members.split(",") if value.strip()]
             except ValueError:
-                raise ValueError(f"第 {row + 1} 個 Group 的 member 格式無效")
+                raise ValueError(tr("relay.group_members_invalid", row=row + 1))
             groups.append(RelayGroup(
                 self.group_table.cellWidget(row, 0).text().strip(), self.group_table.cellWidget(row, 1).text().strip(), members,
                 self.group_table.cellWidget(row, 3).isChecked(),
@@ -218,17 +220,19 @@ class RelaySettingsDialog(QDialog):
         self._refresh_statuses()
 
     def _refresh_connection_status(self, message: str | None = None) -> None:
-        text = message or ("Relay 已連線" if self.service.controller.connected else "Relay 未連線")
+        text = message or tr(
+            "relay.status_connected" if self.service.controller.connected else "relay.not_connected"
+        )
         self.connection_label.setText(text)
         self.connection_label.setStyleSheet("color:#16823b; font-weight:600;" if self.service.controller.connected else "color:#b3261e; font-weight:600;")
 
     def _refresh_statuses(self) -> None:
         labels = {
-            RelayState.ON: "開啟",
-            RelayState.OFF: "關閉",
-            RelayState.UNKNOWN: "未知",
-            RelayState.ERROR: "錯誤／狀態未知",
-            RelayState.PARTIAL: "部分啟用／狀態異常",
+            RelayState.ON: tr("common.on"),
+            RelayState.OFF: tr("common.off"),
+            RelayState.UNKNOWN: tr("common.unknown"),
+            RelayState.ERROR: tr("relay.error_state"),
+            RelayState.PARTIAL: tr("relay.partial_state"),
         }
         for channel in range(1, 9):
             value = self.service.controller.channel_states[channel]
@@ -266,14 +270,14 @@ class RelaySettingsDialog(QDialog):
                 raise ValueError("\n".join(errors))
             group = candidate.group(group_id)
             if group is None:
-                raise ValueError(f"找不到 Relay Group：{group_id}")
+                raise ValueError(tr("relay.group_not_found", group_id=group_id))
             (self.service.group_on if state else self.service.group_off)(group_id, "manual_group", group)
         except (RelayError, ValueError) as exc:
             report_error(self, "REL-203", context={"operation": "manual_relay_group"}, exception=exc)
         self._refresh_statuses()
 
     def _add_group(self) -> None:
-        self._append_group(RelayGroup("new_group", "新群組", [1]))
+        self._append_group(RelayGroup("new_group", tr("relay.new_group"), [1]))
 
     def _remove_group(self) -> None:
         row = self.group_table.currentRow()
@@ -297,10 +301,7 @@ class RelaySettingsDialog(QDialog):
                     if state_mask & (1 << (relay - 1))
                 ]
                 if active_reserved:
-                    raise RelayError(
-                        "保存 mapping 前所有既有與新 SMU routing Relay 必須為 OFF；"
-                        f"目前 ON：{active_reserved}"
-                    )
+                    raise RelayError(tr("relay.mapping_save_requires_off", active=active_reserved))
             self.store.settings = settings
             self.store.save()
         except Exception as exc:

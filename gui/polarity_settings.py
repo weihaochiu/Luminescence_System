@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from core.i18n import tr
+
 
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -36,26 +38,26 @@ class PolarityMeasurementSettings:
     def validate(self) -> list[str]:
         errors: list[str] = []
         if self.white_light_stabilization_ms < 0:
-            errors.append("白光穩定等待時間不可小於 0")
+            errors.append(tr("polarity.validation.white_light_wait"))
         if not 40.0 <= self.mains_frequency_hz <= 70.0:
-            errors.append("市電頻率必須介於 40 至 70 Hz")
+            errors.append(tr("polarity.validation.mains_frequency"))
         if not 0.001 <= self.integration_nplc <= 100.0:
-            errors.append("Integration 必須介於 0.001 至 100 PLC")
+            errors.append(tr("polarity.validation.integration"))
         for name, settle in (("Jsc", self.jsc_settle_ms), ("Voc", self.voc_settle_ms)):
             if settle < 0:
-                errors.append(f"{name} settle time 不可小於 0")
+                errors.append(tr("polarity.validation.settle_time", name=name))
         for name, count in (("Jsc", self.jsc_sample_count), ("Voc", self.voc_sample_count)):
             if not 1 <= count <= 1000:
-                errors.append(f"{name} 取樣次數必須介於 1 至 1000")
+                errors.append(tr("polarity.validation.sample_count", name=name))
         for name, method in (("Jsc", self.jsc_aggregation), ("Voc", self.voc_aggregation)):
             if method not in {"median", "mean"}:
-                errors.append(f"{name} 統計方式必須是 Median 或 Mean")
+                errors.append(tr("polarity.validation.aggregation", name=name))
         if self.jsc_minimum_valid_ma_cm2 <= 0 or self.voc_minimum_valid_v <= 0:
-            errors.append("Jsc 與 Voc 最小有效值必須大於 0")
+            errors.append(tr("polarity.validation.minimum_values"))
         if self.jsc_max_variation_percent < 0 or self.voc_max_variation_percent < 0:
-            errors.append("最大允許變異不可小於 0")
+            errors.append(tr("polarity.validation.variation"))
         if self.jsc_compliance_ma_cm2 <= 0 or self.voc_compliance_v <= 0:
-            errors.append("Jsc / Voc Compliance 必須大於 0")
+            errors.append(tr("polarity.validation.compliance"))
         return errors
 
     def to_dict(self) -> dict[str, Any]:

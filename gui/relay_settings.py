@@ -8,12 +8,14 @@ from pathlib import Path
 import re
 from typing import Any
 
+from core.i18n import tr
+
 
 @dataclass
 class RelayChannel:
     number: int
     enabled: bool = True
-    display_name: str = "未使用"
+    display_name: str = ""
     description: str = ""
 
 
@@ -59,57 +61,53 @@ class RelaySettings:
         errors: list[str] = []
         numbers = [item.number for item in self.channels]
         if sorted(numbers) != list(range(1, 9)):
-            errors.append("Channel 必須完整且唯一地包含 CH1～CH8")
+            errors.append(tr("relay.validation.channels_complete"))
         group_ids: set[str] = set()
         assigned_channels: dict[int, str] = {}
         for group in self.groups:
             if not re.fullmatch(r"[a-z][a-z0-9_]*", group.group_id):
-                errors.append(f"Group ID「{group.group_id}」只能使用小寫英數與底線，且須以英文字母開頭")
+                errors.append(tr("relay.validation.group_id_format", group_id=group.group_id))
             if group.group_id in group_ids:
-                errors.append(f"Group ID 重複：{group.group_id}")
+                errors.append(tr("relay.validation.group_id_duplicate", group_id=group.group_id))
             group_ids.add(group.group_id)
             if not group.display_name.strip():
-                errors.append(f"Group「{group.group_id}」缺少顯示名稱")
+                errors.append(tr("relay.validation.group_name_missing", group_id=group.group_id))
             if not group.members:
-                errors.append(f"Group「{group.group_id}」至少需要一個 Channel")
+                errors.append(tr("relay.validation.group_member_missing", group_id=group.group_id))
             if len(group.members) != len(set(group.members)):
-                errors.append(f"Group「{group.group_id}」含有重複 Channel")
+                errors.append(tr("relay.validation.group_member_duplicate", group_id=group.group_id))
             for channel in group.members:
                 if channel not in range(1, 9):
-                    errors.append(f"Group「{group.group_id}」含有無效 Channel：CH{channel}")
+                    errors.append(tr("relay.validation.group_channel_invalid", group_id=group.group_id, channel=channel))
                     continue
                 if group.enabled and channel in assigned_channels:
-                    errors.append(
-                        f"CH{channel} 同時位於啟用的 Group「{assigned_channels[channel]}」與「{group.group_id}」"
-                    )
+                    errors.append(tr("relay.validation.channel_group_conflict", channel=channel, first=assigned_channels[channel], second=group.group_id))
                 if group.enabled:
                     assigned_channels[channel] = group.group_id
         white_light = self.group("white_light")
         if white_light is None or set(white_light.members) != {1, 2}:
-            errors.append("white_light Group 必須由 CH1 與 CH2 組成")
+            errors.append(tr("relay.validation.white_light_members"))
         expected_smu_ids = {f"Ch{index}" for index in range(1, 5)}
         actual_smu_ids = set(self.smu_output_channels)
         if actual_smu_ids != expected_smu_ids:
-            errors.append("SMU 輸出通道必須完整且唯一地包含 Ch1～Ch4")
+            errors.append(tr("relay.validation.smu_channels_complete"))
         relay_numbers = list(self.smu_output_channels.values())
         if any(not isinstance(number, int) or number not in range(1, 9) for number in relay_numbers):
-            errors.append("SMU 輸出通道必須對應有效的 Relay 1～8")
+            errors.append(tr("relay.validation.smu_relay_range"))
         if len(relay_numbers) != len(set(relay_numbers)):
-            errors.append("SMU 輸出通道對應的 Relay 不可重複")
+            errors.append(tr("relay.validation.smu_relay_unique"))
         if white_light is not None and set(relay_numbers) & set(white_light.members):
-            errors.append("SMU 輸出通道不可與 white_light Group 共用 Relay")
+            errors.append(tr("relay.validation.smu_white_light_overlap"))
         enabled_by_number = {channel.number: channel.enabled for channel in self.channels}
         for channel_id, relay_number in self.smu_output_channels.items():
             if relay_number in range(1, 9) and not enabled_by_number.get(relay_number, False):
-                errors.append(f"{channel_id} 對應的 Relay {relay_number} 必須啟用")
+                errors.append(tr("relay.validation.smu_relay_disabled", channel=channel_id, relay=relay_number))
         routing_relays = set(relay_numbers)
         for group in self.groups:
             overlap = routing_relays & set(group.members)
             if group.enabled and overlap:
                 channels = "、".join(f"CH{channel}" for channel in sorted(overlap))
-                errors.append(
-                    f"啟用的 Group「{group.group_id}」不可包含 SMU Routing 專用 Relay：{channels}"
-                )
+                errors.append(tr("relay.validation.routing_group_overlap", group_id=group.group_id, channels=channels))
         return errors
 
     def to_dict(self) -> dict[str, Any]:
@@ -129,7 +127,7 @@ class RelaySettings:
         channel_by_number = {
             int(item.get("number", 0)): RelayChannel(
                 number=int(item.get("number", 0)), enabled=bool(item.get("enabled", True)),
-                display_name=str(item.get("display_name", "未使用")), description=str(item.get("description", "")),
+                display_name=("" if str(item.get("display_name", "")) == "未使用" else str(item.get("display_name", ""))), description=str(item.get("description", "")),
             )
             for item in raw_channels if isinstance(item, dict) and 1 <= int(item.get("number", 0)) <= 8
         }

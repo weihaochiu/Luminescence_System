@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import i18n, tr
+
 
 class ImageView(QGraphicsView):
     """Zoomable, pannable image canvas similar to the vendor viewer."""
@@ -39,7 +41,7 @@ class ImageView(QGraphicsView):
         self._roi_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         self._roi_item.setVisible(False)
         self._scene.addItem(self._roi_item)
-        self._message_item = QGraphicsTextItem("尚未連線相機")
+        self._message_item = QGraphicsTextItem(tr("camera.not_connected"))
         self._message_item.setDefaultTextColor(QColor("#edf0f2"))
         self._scene.addItem(self._message_item)
         self._scene.setSceneRect(0, 0, 800, 600)
@@ -58,6 +60,11 @@ class ImageView(QGraphicsView):
         self._roi_selection_mode = False
         self._roi_selection_start: QPointF | None = None
         self._selection_previous_roi: tuple[int, int, int, int] | None = None
+        i18n.language_changed.connect(self.retranslate)
+
+    def retranslate(self, _language: str = "") -> None:
+        self._message_item.setPlainText(tr("camera.not_connected"))
+        self._center_message()
 
     def set_image(self, image: QImage) -> None:
         previous_size = (
@@ -285,3 +292,6 @@ class CollapsibleSection(QWidget):
     def _toggle(self, expanded: bool) -> None:
         self._button.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
         self._content.setVisible(expanded)
+
+    def set_title(self, title: str) -> None:
+        self._button.setText(title)

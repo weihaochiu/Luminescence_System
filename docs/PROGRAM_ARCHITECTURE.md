@@ -10,6 +10,10 @@
 
 錯誤依賴方向為 `hardware/workflow failure → GUI/controller boundary → ErrorReporter → structured log + bounded session history + presentation`。`resources/errors/error_registry.json` 只保存穩定 code、subsystem、severity、recoverability、translation key 與 actions；`core/error_context.py` 建立有界且可序列化的 diagnostics；`gui/dialogs/error_dialog.py` 與 `gui/error_center/` 負責 UI。硬體層不匯入 PySide dialog，Critical definitions 不得包含 Ignore／Continue。
 
+Registry action 不是裝飾性 metadata：Dialog 只有在 MainWindow/controller 提供該事件的真實 handler 時才顯示按鈕。沒有通用 Retry；Camera、Relay、SMU reconnect 各自 dispatch。SMU reconnect 必須使用明確選定的相同 resource，禁止跨設備替代，且 OUTPUT UNKNOWN／OFF 未確認 latch 不因 transport reconnect 清除；只有既有 safe-output-off readback 與 routing／white-light verification 成功後才解除。量測進行中不提供 reconnect。
+
+Runtime 語言切換由 `language_changed` 觸發集中 retranslation。所有 ComboBox 以 `QSignalBlocker` 保留 canonical `itemData()` 與 selection，retranslation 不送硬體命令、不改 Recipe／Settings／metadata。`InstrumentStateManager` 只發布 canonical state 派生的當前語言 snapshot，不保存長期翻譯狀態。
+
 ## 1. 文件目的
 
 本文件是程式結構的主要依據，說明模組責任、依賴方向、資料流、安全邊界與新功能應放置的位置。修改程式架構時必須同步更新本文件；新增或變更使用者需求時必須同步更新 `REQUIREMENTS_LOG.md`。

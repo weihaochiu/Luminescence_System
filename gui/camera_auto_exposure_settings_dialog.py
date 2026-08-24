@@ -250,7 +250,7 @@ class CameraAutoExposureSettingsDialog(QDialog):
         if self._measurement_running():
             report_error(
                 self,
-                "CAM-202",
+                "UI-101",
                 context={"operation": "ae_calibration", "actual": "measurement is running"},
             )
             return

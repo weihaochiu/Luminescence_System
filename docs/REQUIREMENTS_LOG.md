@@ -12,6 +12,17 @@
 - safety：沿用既有 SMU OUTPUT OFF、Relay routing、Emergency、close safety 與 measurement abort 流程；Critical 無 Ignore／Continue。
 - 文件與測試：`USER_MESSAGE_INVENTORY.md`、由 registry 生成的 `ERROR_CODE_REFERENCE.md`、migration audit，以及 i18n/error GUI/canonical/safety automated regression。
 
+### I18N-ERROR-002－第二輪雙語與錯誤復歸稽核
+
+- 狀態：已完成（2026-08-25）。
+- 使用者原意：依實際程式碼逐項確認 Error action 真實可執行、SMU reconnect 不破壞 OUTPUT safety latch、MainWindow runtime retranslation 完整、inventory 能發現間接動態文字、diagnostics 不外洩敏感值，並修正 Recipe legacy 預設回歸。
+- 驗收條件：無 handler 不顯示 action；無 generic Retry；measurement 中不 reconnect；SMU 僅 reconnect 明確選定 resource 並重新執行 verified OUTPUT OFF；MainWindow 代表性 UI 雙向即時切換且 canonical data/signal 不變；scanner 涵蓋 IfExp、nested signals 與 indirect presentation；registry action 白名單；敏感 context/exception/traceback 在 log/history/copy 前遮蔽；缺少 compliance action 維持 confirm。
+- 影響模組：`core/error_*`、`gui/main_window_*`、`gui/dialogs/error_dialog.py`、Device／SMU／state presentation、locale/registry resources、Recipe migration、inventory generator、tests 與 i18n/error docs。
+- 相容性／資料遷移：不改 Recipe schema；舊中文值仍只在讀取時映射，新資料持續寫 canonical value。語言設定不進入 Recipe、measurement metadata 或 hardware workflow。
+- 安全風險：只重接既有 recovery boundary，不更改 measurement sequence、SCPI protocol、Relay protocol 或 Emergency precedence。任何未知 OUTPUT 狀態均 fail closed。
+- 測試與驗證：新增 Error action/mapping、MainWindow runtime i18n、inventory scanner、diagnostics redaction 與 Recipe default regressions；完整命令與結果記錄於 `I18N_ERROR_SYSTEM_MIGRATION.md` 及本次 Git 報告。
+- 取代或關聯需求：補強 `I18N-ERROR-001`，不取代既有 SMU／Relay／Emergency／close safety requirements。
+
 註：版本摘要中的「Recipe 停用／暫緩」只描述當時版本，現行狀態一律以 FLOW-ELM-001 與 V1.8.2 為準。
 
 ## Current superseding requirement — HDR removal

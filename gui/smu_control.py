@@ -13,6 +13,8 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Signal
 
+from core.i18n import tr
+
 from .smu_base import SMUDriver
 from .polarity_measurement import (
     PolarityMeasurementError,
@@ -110,7 +112,7 @@ class PolarityService:
     def to_physical(self, requested_value: float) -> float:
         if self._factor is None:
             raise SMUInterlockError(
-                "尚未確認 Device-to-SMU Polarity，禁止 Recipe 輸出"
+                tr("smu.error_polarity_unconfirmed")
             )
         return float(requested_value) * self._factor
 
@@ -660,10 +662,10 @@ class SMUControlManager(QObject):
                             f"Relay switching (observed {observed})"
                         )
                 self._check_manual_generation(generation)
-                self.manual_sequence_status.emit("確認白光 OFF…")
+                self.manual_sequence_status.emit(tr("smu.sequence_white_light_off"))
                 light_off()
                 self._check_manual_generation(generation)
-                self.manual_sequence_status.emit("切換輸出通道…")
+                self.manual_sequence_status.emit(tr("smu.sequence_switch_channel"))
                 physical_relay = select_channel(
                     channel_id,
                     lambda: self._check_manual_generation(generation),
@@ -749,7 +751,7 @@ class SMUControlManager(QObject):
                     raise SMUInterlockError("SMU routing changed after polarity measurement")
                 physical = float(requested) * result.factor
                 self.safety.validate(mode, physical, compliance)
-                self.manual_sequence_status.emit("設定 SMU…")
+                self.manual_sequence_status.emit(tr("smu.sequence_configure"))
                 with self._io_lock:
                     driver = self._required_driver()
                     self._check_manual_generation(generation)
@@ -803,7 +805,7 @@ class SMUControlManager(QObject):
                     result.factor,
                 )
                 self.operation_state_changed.emit(SMUOperationState.OUTPUT_ON.value)
-                self.manual_sequence_status.emit("SMU OUTPUT ON")
+                self.manual_sequence_status.emit(tr("smu.sequence_output_on"))
                 LOG.info(
                     "MANUAL_SMU OUTPUT_ON channel=%s relay=%d mode=%s requested=%+.9g physical=%+.9g compliance=%g factor=%+d",
                     channel_id,
@@ -892,7 +894,7 @@ class SMUControlManager(QObject):
                     "UNAVAILABLE",
                     "driver is not connected",
                 )
-                self.error_occurred.emit("SMU is not connected")
+                self.error_occurred.emit(tr("smu.error_not_connected"))
                 return False
             if self._safe_off_pending:
                 self._log_output_off_diagnostics(
@@ -1052,7 +1054,7 @@ class SMUControlManager(QObject):
 
         with self._lock:
             if self._ownership is not SMUOwnership.RECIPE:
-                self.error_occurred.emit("Recipe does not own the SMU")
+                self.error_occurred.emit(tr("smu.error_recipe_not_owner"))
                 return False
             if self._pending:
                 return False
@@ -1413,15 +1415,9 @@ class SMUControlManager(QObject):
             self.ownership_changed.emit(SMUOwnership.FAULT.value)
             self.operation_state_changed.emit(SMUOperationState.FAULT.value)
             self.error_occurred.emit(
-                (
-                    "SMU OUTPUT 已確認關閉，但 routing Relay 安全復歸未完成。"
-                    "系統已進入安全故障狀態。"
-                )
+                tr("smu.error_routing_recovery_incomplete")
                 if smu_off_confirmed
-                else (
-                    "SMU OUTPUT OFF 無法確認，系統已進入安全故障狀態。"
-                    "請勿更換 Relay 或樣品，請檢查 SMU 連線。"
-                )
+                else tr("smu.error_output_off_unconfirmed")
             )
             if routing_clear is not None:
                 self.manual_channel_changed.emit("FAULT")

@@ -30,7 +30,7 @@ class ErrorReporterTests(unittest.TestCase):
         self.assertEqual("SMU-201", event.code)
         self.assertEqual("CH1", event.context.channel)
         self.assertEqual("RuntimeError", event.context.exception_type)
-        self.assertNotIn("password", event.context.as_dict())
+        self.assertEqual("[REDACTED]", event.context.as_dict()["password"])
         self.assertEqual((event,), reporter.history())
         self.assertIn('"error_code": "SMU-201"', captured.output[0])
         self.assertIn('"subsystem": "smu"', captured.output[0])
@@ -76,6 +76,30 @@ class ErrorReporterTests(unittest.TestCase):
         self.assertIn("Error Code: FILE-201", diagnostics)
         self.assertIn("Operation: save", diagnostics)
         self.assertIn("Exception Message: disk full", diagnostics)
+
+    def test_credentials_are_redacted_everywhere_but_normal_resources_survive(self) -> None:
+        secret = RuntimeError(
+            "password=abc123 token: xyz Authorization: Bearer abc"
+        )
+        with self.assertLogs("luminescence.errors", level="ERROR") as captured:
+            event = ErrorReporter().report(
+                "SMU-201",
+                context={
+                    "resource": "USB0::0x2A8D::0x9201::MY123::INSTR",
+                    "command": "GET https://example.test/path?api_key=hidden&mode=read",
+                    "note": "credential: topsecret",
+                },
+                exception=secret,
+                present=False,
+            )
+        diagnostics = format_diagnostics(event)
+        payload = captured.output[0]
+        for forbidden in ("abc123", "xyz", "Bearer abc", "hidden", "topsecret"):
+            self.assertNotIn(forbidden, event.context.as_dict().values())
+            self.assertNotIn(forbidden, diagnostics)
+            self.assertNotIn(forbidden, payload)
+        self.assertIn("USB0::0x2A8D::0x9201::MY123::INSTR", diagnostics)
+        self.assertIn("mode=read", diagnostics)
 
 
 if __name__ == "__main__":

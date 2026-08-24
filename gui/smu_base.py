@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from contextlib import contextmanager
 from typing import Any
 
+from core.i18n import tr
+
 
 @dataclass(frozen=True)
 class SMUDevice:
@@ -26,7 +28,7 @@ class SMUDevice:
         if self.model:
             maker = self.manufacturer.strip()
             return f"{maker} {self.model}".strip()
-        return "VISA 儀器"
+        return tr("smu.visa_instrument")
 
     def to_metadata(self) -> dict[str, Any]:
         return asdict(self)

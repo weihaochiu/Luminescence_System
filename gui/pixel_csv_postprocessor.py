@@ -10,6 +10,8 @@ from pathlib import Path
 from time import monotonic
 from typing import Any, Callable, Mapping
 
+from core.i18n import tr
+
 import numpy as np
 import tifffile
 
@@ -37,7 +39,7 @@ class PixelCSVProgress:
     remaining_time_s: float
     estimated_finish: datetime | None
     message: str = ""
-    phase: str = "Pixel CSV 後處理"
+    phase: str = "Pixel CSV"
 
 
 class PixelCSVPostprocessError(RuntimeError):
@@ -161,13 +163,13 @@ class PixelCSVPostprocessor:
         try:
             status["status"] = "processing"
             _atomic_json(self.status_path, status)
-            self._emit_progress(report_progress, 0, len(jobs), started, "硬體量測完成，SMU 已安全關閉，正在產生 Pixel CSV")
+            self._emit_progress(report_progress, 0, len(jobs), started, tr("progress.pixel_csv_starting"))
             for job in jobs:
                 job_id = str(job["job_id"])
                 existing = records.get(job_id)
                 if existing is not None and self._record_is_valid(existing, job):
                     completed += 1
-                    self._emit_progress(report_progress, completed, len(jobs), started, "已驗證，跳過")
+                    self._emit_progress(report_progress, completed, len(jobs), started, tr("progress.verified_skipped"))
                     continue
                 record = self._process_job(job)
                 records[job_id] = record

@@ -12,6 +12,8 @@ import numpy as np
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage
 
+from core.i18n import tr
+
 from .camera_auto_exposure_settings import (
     DEFAULT_AUTO_EXPOSURE_TARGET_PERCENT,
     default_sdk_target_guess,
@@ -230,7 +232,7 @@ class CameraController(QObject):
             nncam.Nncam.GigeEnable(None, None)
             return list(nncam.Nncam.EnumV2())
         except Exception as exc:
-            self.error_occurred.emit(self._format_error("無法載入相機 SDK 或列出相機", exc))
+            self.error_occurred.emit(self._format_error(tr("camera.error_sdk_enumeration"), exc))
             return []
 
     def open_device(self, device: Any) -> None:
@@ -241,7 +243,7 @@ class CameraController(QObject):
             )
             if not camera:
                 raise CameraStartupError(
-                    "Nncam.Open", RuntimeError("SDK 未回傳有效的相機控制代碼")
+                    "Nncam.Open", RuntimeError(tr("camera.error_invalid_handle"))
                 )
 
             self._camera = camera
@@ -473,15 +475,15 @@ class CameraController(QObject):
             self._camera_status_timer.start()
             if not self._auto_exposure_roi_verified:
                 self.status_changed.emit(
-                    "相機已連線，但 SDK AE 全畫面測光區驗證失敗；Auto Exposure 維持關閉"
+                    tr("camera.status_connected_ae_roi_failed")
                 )
             elif self._alignment_verifier is not None:
-                self.status_changed.emit("正在確認相機 DN alignment…")
+                self.status_changed.emit(tr("camera.status_confirming_alignment"))
             else:
-                self.status_changed.emit(f"已連線：{device.displayname}")
+                self.status_changed.emit(tr("camera.status_connected", device=device.displayname))
         except Exception as exc:
             self.close_camera()
-            self.error_occurred.emit(self._format_error("開啟相機失敗", exc))
+            self.error_occurred.emit(self._format_error(tr("camera.error_open"), exc))
 
     def close_camera(self) -> None:
         was_open = self._camera is not None
@@ -565,9 +567,9 @@ class CameraController(QObject):
         self._gamma_readback = None
         if was_open:
             self.camera_closed.emit()
-            self.status_changed.emit("相機已中斷連線")
+            self.status_changed.emit(tr("camera.status_disconnected"))
         if calibration_was_running:
-            self.ae_calibration_finished.emit(False, "相機已中斷，AE Calibration 已取消")
+            self.ae_calibration_finished.emit(False, tr("camera.calibration_cancelled_disconnect"))
 
     def set_resolution(self, index: int) -> None:
         if self._camera is None or self._device is None:
@@ -600,12 +602,11 @@ class CameraController(QObject):
             self._emit_effective_dn_status()
             if not ae_roi_ready:
                 self.error_occurred.emit(
-                    "解析度切換後的全畫面 AE ROI readback 驗證失敗；"
-                    "Live View 可繼續使用，但 SDK Auto Exposure 維持關閉。"
+                    tr("camera.error_resolution_ae_roi")
                 )
-            self.status_changed.emit(f"解析度：{self._width} × {self._height}")
+            self.status_changed.emit(tr("camera.status_resolution", width=self._width, height=self._height))
         except Exception as exc:
-            self.error_occurred.emit(self._format_error("切換解析度失敗", exc))
+            self.error_occurred.emit(self._format_error(tr("camera.error_resolution"), exc))
 
     def set_auto_exposure_roi(
         self, x: int, y: int, width: int, height: int
@@ -613,15 +614,14 @@ class CameraController(QObject):
         """Set and verify the SDK AE metering ROI in image-pixel coordinates."""
 
         if self._ae_calibration_run is not None:
-            self._abort_ae_calibration("AE ROI 已變更，進行中的 AE Calibration 已取消")
+            self._abort_ae_calibration(tr("camera.calibration_cancelled_roi_changed"))
         verified = self._apply_auto_exposure_roi(
             (x, y, width, height),
             reason="AE_ROI_SET",
         )
         if not verified:
             self.error_occurred.emit(
-                "Auto Exposure ROI 驗證失敗；Scientific ROI 顯示仍保留，"
-                f"SDK AE 未使用此 ROI。{self._auto_exposure_roi_error}"
+                tr("camera.error_ae_roi", detail=self._auto_exposure_roi_error)
             )
         return verified
 
@@ -639,15 +639,14 @@ class CameraController(QObject):
             )
             return False
         if self._ae_calibration_run is not None:
-            self._abort_ae_calibration("AE ROI 已重設，進行中的 AE Calibration 已取消")
+            self._abort_ae_calibration(tr("camera.calibration_cancelled_roi_reset"))
         verified = self._apply_auto_exposure_roi(
             (0, 0, self._width, self._height),
             reason=reason,
         )
         if not verified:
             self.error_occurred.emit(
-                "Auto Exposure 全畫面測光區驗證失敗；SDK AE 維持關閉。"
-                f"{self._auto_exposure_roi_error}"
+                tr("camera.error_ae_full_roi", detail=self._auto_exposure_roi_error)
             )
         return verified
 
@@ -805,9 +804,9 @@ class CameraController(QObject):
             self._camera.put_ExpoTime(int(exposure_us))
             self._camera.put_ExpoAGain(int(gain))
             self._emit_exposure()
-            self.status_changed.emit("手動曝光設定已套用")
+            self.status_changed.emit(tr("camera.status_manual_applied"))
         except Exception as exc:
-            self.error_occurred.emit(self._format_error("套用手動曝光失敗", exc))
+            self.error_occurred.emit(self._format_error(tr("camera.error_manual_apply"), exc))
 
     def switch_to_manual_exposure(self) -> bool:
         """Disable AE and preserve the camera's last actual exposure and gain."""
@@ -820,9 +819,9 @@ class CameraController(QObject):
             self._disable_sdk_auto_exposure(require_readback=True)
             current = self._read_current_exposure(self._camera)
             if current is None:
-                raise RuntimeError("SDK 無法讀回目前 Exposure/Gain")
+                raise RuntimeError(tr("camera.error_exposure_readback"))
             self.exposure_changed.emit(*current)
-            self.status_changed.emit("已切換為手動曝光並保留目前 Exposure/Gain")
+            self.status_changed.emit(tr("camera.status_manual_mode"))
             return True
         except Exception as exc:
             if previous_mode is not SDKAutoExposureMode.MANUAL:
@@ -831,7 +830,7 @@ class CameraController(QObject):
                     self._enable_sdk_auto_exposure(previous_mode)
                 except Exception:
                     LOG.exception("Failed to restore SDK AE after manual switch failure")
-            self.error_occurred.emit(self._format_error("切換手動曝光失敗", exc))
+            self.error_occurred.emit(self._format_error(tr("camera.error_manual_switch"), exc))
             return False
 
     def enable_continuous_auto_exposure(self) -> bool:
@@ -843,11 +842,11 @@ class CameraController(QObject):
         try:
             self._configure_sdk_auto_exposure_parameters(self._camera)
             self._enable_sdk_auto_exposure(SDKAutoExposureMode.CONTINUOUS)
-            self.status_changed.emit("RisingCam SDK 持續自動曝光已開啟")
+            self.status_changed.emit(tr("camera.status_continuous_ae"))
             self._emit_effective_dn_status()
             return True
         except Exception as exc:
-            self.error_occurred.emit(self._format_error("切換持續自動曝光失敗", exc))
+            self.error_occurred.emit(self._format_error(tr("camera.error_continuous_ae"), exc))
             return False
 
     def start_auto_exposure_once(self) -> None:
@@ -857,9 +856,9 @@ class CameraController(QObject):
             self._continuous_auto_exposure_requested = False
             self._configure_sdk_auto_exposure_parameters(self._camera)
             self._enable_sdk_auto_exposure(SDKAutoExposureMode.ONCE)
-            self.status_changed.emit("正在等待 RisingCam SDK 自動曝光收斂…")
+            self.status_changed.emit(tr("camera.status_waiting_ae"))
         except Exception as exc:
-            self.auto_exposure_result.emit(False, self._format_error("無法啟動單次自動曝光", exc))
+            self.auto_exposure_result.emit(False, self._format_error(tr("camera.error_start_once_ae"), exc))
 
     def lock_current_exposure(self) -> None:
         if self._camera is None:
@@ -869,7 +868,7 @@ class CameraController(QObject):
             self._disable_sdk_auto_exposure(require_readback=True)
             self._emit_exposure()
         except Exception as exc:
-            self.error_occurred.emit(self._format_error("鎖定曝光失敗", exc))
+            self.error_occurred.emit(self._format_error(tr("camera.error_lock_exposure"), exc))
 
     def disable_auto_exposure_for_formal_measurement(self) -> bool:
         """Disable SDK AE and verify OFF before Recipe owns Exposure/Gain."""
@@ -882,7 +881,7 @@ class CameraController(QObject):
             return True
         except Exception as exc:
             self.error_occurred.emit(
-                self._format_error("停止 RisingCam SDK 自動曝光失敗", exc)
+                self._format_error(tr("camera.error_stop_ae"), exc)
             )
             return False
 
@@ -949,13 +948,13 @@ class CameraController(QObject):
         profile = self._ae_calibration_profile
         ready = bool(identity is not None and self._camera is not None)
         if self._sensor_bit_depth is None:
-            unavailable_reason = "SensorBitDepth 尚未確認"
+            unavailable_reason = tr("camera.calibration_sensor_bits_unconfirmed")
         elif self._raw_value_alignment not in {"right", "left"}:
-            unavailable_reason = "等待 DN alignment 確認完成後才能執行 AE calibration。"
+            unavailable_reason = tr("camera.calibration_alignment_unconfirmed")
         elif not self._auto_exposure_roi_verified:
-            unavailable_reason = "AE 測光 ROI 尚未通過 SDK readback 驗證。"
+            unavailable_reason = tr("camera.calibration_roi_unverified")
         elif self._camera is None:
-            unavailable_reason = "請先連線相機"
+            unavailable_reason = tr("camera.connect_first")
         else:
             unavailable_reason = ""
         return {
@@ -1042,14 +1041,14 @@ class CameraController(QObject):
             return True
         except Exception as exc:
             self._abort_ae_calibration(
-                self._format_error("無法啟動 AE Calibration", exc)
+                self._format_error(tr("camera.error_calibration_start"), exc)
             )
             return False
 
     def cancel_ae_calibration(self) -> None:
         if self._ae_calibration_run is None:
             return
-        self._abort_ae_calibration("AE Calibration 已由使用者取消")
+        self._abort_ae_calibration(tr("camera.calibration_cancelled_user"))
 
     def _start_next_ae_calibration_point(self) -> None:
         run = self._ae_calibration_run
@@ -1066,7 +1065,7 @@ class CameraController(QObject):
         run.start_point(readback)
         self._enable_sdk_auto_exposure(SDKAutoExposureMode.ONCE)
         self._ae_calibration_timer.start()
-        self._emit_ae_calibration_progress("等待 SDK AE 收斂…")
+        self._emit_ae_calibration_progress(tr("camera.calibration_waiting_convergence"))
 
     def _emit_ae_calibration_progress(self, state: str) -> None:
         run = self._ae_calibration_run
@@ -1104,10 +1103,10 @@ class CameraController(QObject):
             self._disable_sdk_auto_exposure(require_readback=True)
             run.mark_converged(self._frame_sequence, source)
             self._ae_calibration_timer.start()
-            self._emit_ae_calibration_progress("已收斂，等待 fresh scientific frame…")
+            self._emit_ae_calibration_progress(tr("camera.calibration_wait_fresh_frame"))
         except Exception as exc:
             self._abort_ae_calibration(
-                self._format_error("AE Calibration 收斂後關閉 AE 失敗", exc)
+                self._format_error(tr("camera.error_calibration_stop_after_convergence"), exc)
             )
 
     @Slot()
@@ -1119,7 +1118,7 @@ class CameraController(QObject):
             self._disable_sdk_auto_exposure(require_readback=True)
         except Exception as exc:
             self._abort_ae_calibration(
-                self._format_error("AE Calibration timeout 後無法關閉 AE", exc)
+                self._format_error(tr("camera.error_calibration_stop_after_timeout"), exc)
             )
             return
         current = self._read_current_exposure(self._camera)
@@ -1136,7 +1135,7 @@ class CameraController(QObject):
             convergence_source="Timeout",
         )
         self._log_ae_calibration_point(point)
-        self._emit_ae_calibration_progress("此點 15 秒 timeout，繼續下一點")
+        self._emit_ae_calibration_progress(tr("camera.calibration_point_timeout"))
         QTimer.singleShot(0, self._start_next_ae_calibration_point)
 
     def _record_ae_calibration_fresh_frame(self) -> None:
@@ -1157,7 +1156,7 @@ class CameraController(QObject):
             converged=True,
         )
         self._log_ae_calibration_point(point)
-        self._emit_ae_calibration_progress("已記錄 calibration point")
+        self._emit_ae_calibration_progress(tr("camera.calibration_point_recorded"))
         QTimer.singleShot(0, self._start_next_ae_calibration_point)
 
     def _log_ae_calibration_point(self, point: AECalibrationPoint) -> None:
@@ -1224,12 +1223,12 @@ class CameraController(QObject):
             self._emit_effective_dn_status()
             self.ae_calibration_finished.emit(
                 False,
-                self._format_error("AE Calibration 完成處理失敗；舊 profile 已保留", exc),
+                self._format_error(tr("camera.error_calibration_finish"), exc),
             )
             return
         self.ae_calibration_profile_changed.emit(self.ae_calibration_status())
         self._emit_effective_dn_status()
-        self.ae_calibration_finished.emit(True, "AE Calibration 已完成並套用")
+        self.ae_calibration_finished.emit(True, tr("camera.calibration_completed"))
 
     def _abort_ae_calibration(self, message: str) -> None:
         self._ae_calibration_timer.stop()
@@ -2082,12 +2081,12 @@ class CameraController(QObject):
                     self.exposure_changed.emit(*current)
                     self._log_sdk_ae_calibration("AutoOnceConverged")
                     self.auto_exposure_result.emit(
-                        True, "RisingCam SDK 自動曝光已收斂"
+                        True, tr("camera.auto_exposure_converged")
                     )
                 except Exception as exc:
                     self.auto_exposure_result.emit(
                         False,
-                        self._format_error("SDK 自動曝光收斂後鎖定失敗", exc),
+                        self._format_error(tr("camera.error_lock_after_convergence"), exc),
                     )
             else:
                 self._log_sdk_ae_calibration("ContinuousConverged")
@@ -2114,7 +2113,7 @@ class CameraController(QObject):
                     QTimer.singleShot(0, self._start_next_ae_calibration_point)
                 except Exception as exc:
                     self._abort_ae_calibration(
-                        self._format_error("AE Calibration convergence failure", exc)
+                        self._format_error(tr("camera.error_calibration_convergence"), exc)
                     )
             elif self._sdk_auto_exposure_mode is SDKAutoExposureMode.ONCE:
                 try:
@@ -2122,15 +2121,15 @@ class CameraController(QObject):
                 except Exception:
                     LOG.exception("Failed to disable SDK AE after convergence failure")
                 self.auto_exposure_result.emit(
-                    False, "RisingCam SDK 單次自動曝光無法收斂"
+                    False, tr("camera.auto_exposure_not_converged")
                 )
             else:
                 LOG.warning("RisingCam SDK reported auto exposure convergence failure")
         elif event_code == nncam.NNCAM_EVENT_DISCONNECTED:
             self.close_camera()
-            self.error_occurred.emit("相機連線中斷，請檢查 USB 線與供電。")
+            self.error_occurred.emit(tr("camera.error_connection_lost"))
         elif event_code in (nncam.NNCAM_EVENT_ERROR, nncam.NNCAM_EVENT_NOFRAMETIMEOUT):
-            self.error_occurred.emit(f"相機回報錯誤事件：0x{event_code:04X}")
+            self.error_occurred.emit(tr("camera.error_sdk_event", code=f"0x{event_code:04X}"))
 
     def _update_alignment_verification(self, scientific: np.ndarray) -> None:
         verifier = self._alignment_verifier
@@ -2176,34 +2175,31 @@ class CameraController(QObject):
             )
             if self._sdk_auto_exposure_mode is SDKAutoExposureMode.CONTINUOUS:
                 self.status_changed.emit(
-                    f"Alignment 已確認為 {self._raw_value_alignment.capitalize()}；"
-                    "RisingCam SDK 持續自動曝光維持開啟"
+                    tr("camera.status_alignment_ae", alignment=self._raw_value_alignment.capitalize())
                 )
             else:
                 self.status_changed.emit(
-                    f"Alignment 已確認為 {self._raw_value_alignment.capitalize()}"
+                    tr("camera.status_alignment", alignment=self._raw_value_alignment.capitalize())
                 )
         elif state is AlignmentVerificationState.AMBIGUOUS:
             self._raw_value_alignment = "unknown"
             self._raw_value_alignment_source = verifier.source
             if verifier.source == "InsufficientSignal":
-                self.status_changed.emit("相機 DN alignment 訊號不足；SDK AE 不受影響")
+                self.status_changed.emit(tr("camera.status_alignment_low_signal_ae"))
             else:
-                self.status_changed.emit("相機 DN alignment 無法判定；SDK AE 不受影響")
+                self.status_changed.emit(tr("camera.status_alignment_unknown_ae"))
                 if not self._alignment_warning_emitted:
                     self._alignment_warning_emitted = True
                     self.error_occurred.emit(
-                        "多張 scientific frames 的 DN alignment 證據仍互相矛盾；"
-                        "Effective DN 維持無法判定，RisingCam SDK AE、Live View "
-                        "與手動曝光仍可使用。"
+                        tr("camera.error_alignment_conflict")
                     )
         elif verifier.source == "InsufficientSignal":
             self._raw_value_alignment_source = verifier.source
             self.status_changed.emit(
-                "相機 DN alignment 訊號不足；等待更多 scientific signal…"
+                tr("camera.status_alignment_wait_signal")
             )
         elif previous_state is AlignmentVerificationState.UNKNOWN:
-            self.status_changed.emit("正在確認相機 DN alignment…")
+            self.status_changed.emit(tr("camera.status_confirming_alignment"))
 
     def _pull_live_frame(self) -> None:
         if self._camera is None or self._buffer is None:
@@ -2349,7 +2345,7 @@ class CameraController(QObject):
                 ):
                     self._mark_ae_calibration_converged("StableFrameFallback")
                 else:
-                    self._emit_ae_calibration_progress("等待 SDK AE 收斂…")
+                    self._emit_ae_calibration_progress(tr("camera.calibration_waiting_convergence"))
             elif (
                 calibration_run is not None
                 and calibration_state == "waiting_fresh_frame"
@@ -2375,7 +2371,7 @@ class CameraController(QObject):
             if not self._scientific_pull_error_reported:
                 self._scientific_pull_error_reported = True
                 LOG.exception("Camera scientific frame validation failed: %s", exc)
-                self.error_occurred.emit(self._format_error("讀取影像失敗", exc))
+                self.error_occurred.emit(self._format_error(tr("camera.error_read_frame"), exc))
 
     def _effective_dn_status(self) -> dict[str, Any]:
         target_dn = (

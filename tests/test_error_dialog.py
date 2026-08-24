@@ -21,13 +21,17 @@ class ErrorDialogTests(unittest.TestCase):
     def tearDown(self) -> None:
         configure_i18n(None)
 
-    def _dialog(self, code: str = "SMU-203") -> ErrorDialog:
+    def _dialog(self, code: str = "SMU-203", *, with_handlers: bool = True) -> ErrorDialog:
         event = ErrorReporter().report(
             code,
             context={"channel": "CH1", "command": ":OUTP?", "expected": "OFF", "actual": "UNKNOWN"},
             present=False,
         )
-        dialog = ErrorDialog(event)
+        handlers = (
+            {action: (lambda _event: True) for action in event.definition.actions}
+            if with_handlers else {}
+        )
+        dialog = ErrorDialog(event, action_handlers=handlers)
         self.addCleanup(dialog.close)
         return dialog
 
@@ -45,6 +49,26 @@ class ErrorDialogTests(unittest.TestCase):
         self.assertEqual({"safe_shutdown", "reconnect"}, set(dialog.action_buttons))
         object_names = {button.objectName().casefold() for button in dialog.findChildren(type(dialog.copy_button))}
         self.assertFalse(any("ignore" in name or "continue" in name for name in object_names))
+
+    def test_declared_action_without_handler_is_hidden(self) -> None:
+        dialog = self._dialog(with_handlers=False)
+        self.assertEqual({}, dialog.action_buttons)
+
+    def test_action_runs_once_and_disables_buttons_while_verification_is_pending(self) -> None:
+        called = []
+        event = ErrorReporter().report("SMU-203", present=False)
+        dialog = ErrorDialog(
+            event,
+            action_handlers={"safe_shutdown": lambda current: called.append(current.code) or True},
+        )
+        self.addCleanup(dialog.close)
+        dialog.action_buttons["safe_shutdown"].click()
+        self.assertEqual(["SMU-203"], called)
+        self.assertFalse(dialog.action_buttons["safe_shutdown"].isEnabled())
+        self.assertTrue(dialog.action_status_label.isVisibleTo(dialog))
+
+        set_language(Language.EN_US, persist=False)
+        self.assertIn("requested action has started", dialog.action_status_label.text())
 
     def test_technical_details_and_copy_diagnostics(self) -> None:
         dialog = self._dialog()

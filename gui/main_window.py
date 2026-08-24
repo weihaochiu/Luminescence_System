@@ -117,6 +117,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self._measurement_thread: Any | None = None
         self._measurement_worker: Any | None = None
         self._auto_connect_after_scan = False
+        self._smu_reconnect_safety_pending = False
         self._close_in_progress = False
 
         self._build_actions()
@@ -147,10 +148,8 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
 
     def _retranslate_application_shell(self, _language: str = "") -> None:
         self.setWindowTitle(tr("app.title", version=__version__))
-        if hasattr(self, "general_settings_action"):
-            self.general_settings_action.setText(tr("settings.general"))
-        if hasattr(self, "error_center_action"):
-            self.error_center_action.setText(tr("error_center.title"))
+        if hasattr(self, "main_toolbar"):
+            self._retranslate_ui()
 
     def open_general_settings(self) -> None:
         GeneralSettingsDialog(self).exec()

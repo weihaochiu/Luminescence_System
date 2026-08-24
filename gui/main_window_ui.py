@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Construction and signal wiring for the main application window."""
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSignalBlocker, QSize, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -127,41 +127,41 @@ class MainWindowUIMixin:
         self.error_center_action.triggered.connect(self.open_error_center)
 
     def _build_menu_and_toolbar(self) -> None:
-        file_menu = self.menuBar().addMenu(tr("menu.file"))
-        file_menu.addAction(self.capture_action)
-        file_menu.addSeparator()
-        file_menu.addAction(self.exit_action)
+        self.file_menu = self.menuBar().addMenu(tr("menu.file"))
+        self.file_menu.addAction(self.capture_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.exit_action)
 
-        camera_menu = self.menuBar().addMenu(tr("menu.camera"))
-        camera_menu.addAction(self.refresh_action)
-        camera_menu.addAction(self.connect_action)
-        camera_menu.addAction(self.auto_capture_action)
-        camera_menu.addSeparator()
-        camera_menu.addAction(self.temperature_chart_action)
+        self.camera_menu = self.menuBar().addMenu(tr("menu.camera"))
+        self.camera_menu.addAction(self.refresh_action)
+        self.camera_menu.addAction(self.connect_action)
+        self.camera_menu.addAction(self.auto_capture_action)
+        self.camera_menu.addSeparator()
+        self.camera_menu.addAction(self.temperature_chart_action)
 
-        view_menu = self.menuBar().addMenu(tr("menu.view"))
-        view_menu.addAction(self.fit_action)
-        view_menu.addAction(self.actual_action)
+        self.view_menu = self.menuBar().addMenu(tr("menu.view"))
+        self.view_menu.addAction(self.fit_action)
+        self.view_menu.addAction(self.actual_action)
 
-        settings_menu = self.menuBar().addMenu(tr("menu.settings"))
-        settings_menu.addAction(self.general_settings_action)
-        settings_menu.addSeparator()
-        interface_menu = settings_menu.addMenu(tr("menu.interface"))
-        interface_menu.addAction(self.sidebar_settings_action)
-        camera_settings_menu = settings_menu.addMenu(tr("menu.camera_plain"))
-        camera_settings_menu.addAction(self.camera_auto_exposure_settings_action)
-        settings_menu.addSeparator()
-        settings_menu.addAction(self.recipe_manager_action)
-        settings_menu.addAction(self.polarity_settings_action)
-        settings_menu.addAction(self.smu_safety_settings_action)
-        settings_menu.addAction(self.relay_settings_action)
-        settings_menu.addSeparator()
-        settings_menu.addAction(self.smu_auto_connect_action)
+        self.settings_menu = self.menuBar().addMenu(tr("menu.settings"))
+        self.settings_menu.addAction(self.general_settings_action)
+        self.settings_menu.addSeparator()
+        self.interface_menu = self.settings_menu.addMenu(tr("menu.interface"))
+        self.interface_menu.addAction(self.sidebar_settings_action)
+        self.camera_settings_menu = self.settings_menu.addMenu(tr("menu.camera_plain"))
+        self.camera_settings_menu.addAction(self.camera_auto_exposure_settings_action)
+        self.settings_menu.addSeparator()
+        self.settings_menu.addAction(self.recipe_manager_action)
+        self.settings_menu.addAction(self.polarity_settings_action)
+        self.settings_menu.addAction(self.smu_safety_settings_action)
+        self.settings_menu.addAction(self.relay_settings_action)
+        self.settings_menu.addSeparator()
+        self.settings_menu.addAction(self.smu_auto_connect_action)
 
-        help_menu = self.menuBar().addMenu(tr("menu.help"))
-        help_menu.addAction(self.error_center_action)
-        help_menu.addSeparator()
-        help_menu.addAction(self.about_action)
+        self.help_menu = self.menuBar().addMenu(tr("menu.help"))
+        self.help_menu.addAction(self.error_center_action)
+        self.help_menu.addSeparator()
+        self.help_menu.addAction(self.about_action)
 
         toolbar = QToolBar(tr("toolbar.main"), self)
         toolbar.setObjectName("mainToolbar")
@@ -230,10 +230,10 @@ class MainWindowUIMixin:
         resolution_content = QWidget()
         resolution_layout = QVBoxLayout(resolution_content)
         resolution_layout.setContentsMargins(8, 8, 8, 10)
-        capture_form = QFormLayout()
-        capture_form.addRow(tr("camera.resolution"), self.resolution_combo)
-        capture_form.addRow(tr("camera.format"), self.format_combo)
-        resolution_layout.addLayout(capture_form)
+        self.capture_form = QFormLayout()
+        self.capture_form.addRow(tr("camera.resolution"), self.resolution_combo)
+        self.capture_form.addRow(tr("camera.format"), self.format_combo)
+        resolution_layout.addLayout(self.capture_form)
 
         self.exposure_mode_combo = QComboBox()
         for mode in ExposureMode:
@@ -252,24 +252,24 @@ class MainWindowUIMixin:
         self.current_exposure_value = QLabel("--")
         self.current_gain_value = QLabel("--")
         auto_page = QWidget()
-        auto_form = QFormLayout(auto_page)
-        auto_form.setContentsMargins(0, 0, 0, 0)
-        auto_form.addRow(tr("camera.exposure_current"), self.current_exposure_value)
-        auto_form.addRow(tr("camera.gain_current"), self.current_gain_value)
+        self.auto_form = QFormLayout(auto_page)
+        self.auto_form.setContentsMargins(0, 0, 0, 0)
+        self.auto_form.addRow(tr("camera.exposure_current"), self.current_exposure_value)
+        self.auto_form.addRow(tr("camera.gain_current"), self.current_gain_value)
         self.auto_exposure_target_percent_value = QLabel(
             f"{self.controller.auto_exposure_target_percent} %"
         )
         self.auto_exposure_target_dn_value = QLabel(tr("common.undetermined"))
-        auto_form.addRow(tr("camera.ae_target"), self.auto_exposure_target_percent_value)
-        auto_form.addRow(tr("camera.target_dn"), self.auto_exposure_target_dn_value)
+        self.auto_form.addRow(tr("camera.ae_target"), self.auto_exposure_target_percent_value)
+        self.auto_form.addRow(tr("camera.target_dn"), self.auto_exposure_target_dn_value)
 
         manual_page = QWidget()
         manual_layout = QVBoxLayout(manual_page)
         manual_layout.setContentsMargins(0, 0, 0, 0)
-        manual_form = QFormLayout()
-        manual_form.addRow(tr("camera.exposure_time"), self.exposure_spin)
-        manual_form.addRow(tr("camera.gain"), self.gain_spin)
-        manual_layout.addLayout(manual_form)
+        self.manual_form = QFormLayout()
+        self.manual_form.addRow(tr("camera.exposure_time"), self.exposure_spin)
+        self.manual_form.addRow(tr("camera.gain"), self.gain_spin)
+        manual_layout.addLayout(self.manual_form)
         manual_layout.addWidget(self.apply_manual_button)
 
         self.exposure_stack = QStackedWidget()
@@ -288,19 +288,19 @@ class MainWindowUIMixin:
         exposure_content = QWidget()
         exposure_layout = QVBoxLayout(exposure_content)
         exposure_layout.setContentsMargins(8, 8, 8, 10)
-        exposure_form = QFormLayout()
-        exposure_form.addRow(tr("camera.exposure_mode"), self.exposure_mode_combo)
-        exposure_layout.addLayout(exposure_form)
+        self.exposure_form = QFormLayout()
+        self.exposure_form.addRow(tr("camera.exposure_mode"), self.exposure_mode_combo)
+        exposure_layout.addLayout(self.exposure_form)
         exposure_layout.addWidget(self.exposure_stack)
         exposure_separator = QFrame()
         exposure_separator.setFrameShape(QFrame.Shape.HLine)
         exposure_layout.addWidget(exposure_separator)
-        brightness_form = QFormLayout()
-        brightness_form.addRow(tr("camera.mean_dn_current"), self.mean_effective_dn_value)
-        brightness_form.addRow(tr("camera.signal_ratio"), self.effective_dn_percent_value)
-        brightness_form.addRow("Sensor", self.sensor_bit_depth_value)
-        brightness_form.addRow("Alignment", self.raw_value_alignment_value)
-        exposure_layout.addLayout(brightness_form)
+        self.brightness_form = QFormLayout()
+        self.brightness_form.addRow(tr("camera.mean_dn_current"), self.mean_effective_dn_value)
+        self.brightness_form.addRow(tr("camera.signal_ratio"), self.effective_dn_percent_value)
+        self.brightness_form.addRow("Sensor", self.sensor_bit_depth_value)
+        self.brightness_form.addRow("Alignment", self.raw_value_alignment_value)
+        exposure_layout.addLayout(self.brightness_form)
         exposure_layout.addWidget(self.camera_connection_hint)
 
         temperature_content = QWidget()
@@ -318,32 +318,38 @@ class MainWindowUIMixin:
         )
 
         info_content = QWidget()
-        info_layout = QFormLayout(info_content)
-        info_layout.setContentsMargins(8, 8, 8, 10)
+        self.info_layout = QFormLayout(info_content)
+        self.info_layout.setContentsMargins(8, 8, 8, 10)
         self.model_value = QLabel("—")
         self.sdk_value = QLabel("—")
         self.color_value = QLabel("—")
         self.model_value.setWordWrap(True)
-        info_layout.addRow(tr("camera.model"), self.model_value)
-        info_layout.addRow(tr("camera.sensor"), self.color_value)
-        info_layout.addRow("SDK", self.sdk_value)
+        self.info_layout.addRow(tr("camera.model"), self.model_value)
+        self.info_layout.addRow(tr("camera.sensor"), self.color_value)
+        self.info_layout.addRow("SDK", self.sdk_value)
 
         sidebar_body = QWidget()
         sidebar_layout = QVBoxLayout(sidebar_body)
         sidebar_layout.setContentsMargins(3, 3, 3, 3)
         sidebar_layout.setSpacing(3)
         sidebar_layout.addStretch()
-        sections = (
-            SidebarItem("camera_connection", tr("toolbar.camera_connect"), CollapsibleSection(tr("toolbar.camera_connect"), self.device_panel.camera_content, True), 10),
-            SidebarItem("smu_connection", tr("toolbar.smu_connect"), CollapsibleSection(tr("toolbar.smu_connect"), self.device_panel.smu_content, True), 20),
-            SidebarItem("manual_smu", tr("toolbar.manual_smu"), CollapsibleSection(tr("smu.manual_output"), self.manual_smu_panel, True), 30),
-            SidebarItem("recipe", tr("recipe.selection"), CollapsibleSection(tr("recipe.title"), self.device_panel.recipe_content, True), 40),
-            SidebarItem("manual_capture", tr("camera.manual_capture"), CollapsibleSection(tr("camera.manual_capture"), capture_content, True), 50),
-            SidebarItem("resolution", tr("camera.resolution"), CollapsibleSection(tr("camera.resolution"), resolution_content, True), 60),
-            SidebarItem("exposure", tr("camera.exposure_control"), CollapsibleSection(tr("camera.exposure_control"), exposure_content, True), 70),
-            SidebarItem("temperature", tr("camera.temperature"), CollapsibleSection(tr("camera.temperature"), temperature_content, True), 75),
-            SidebarItem("camera_info", tr("camera.information"), CollapsibleSection(tr("camera.information"), info_content, False), 80),
+        section_specs = (
+            ("camera_connection", "toolbar.camera_connect", "toolbar.camera_connect", self.device_panel.camera_content, True, 10),
+            ("smu_connection", "toolbar.smu_connect", "toolbar.smu_connect", self.device_panel.smu_content, True, 20),
+            ("manual_smu", "toolbar.manual_smu", "smu.manual_output", self.manual_smu_panel, True, 30),
+            ("recipe", "recipe.selection", "recipe.title", self.device_panel.recipe_content, True, 40),
+            ("manual_capture", "camera.manual_capture", "camera.manual_capture", capture_content, True, 50),
+            ("resolution", "camera.resolution", "camera.resolution", resolution_content, True, 60),
+            ("exposure", "camera.exposure_control", "camera.exposure_control", exposure_content, True, 70),
+            ("temperature", "camera.temperature", "camera.temperature", temperature_content, True, 75),
+            ("camera_info", "camera.information", "camera.information", info_content, False, 80),
         )
+        sections = []
+        self._sidebar_title_keys = {}
+        for item_id, display_key, title_key, content, expanded, order in section_specs:
+            section = CollapsibleSection(tr(title_key), content, expanded)
+            sections.append(SidebarItem(item_id, tr(display_key), section, order, translation_key=display_key))
+            self._sidebar_title_keys[item_id] = (section, title_key)
         self.sidebar_registry = SidebarRegistry(sidebar_layout, self.settings)
         for item in sections:
             self.sidebar_registry.register(item)
@@ -454,6 +460,160 @@ class MainWindowUIMixin:
             QScrollArea { background: #eef0f1; }
             """
         )
+
+    def _retranslate_ui(self) -> None:
+        """Retranslate the existing widget tree without changing machine state."""
+
+        menu_keys = (
+            (self.file_menu, "menu.file"),
+            (self.camera_menu, "menu.camera"),
+            (self.view_menu, "menu.view"),
+            (self.settings_menu, "menu.settings"),
+            (self.interface_menu, "menu.interface"),
+            (self.camera_settings_menu, "menu.camera_plain"),
+            (self.help_menu, "menu.help"),
+        )
+        for menu, key in menu_keys:
+            menu.setTitle(tr(key))
+
+        action_keys = (
+            (self.refresh_action, "toolbar.refresh_devices", "toolbar.refresh_devices_tooltip"),
+            (self.connect_action, "common.disconnect" if self.controller.is_open else "toolbar.camera_connection", "toolbar.camera_connection_tooltip"),
+            (self.capture_action, "toolbar.capture_image", "toolbar.capture_image_tooltip"),
+            (self.auto_capture_action, "toolbar.auto_capture", "toolbar.auto_capture_tooltip"),
+            (self.temperature_chart_action, "camera.temperature_chart", "camera.temperature_chart_tooltip"),
+            (self.fit_action, "view.fit_window", "view.fit_window_tooltip"),
+            (self.actual_action, "view.actual_size", "view.actual_size_tooltip"),
+            (self.recipe_manager_action, "recipe.manager", "recipe.manager_tooltip"),
+            (self.polarity_settings_action, "settings.polarity", "settings.polarity_tooltip"),
+            (self.camera_auto_exposure_settings_action, "settings.auto_exposure", "settings.auto_exposure_tooltip"),
+            (self.relay_settings_action, "settings.relay", "settings.relay_tooltip"),
+            (self.smu_safety_settings_action, "settings.smu_safety", "settings.smu_safety_tooltip"),
+            (self.sidebar_settings_action, "settings.sidebar", "settings.sidebar_tooltip"),
+            (self.smu_auto_connect_action, "settings.smu_auto_connect", "settings.smu_auto_connect_tooltip"),
+        )
+        for action, text_key, tooltip_key in action_keys:
+            action.setText(tr(text_key))
+            action.setToolTip(tr(tooltip_key))
+        self.exit_action.setText(tr("app.exit"))
+        self.about_action.setText(tr("app.about"))
+        self.general_settings_action.setText(tr("settings.general"))
+        self.error_center_action.setText(tr("error_center.title"))
+        self.main_toolbar.setWindowTitle(tr("toolbar.main"))
+        self.emergency_stop_button.setText(tr("common.emergency_stop"))
+        self.emergency_stop_button.setToolTip(tr("common.emergency_stop_tooltip"))
+
+        self.capture_button.setText(tr("camera.capture"))
+        self.auto_capture_button.setText(tr("camera.capture_after_auto_exposure"))
+        self.apply_manual_button.setText(tr("camera.apply_manual_settings"))
+        self.temperature_chart_button.setText(tr("camera.open_temperature_chart"))
+        self.camera_connection_hint.setText(tr("camera.connect_first"))
+
+        format_blocker = QSignalBlocker(self.format_combo)
+        format_index = self.format_combo.findData("rgb24")
+        if format_index >= 0:
+            self.format_combo.setItemText(format_index, tr("camera.format_rgb24"))
+        del format_blocker
+        exposure_blocker = QSignalBlocker(self.exposure_mode_combo)
+        selected_mode = self.exposure_mode_combo.currentData()
+        for mode in ExposureMode:
+            index = self.exposure_mode_combo.findData(mode.value)
+            if index >= 0:
+                self.exposure_mode_combo.setItemText(index, mode.label)
+        selected_index = self.exposure_mode_combo.findData(selected_mode)
+        if selected_index >= 0:
+            self.exposure_mode_combo.setCurrentIndex(selected_index)
+        del exposure_blocker
+
+        form_keys = (
+            (self.capture_form, self.resolution_combo, "camera.resolution"),
+            (self.capture_form, self.format_combo, "camera.format"),
+            (self.auto_form, self.current_exposure_value, "camera.exposure_current"),
+            (self.auto_form, self.current_gain_value, "camera.gain_current"),
+            (self.auto_form, self.auto_exposure_target_percent_value, "camera.ae_target"),
+            (self.auto_form, self.auto_exposure_target_dn_value, "camera.target_dn"),
+            (self.manual_form, self.exposure_spin, "camera.exposure_time"),
+            (self.manual_form, self.gain_spin, "camera.gain"),
+            (self.exposure_form, self.exposure_mode_combo, "camera.exposure_mode"),
+            (self.brightness_form, self.mean_effective_dn_value, "camera.mean_dn_current"),
+            (self.brightness_form, self.effective_dn_percent_value, "camera.signal_ratio"),
+            (self.info_layout, self.model_value, "camera.model"),
+            (self.info_layout, self.color_value, "camera.sensor"),
+        )
+        for form, field, key in form_keys:
+            label = form.labelForField(field)
+            if isinstance(label, QLabel):
+                label.setText(tr(key))
+
+        for item in self.sidebar_registry.items:
+            if item.translation_key:
+                item.display_name = tr(item.translation_key)
+            section, title_key = self._sidebar_title_keys[item.id]
+            section.set_title(tr(title_key))
+
+        self.view_title.setText(
+            tr("camera.live_view_named", name=self.camera_info.get("name", ""))
+            if self.controller.is_open and self.camera_info.get("name")
+            else tr("camera.live_view")
+        )
+        self.select_dn_roi_button.setText(tr("camera.select_dn_roi"))
+        self.select_dn_roi_button.setToolTip(tr("camera.select_dn_roi_tooltip"))
+        self.clear_dn_roi_button.setText(tr("camera.clear_roi"))
+        self.clear_dn_roi_button.setToolTip(tr("camera.clear_roi_tooltip"))
+        self.live_view_roi_dn_value.setToolTip(tr("camera.roi_mean_dn_tooltip"))
+        self.mean_effective_dn_value.setToolTip(tr("camera.mean_effective_dn_tooltip"))
+
+        if self.controller.is_open:
+            self.camera_status.setText(
+                tr("camera.status_model", model=self.camera_info.get("model", "—"))
+            )
+        else:
+            self.camera_status.setText(tr("camera.status_empty"))
+        if self.last_image is None:
+            self.resolution_status.setText(tr("camera.image_status_empty"))
+            self.zoom_status.setText(tr("view.zoom_empty"))
+        else:
+            self.resolution_status.setText(
+                f"{self.last_image.width()} × {self.last_image.height()}"
+            )
+            self.zoom_status.setText(
+                tr("view.zoom_percent", value=f"{self.image_view.transform().m11() * 100.0:.1f}")
+            )
+        exposure = self.current_exposure_value.text()
+        gain = self.current_gain_value.text()
+        self.exposure_status.setText(
+            tr("camera.exposure_status_empty")
+            if exposure == "--"
+            else tr("camera.exposure_status", value=exposure)
+        )
+        self.gain_status.setText(
+            tr("camera.gain_status_empty")
+            if gain == "--"
+            else tr("camera.gain_status", value=gain.removesuffix(" %"))
+        )
+        temperature = self.camera_temperature_value.text()
+        self.temperature_status.setText(
+            tr("camera.temperature_unavailable")
+            if temperature == "N/A"
+            else tr("camera.temperature_current", temperature=temperature)
+        )
+
+        self.device_panel.retranslate()
+        self.manual_smu_panel.retranslate()
+        self.measurement_control_bar.retranslate()
+        self.instrument_state_manager.refresh()
+        self._update_white_light_control()
+        self._update_measurement_controls()
+        self._update_live_view_roi_controls()
+
+        metrics = self.main_toolbar.fontMetrics()
+        for action in self.main_toolbar.actions():
+            if action.isSeparator():
+                continue
+            button = self.main_toolbar.widgetForAction(action)
+            if isinstance(button, QToolButton):
+                button.setMinimumWidth(metrics.horizontalAdvance(action.text()) + 46)
+                button.setMinimumHeight(metrics.height() + 18)
 
     def _build_measurement_operation_bar(self) -> QFrame:
         bar = MeasurementControlBar()

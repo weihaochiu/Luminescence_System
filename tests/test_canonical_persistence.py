@@ -46,6 +46,22 @@ class CanonicalPersistenceTests(unittest.TestCase):
         zh_loaded = Recipe.from_dict(en_loaded.to_dict())
         self.assertEqual(en_loaded.to_dict()["el_matrix"], zh_loaded.to_dict()["el_matrix"])
 
+    def test_missing_dark_iv_compliance_action_keeps_legacy_confirm_default(self) -> None:
+        self.assertEqual(
+            "confirm",
+            Recipe.from_dict({"dark_iv": {}}).dark_iv.compliance_action,
+        )
+
+    def test_legacy_chinese_compliance_actions_remain_compatible(self) -> None:
+        self.assertEqual(
+            "confirm",
+            Recipe.from_dict({"dark_iv": {"compliance_action": "確認後繼續"}}).dark_iv.compliance_action,
+        )
+        self.assertEqual(
+            "abort",
+            Recipe.from_dict({"dark_iv": {"compliance_action": "立即中止"}}).dark_iv.compliance_action,
+        )
+
     def test_manual_smu_legacy_display_values_migrate(self) -> None:
         for legacy, expected in (("定電流密度", "CC"), ("定電壓", "CV"), ("constant_voltage", "CV")):
             settings = DictSettings({MODE_KEY: legacy})

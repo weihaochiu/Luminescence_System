@@ -9,6 +9,8 @@ import math
 from statistics import fmean, median, pstdev
 from typing import Any, Callable, ContextManager
 
+from core.i18n import tr
+
 from .polarity_settings import PolarityMeasurementSettings
 
 
@@ -83,14 +85,14 @@ class PolarityMeasurementService:
         partial_results: dict[str, Any] = {}
         try:
             check_cancel()
-            status("開啟白光…")
+            status(tr("polarity.status.white_light_on"))
             # The relay may switch before its transport reports an error, so an
             # attempted ON always requires a best-effort OFF in ``finally``.
             light_shutdown_required = True
             light_on()
             wait_ms(settings.white_light_stabilization_ms)
 
-            status("量測 Jsc…")
+            status(tr("polarity.status.measuring_jsc"))
             current_compliance_a = settings.jsc_compliance_ma_cm2 * area_cm2 / 1000.0
             with self._measurement_configuration(
                 driver,
@@ -126,7 +128,7 @@ class PolarityMeasurementService:
                 current_compliance_a,
             )
 
-            status("量測 Voc…")
+            status(tr("polarity.status.measuring_voc"))
             with self._measurement_configuration(
                 driver,
                 source_mode="CURR",
@@ -158,7 +160,7 @@ class PolarityMeasurementService:
                 settings.voc_compliance_v,
             )
 
-            status("判斷極性…")
+            status(tr("polarity.status.determining"))
             invalid_reasons: list[str] = []
             if abs(jsc.representative) < settings.jsc_minimum_valid_ma_cm2:
                 invalid_reasons.append(
@@ -207,7 +209,7 @@ class PolarityMeasurementService:
                     check_cancel()
                 except Exception:
                     check_cancel_safely = False
-                status("關閉白光…")
+                status(tr("polarity.status.white_light_off"))
                 light_off()
                 if not check_cancel_safely:
                     LOG.info("White Light OFF completed after polarity cancellation")
