@@ -17,6 +17,10 @@ def closeEvent(self: Any, event: QCloseEvent) -> None:  # noqa: N802 - Qt API na
     if self._close_in_progress:
         return
     self._close_in_progress = True
+    try:
+        self.manual_smu_panel.flush_persistent_settings()
+    except Exception:
+        LOG.exception("Manual SMU settings flush failed during application close")
     self.setEnabled(False)
     self._cancel_measurement_for_emergency()
     self.smu_monitor.stop()

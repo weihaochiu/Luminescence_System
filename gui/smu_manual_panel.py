@@ -130,8 +130,7 @@ class ManualSMUPanel(QWidget):
 
         self._configure_mode_widgets(self._active_mode)
         self._apply_mode_values(self._active_mode)
-        if self._settings_store is not None:
-            self._apply_persistent_settings(self._settings_store.load())
+        self.restore_persistent_settings()
 
         self.mode_combo.currentIndexChanged.connect(self._update_mode)
         self.area_spin.valueChanged.connect(self._update_area_limits)
@@ -411,6 +410,12 @@ class ManualSMUPanel(QWidget):
             return
         self._save_timer.stop()
         self._settings_store.save(self._settings_snapshot())
+
+    def restore_persistent_settings(self) -> None:
+        """Restore only validated Manual SMU input parameters into the GUI."""
+
+        if self._settings_store is not None:
+            self._apply_persistent_settings(self._settings_store.load())
 
     def reset_persistent_settings(self) -> None:
         """Reset input parameters without changing any SMU or Relay state."""
