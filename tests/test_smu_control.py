@@ -31,8 +31,14 @@ class FakeSMU(SMUDriver):
         self.block_configure = False
         self.configure_started = threading.Event()
         self.continue_configure = threading.Event()
+        self.block_safe_stop = False
+        self.safe_stop_started = threading.Event()
+        self.continue_safe_stop = threading.Event()
         self.query_returns_unknown = False
         self.query_raises = False
+        self.block_query = False
+        self.query_started = threading.Event()
+        self.continue_query = threading.Event()
         self.query_output_calls = 0
         self.measure_voltage_calls = 0
         self.measure_current_calls = 0
@@ -86,6 +92,9 @@ class FakeSMU(SMUDriver):
     def safe_stop(self) -> list[str]:
         self._enter()
         try:
+            self.safe_stop_started.set()
+            if self.block_safe_stop:
+                self.continue_safe_stop.wait(timeout=1.0)
             if not self.safe_stop_failures:
                 self.output = False
             self.commands.append(("OUTPUT", False))
@@ -116,6 +125,9 @@ class FakeSMU(SMUDriver):
     def query_output_enabled(self) -> bool | None:
         self.query_output_calls += 1
         self.readback_commands.append("OUTP?")
+        self.query_started.set()
+        if self.block_query:
+            self.continue_query.wait(timeout=1.0)
         if self.query_raises:
             raise TimeoutError("simulated VISA timeout")
         return None if self.query_returns_unknown else self.output
@@ -328,6 +340,72 @@ class SMUControlTests(unittest.TestCase):
         self.assertNotIn(("OUTPUT", True), self.driver.commands)
         self.assertFalse(self.control.emergency_latched)
 
+    def test_manual_stop_invalidates_older_queued_output_on(self) -> None:
+        self.driver.block_configure = True
+        self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
+        self.assertTrue(self.driver.configure_started.wait(timeout=1.0))
+
+        try:
+            self.assertTrue(self.control.request_manual_off())
+        finally:
+            self.driver.continue_configure.set()
+
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and self.control.output_confirmed_off
+            and not self.control.is_busy
+        )
+        self.assertNotIn(("OUTPUT", True), self.driver.commands)
+        self.assertFalse(self.driver.output)
+
+    def test_repeated_manual_stop_is_idempotent_while_off_is_pending(self) -> None:
+        self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        self.driver.block_safe_stop = True
+        self.driver.safe_stop_started.clear()
+
+        self.assertTrue(self.control.request_manual_off())
+        self.assertTrue(self.driver.safe_stop_started.wait(timeout=1.0))
+        try:
+            self.assertTrue(self.control.request_manual_off())
+        finally:
+            self.driver.continue_safe_stop.set()
+
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and self.control.output_confirmed_off
+            and not self.control.is_busy
+        )
+        self.assertEqual(1, self.driver.commands.count(("OUTPUT", False)))
+        self.assertFalse(self.driver.output)
+
+    def test_safe_off_recovers_stale_idle_ownership_with_physical_output_on(self) -> None:
+        self.assertTrue(self.control.request_manual_output("CC", 0.002, 2.0))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        with self.control._lock:
+            self.control._ownership = SMUOwnership.IDLE
+            self.control._operation_state = SMUOperationState.READY
+
+        self.assertTrue(self.control.request_safe_output_off("stale ownership test"))
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and self.control.output_confirmed_off
+            and not self.control.is_busy
+        )
+        self.assertFalse(self.driver.output)
+
+    def test_fail_safe_off_is_accepted_for_recipe_owned_output(self) -> None:
+        self.control.acquire_recipe()
+        self.control.recipe_output("CC", 0.002, 2.0)
+
+        self.assertTrue(self.control.request_safe_output_off("operator safety stop"))
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and self.control.output_confirmed_off
+            and not self.control.is_busy
+        )
+        self.assertFalse(self.driver.output)
+
     def test_unknown_polarity_allows_manual_in_physical_coordinates(self) -> None:
         driver = FakeSMU()
         control = SMUControlManager()
@@ -537,6 +615,30 @@ class SMUControlTests(unittest.TestCase):
         self.assertTrue(readings[-1].output_enabled)
         self.assertEqual(1.2, readings[-1].voltage_v)
         self.assertEqual(0.0, readings[-1].current_a)
+
+    def test_manual_stop_is_accepted_while_monitor_readback_is_pending(self) -> None:
+        self.assertTrue(self.control.request_manual_output("CV", 1.2, 0.020))
+        self.wait_until(
+            lambda: self.control.operation_state is SMUOperationState.OUTPUT_ON
+            and not self.control.is_busy
+        )
+        self.driver.block_query = True
+        self.driver.query_started.clear()
+
+        self.assertTrue(self.control.request_readback())
+        self.assertTrue(self.driver.query_started.wait(timeout=1.0))
+        try:
+            self.assertTrue(self.control.request_manual_off())
+        finally:
+            self.driver.continue_query.set()
+
+        self.wait_until(
+            lambda: self.control.ownership is SMUOwnership.IDLE
+            and self.control.output_confirmed_off
+            and not self.control.is_busy
+        )
+        self.assertFalse(self.driver.output)
+        self.assertFalse(self.driver.concurrent_io)
 
     def test_idle_unexpected_output_on_skips_measurement_and_updates_state(self) -> None:
         state_manager = InstrumentStateManager(self.control)

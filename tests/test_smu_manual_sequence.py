@@ -23,6 +23,7 @@ class SequenceSMU:
         self.jsc_current_a = -0.002
         self.voc_v = 0.8
         self.fail_configuration = False
+        self.query_returns_unknown = False
         self.measure_current_entered: threading.Event | None = None
         self.release_measure_current: threading.Event | None = None
         self.measure_voltage_entered: threading.Event | None = None
@@ -42,9 +43,9 @@ class SequenceSMU:
         self.output = enabled
         self.events.append(("OUTPUT", enabled))
 
-    def query_output_enabled(self) -> bool:
+    def query_output_enabled(self) -> bool | None:
         self.events.append(("QUERY_OUTPUT", self.output))
-        return self.output
+        return None if self.query_returns_unknown else self.output
 
     def measure_current(self) -> float:
         self.events.append("MEASURE_JSC")
@@ -292,6 +293,11 @@ class ManualSMUSequenceTests(unittest.TestCase):
         self.wait_until(lambda: self.control.ownership is SMUOwnership.IDLE and not self.control.is_busy)
         stopped = self.events[stop_start:]
         self.assertLess(stopped.index(("SAFE_STOP", False)), stopped.index(("RELAY", 5, False)))
+        self.assertLess(
+            stopped.index(("QUERY_OUTPUT", False)),
+            stopped.index(("RELAY", 5, False)),
+        )
+        self.assertTrue(self.control.output_confirmed_off)
         self.assertIsNone(self.active_channel)
         self.assertIsNone(self.control.manual_routing_snapshot["active_channel_verified"])
 
@@ -306,6 +312,27 @@ class ManualSMUSequenceTests(unittest.TestCase):
         self.assertTrue(self.control.output_confirmed_off)
         self.assertIs(self.control.ownership, SMUOwnership.FAULT)
         self.fail_clear = False
+
+    def test_unconfirmed_output_off_latches_fault_and_preserves_routing(self) -> None:
+        self.assertTrue(self.request(channel_id="Ch1"))
+        self.wait_until(lambda: self.control.output_enabled and not self.control.is_busy)
+        stop_start = len(self.events)
+        self.driver.query_returns_unknown = True
+        try:
+            self.assertTrue(self.control.request_manual_off())
+            self.wait_until(
+                lambda: self.control.ownership is SMUOwnership.FAULT
+                and not self.control.is_busy
+            )
+        finally:
+            self.driver.query_returns_unknown = False
+
+        stopped = self.events[stop_start:]
+        self.assertIn(("SAFE_STOP", False), stopped)
+        self.assertNotIn(("RELAY", 5, False), stopped)
+        self.assertEqual("Ch1", self.active_channel)
+        self.assertFalse(self.control.output_confirmed_off)
+        self.assertIs(self.control.operation_state, SMUOperationState.FAULT)
 
     def test_same_channel_after_stop_still_rechecks_polarity(self) -> None:
         self.assertTrue(self.request(channel_id="Ch1"))

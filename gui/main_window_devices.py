@@ -164,7 +164,10 @@ class MainWindowDeviceMixin:
         else:
             accepted = control.request_safe_output_off("manual panel recovery")
         if not accepted:
-            self.show_smu_error("目前無法執行 SMU OUTPUT OFF 安全復歸。")
+            self.show_smu_error(
+                "SMU OUTPUT OFF 無法確認，系統已進入安全故障狀態。"
+                "請勿更換 Relay 或樣品，請檢查 SMU 連線。"
+            )
             return
         self.status_message.setText(
             "正在確認 SMU OUTPUT OFF；確認後將關閉並驗證所有 SMU routing Relay。"
