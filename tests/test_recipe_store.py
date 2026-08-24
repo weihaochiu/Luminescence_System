@@ -5,11 +5,102 @@ import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 from gui.recipe_store import Recipe, RecipeStore
 
 
 class RecipeStoreTests(unittest.TestCase):
+    def _assert_upsert_io_failure_is_transactional(self, stage: str) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recipes.json"
+            store = RecipeStore(path)
+            original = Recipe()
+            store.upsert(original)
+            disk_before = path.read_bytes()
+            memory_before = [item.to_dict() for item in store.recipes]
+            candidate = deepcopy(store.recipes[0])
+            candidate.name = "Changed once"
+            caller_before = candidate.to_dict()
+
+            if stage == "write":
+                original_write_text = Path.write_text
+
+                def write_then_fail(
+                    target: Path, *args: object, **kwargs: object
+                ) -> int:
+                    result = original_write_text(target, *args, **kwargs)
+                    raise OSError("temporary write failed")
+
+                failure = patch.object(Path, "write_text", write_then_fail)
+                expected = "temporary write failed"
+            else:
+                failure = patch.object(
+                    Path,
+                    "replace",
+                    side_effect=OSError("atomic replace failed"),
+                )
+                expected = "atomic replace failed"
+
+            with failure, self.assertRaisesRegex(OSError, expected):
+                store.upsert(candidate)
+
+            self.assertEqual(memory_before, [item.to_dict() for item in store.recipes])
+            self.assertEqual(disk_before, path.read_bytes())
+            self.assertEqual(caller_before, candidate.to_dict())
+            self.assertFalse(path.with_suffix(".json.tmp").exists())
+
+            store.upsert(candidate)
+            self.assertEqual(memory_before[0]["version"] + 1, candidate.version)
+            self.assertEqual(candidate.to_dict(), store.recipes[0].to_dict())
+            self.assertEqual(
+                store.recipes[0].to_dict(), RecipeStore(path).recipes[0].to_dict()
+            )
+
+    def _assert_delete_io_failure_is_transactional(self, stage: str) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recipes.json"
+            store = RecipeStore(path)
+            first = Recipe(name="First")
+            second = Recipe(name="Second")
+            store.upsert(first)
+            store.upsert(second)
+            disk_before = path.read_bytes()
+            memory_before = [item.to_dict() for item in store.recipes]
+
+            if stage == "write":
+                original_write_text = Path.write_text
+
+                def write_then_fail(
+                    target: Path, *args: object, **kwargs: object
+                ) -> int:
+                    result = original_write_text(target, *args, **kwargs)
+                    raise OSError("temporary write failed")
+
+                failure = patch.object(Path, "write_text", write_then_fail)
+                expected = "temporary write failed"
+            else:
+                failure = patch.object(
+                    Path,
+                    "replace",
+                    side_effect=OSError("atomic replace failed"),
+                )
+                expected = "atomic replace failed"
+
+            with failure, self.assertRaisesRegex(OSError, expected):
+                store.delete(first.recipe_id)
+
+            self.assertEqual(memory_before, [item.to_dict() for item in store.recipes])
+            self.assertEqual(disk_before, path.read_bytes())
+            self.assertFalse(path.with_suffix(".json.tmp").exists())
+
+            store.delete(first.recipe_id)
+            self.assertEqual([second.recipe_id], [item.recipe_id for item in store.recipes])
+            self.assertEqual(
+                [item.to_dict() for item in store.recipes],
+                [item.to_dict() for item in RecipeStore(path).recipes],
+            )
+
     def test_default_formal_recipe_validates(self) -> None:
         recipe = Recipe()
         self.assertEqual([], recipe.validate())
@@ -226,6 +317,18 @@ class RecipeStoreTests(unittest.TestCase):
             reloaded = RecipeStore(path).recipes[0]
             self.assertEqual("Changed once", reloaded.name)
             self.assertEqual(version_before + 1, reloaded.version)
+
+    def test_upsert_temporary_write_failure_is_transactional(self) -> None:
+        self._assert_upsert_io_failure_is_transactional("write")
+
+    def test_upsert_atomic_replace_failure_is_transactional(self) -> None:
+        self._assert_upsert_io_failure_is_transactional("replace")
+
+    def test_delete_temporary_write_failure_is_transactional(self) -> None:
+        self._assert_delete_io_failure_is_transactional("write")
+
+    def test_delete_atomic_replace_failure_is_transactional(self) -> None:
+        self._assert_delete_io_failure_is_transactional("replace")
 
 
 if __name__ == "__main__":

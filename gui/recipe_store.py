@@ -813,5 +813,8 @@ class RecipeStore:
         recipe.modified_at = candidate.modified_at
 
     def delete(self, recipe_id: str) -> None:
-        self.recipes = [recipe for recipe in self.recipes if recipe.recipe_id != recipe_id]
-        self.save()
+        updated = [
+            recipe for recipe in self.recipes if recipe.recipe_id != recipe_id
+        ]
+        self._write_recipes(updated)
+        self.recipes = updated

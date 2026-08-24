@@ -35,6 +35,7 @@ from gui.measurement_output import (
     sanitize_filename,
     save_matrix_capture,
     save_pixel_csv_products,
+    sha256_file,
 )
 from gui.measurement_execution_plan import build_measurement_execution_plan
 from gui.measurement_progress_dialog import MeasurementProgressDialog
@@ -88,7 +89,18 @@ class _FakeHardware:
 
     def run_dark_iv(self, _settings, _check_cancel):
         self.events.append("dark_iv")
-        return [{"Repeat": 1, "PointIndex": 1, "CommandedVoltageV": 0.0}]
+        return [{
+            "Repeat": 1,
+            "PointIndex": 1,
+            "SetVoltageV": 0.0,
+            "PolarityFactor": 1,
+            "CommandedVoltageV": 0.0,
+            "CommandedPhysicalVoltageV": 0.0,
+            "MeasuredVoltageV": 0.0,
+            "MeasuredCurrentA": 0.0,
+            "MeasuredPowerW": 0.0,
+            "ComplianceTripped": False,
+        }]
 
     def set_current(self, current_a, compliance):
         self.events.append(("set_current", current_a, compliance))
@@ -145,6 +157,7 @@ class _RecordingSMUDriver:
         self.output = False
         self.voltage_v = 0.0
         self.current_a = 0.0
+        self.compliance_tripped = False
 
     def configure_voltage_source(
         self, voltage_v: float, current_compliance_a: float
@@ -179,7 +192,7 @@ class _RecordingSMUDriver:
         return self.current_a
 
     def query_compliance_tripped(self, _mode: str) -> bool:
-        return False
+        return self.compliance_tripped
 
 
 class _ControlBackedHardware(_FakeHardware):
@@ -204,6 +217,10 @@ class _ControlBackedHardware(_FakeHardware):
     def apply_polarity_factor(self, factor):
         self.events.append(("apply_polarity", factor))
         self.control.set_recipe_polarity_factor(factor)
+
+    def run_dark_iv(self, settings, check_cancel):
+        self.events.append("dark_iv")
+        return ELMatrixHardwareAdapter.run_dark_iv(self, settings, check_cancel)
 
     def set_current(self, current_a, compliance):
         physical = self.control.recipe_output("CC", current_a, compliance)
@@ -575,6 +592,228 @@ class ELMatrixRunnerTests(unittest.TestCase):
                 )
         finally:
             control.shutdown(safety_confirmed=True)
+
+    def _run_dark_iv_physical_command_case(
+        self, polarity_factor: int
+    ) -> tuple[
+        list[dict[str, str]],
+        dict[str, object],
+        list[tuple[object, ...]],
+        list[object],
+        dict[str, object],
+    ]:
+        recipe = _small_recipe(1)
+        recipe.el_matrix.dark_frame_enabled = False
+        recipe.dark_iv.enabled = True
+        recipe.dark_iv.start_v = 0.0
+        recipe.dark_iv.stop_v = 1.0
+        recipe.dark_iv.step_v = 1.0
+        recipe.dark_iv.direction = "bidirectional"
+        recipe.dark_iv.current_compliance_ma = 20.0
+        recipe.dark_iv.repeat_count = 1
+        recipe.el_matrix.current_density_ma_cm2 = [2.0]
+        recipe.el_matrix.gains_percent = [100]
+        recipe.el_matrix.exposures_ms = [1.0]
+        driver = _RecordingSMUDriver()
+        control = SMUControlManager()
+        control.bind_driver(driver, output_confirmed_off=True)
+        control.acquire_recipe()
+        hardware = _ControlBackedHardware(control, polarity_factor)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                result = ELMatrixRunner(
+                    recipe,
+                    hardware,
+                    directory,
+                    report_progress=lambda _item: None,
+                    is_cancel_requested=lambda: False,
+                ).run()
+                run_directory = Path(result["output_directory"])
+                with next(run_directory.rglob("dark_iv.csv")).open(
+                    "r", newline="", encoding="utf-8-sig"
+                ) as stream:
+                    rows = list(csv.DictReader(stream))
+                dark_metadata = json.loads(
+                    next(run_directory.rglob("dark_iv.json")).read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(
+                    sha256_file(next(run_directory.rglob("dark_iv.csv"))),
+                    dark_metadata["CsvSha256"],
+                )
+                snapshot = json.loads(
+                    (run_directory / "measurement_snapshot.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                return (
+                    rows,
+                    dark_metadata,
+                    list(driver.commands),
+                    list(hardware.events),
+                    snapshot,
+                )
+        finally:
+            control.shutdown(safety_confirmed=True)
+
+    def test_dark_iv_metadata_uses_returned_physical_voltage_for_both_polarities(self) -> None:
+        for factor in (-1, 1):
+            with self.subTest(polarity_factor=factor):
+                rows, dark_metadata, commands, events, snapshot = (
+                    self._run_dark_iv_physical_command_case(factor)
+                )
+                setpoints = [0.0, 1.0, 0.0]
+                physical = [value * factor for value in setpoints]
+                cv_commands = [
+                    command for command in commands if command[0] == "CV"
+                ]
+                self.assertEqual(
+                    [("CV", value, 0.020) for value in physical],
+                    cv_commands,
+                )
+                self.assertEqual(setpoints, [float(row["SetVoltageV"]) for row in rows])
+                self.assertEqual(
+                    physical,
+                    [float(row["CommandedVoltageV"]) for row in rows],
+                )
+                self.assertEqual(
+                    physical,
+                    [float(row["CommandedPhysicalVoltageV"]) for row in rows],
+                )
+                self.assertEqual(
+                    physical,
+                    [float(row["MeasuredVoltageV"]) for row in rows],
+                )
+                self.assertEqual([factor] * 3, [int(row["PolarityFactor"]) for row in rows])
+                for expected_voltage, row in zip(physical, rows):
+                    expected_current = 0.0008 if expected_voltage >= 0 else -0.0008
+                    self.assertEqual(expected_current, float(row["MeasuredCurrentA"]))
+                    self.assertEqual(
+                        expected_voltage * expected_current,
+                        float(row["MeasuredPowerW"]),
+                    )
+                    self.assertEqual("False", row["ComplianceTripped"])
+                self.assertEqual(factor, dark_metadata["PolarityFactor"])
+                self.assertEqual(
+                    factor, dark_metadata["Polarity"]["polarity_factor"]
+                )
+                self.assertEqual(
+                    "recipe_device_coordinate",
+                    dark_metadata["VoltageColumnSemantics"]["SetVoltageV"],
+                )
+                self.assertEqual(
+                    "physical_smu_command",
+                    dark_metadata["VoltageColumnSemantics"][
+                        "CommandedPhysicalVoltageV"
+                    ],
+                )
+                self.assertNotIn(
+                    "CommandedPhysicalVoltageV",
+                    json.dumps(snapshot, ensure_ascii=False),
+                )
+                dark_position = events.index("dark_iv")
+                self.assertIn("output_off", events[dark_position + 1:])
+                self.assertFalse(any(
+                    command[0] == "CV" and command[1] not in physical
+                    for command in commands
+                ))
+
+    def test_dark_iv_forward_reverse_and_bidirectional_scans_keep_voltage_semantics(self) -> None:
+        cases = (
+            (0.0, 1.0, "forward", [0.0, 1.0]),
+            (1.0, 0.0, "forward", [1.0, 0.0]),
+            (0.0, 1.0, "bidirectional", [0.0, 1.0, 0.0]),
+        )
+        for factor in (-1, 1):
+            for start, stop, direction, expected_setpoints in cases:
+                with self.subTest(
+                    factor=factor, start=start, stop=stop, direction=direction
+                ):
+                    driver = _RecordingSMUDriver()
+                    control = SMUControlManager()
+                    control.bind_driver(driver, output_confirmed_off=True)
+                    control.acquire_recipe()
+                    control.set_recipe_polarity_factor(factor)
+                    adapter = ELMatrixHardwareAdapter(
+                        control,
+                        SimpleNamespace(),
+                        SimpleNamespace(),
+                        SimpleNamespace(),
+                    )
+                    settings = SimpleNamespace(
+                        start_v=start,
+                        stop_v=stop,
+                        step_v=1.0,
+                        direction=direction,
+                        repeat_count=1,
+                        current_compliance_ma=20.0,
+                        dwell_s=0.0,
+                        inter_scan_delay_s=0.0,
+                    )
+                    try:
+                        rows = adapter.run_dark_iv(settings, lambda: None)
+                        expected_physical = [
+                            value * factor for value in expected_setpoints
+                        ]
+                        self.assertEqual(
+                            expected_setpoints,
+                            [row["SetVoltageV"] for row in rows],
+                        )
+                        self.assertEqual(
+                            expected_physical,
+                            [row["CommandedPhysicalVoltageV"] for row in rows],
+                        )
+                        self.assertEqual(
+                            [("CV", value, 0.020) for value in expected_physical],
+                            [
+                                command
+                                for command in driver.commands
+                                if command[0] == "CV"
+                            ],
+                        )
+                        adapter.output_off()
+                        self.assertFalse(driver.output)
+                    finally:
+                        control.safe_shutdown(SMUOwnership.RECIPE)
+
+    def test_dark_iv_compliance_and_cancel_paths_still_safe_shutdown(self) -> None:
+        for stage in ("compliance", "cancel"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                recipe = _small_recipe(1)
+                recipe.el_matrix.dark_frame_enabled = False
+                recipe.dark_iv.enabled = True
+                recipe.dark_iv.start_v = 1.0
+                recipe.dark_iv.stop_v = 0.0
+                recipe.dark_iv.step_v = 1.0
+                recipe.dark_iv.dwell_s = 0.0
+                driver = _RecordingSMUDriver()
+                driver.compliance_tripped = stage == "compliance"
+                control = SMUControlManager()
+                control.bind_driver(driver, output_confirmed_off=True)
+                control.acquire_recipe()
+                hardware = _ControlBackedHardware(control, -1)
+
+                def cancelled() -> bool:
+                    return stage == "cancel" and any(
+                        command[0] == "CV" for command in driver.commands
+                    )
+
+                try:
+                    with self.assertRaises(Exception):
+                        ELMatrixRunner(
+                            recipe,
+                            hardware,
+                            directory,
+                            report_progress=lambda _item: None,
+                            is_cancel_requested=cancelled,
+                        ).run()
+                    self.assertTrue(hardware.safe)
+                    self.assertFalse(driver.output)
+                    self.assertIs(control.ownership, SMUOwnership.IDLE)
+                    self.assertIn(("CV", -1.0, 0.020), driver.commands)
+                finally:
+                    control.shutdown(safety_confirmed=True)
 
     def test_current_density_metadata_tracks_positive_and_negative_physical_commands(self) -> None:
         for factor in (-1, 1):

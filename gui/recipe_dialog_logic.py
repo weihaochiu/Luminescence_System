@@ -3,6 +3,7 @@ from __future__ import annotations
 """Binding, persistence, migration entry points, and live plan preview."""
 
 import json
+import logging
 import math
 from copy import deepcopy
 from pathlib import Path
@@ -14,6 +15,9 @@ from PySide6.QtWidgets import QFileDialog, QListWidgetItem, QMessageBox, QTreeWi
 from .measurement_execution_plan import build_measurement_execution_plan
 from .numeric import format_voltage_number
 from .recipe_store import ChannelRecipe, Recipe
+
+
+LOG = logging.getLogger(__name__)
 
 
 def _parse_numbers(text: str, caster: type = float) -> list[Any]:
@@ -53,6 +57,19 @@ def _parse_inactive_finite_numbers(
 
 
 class RecipeDialogLogicMixin:
+    def _show_recipe_operation_failure(
+        self,
+        title: str,
+        operation: str,
+        exc: Exception,
+    ) -> None:
+        LOG.exception("Recipe %s failed", operation)
+        QMessageBox.warning(
+            self,
+            title,
+            f"{operation}操作未完成，原 Recipe 仍保留。\n錯誤原因：{exc}",
+        )
+
     def _set_combo_data(self, combo: Any, value: Any) -> None:
         index = combo.findData(value)
         combo.setCurrentIndex(index if index >= 0 else 0)
@@ -318,7 +335,11 @@ class RecipeDialogLogicMixin:
         while recipe.name in existing:
             index += 1
             recipe.name = f"新 EL Recipe {index}"
-        self.store.upsert(recipe)
+        try:
+            self.store.upsert(recipe)
+        except Exception as exc:
+            self._show_recipe_operation_failure("Recipe 儲存失敗", "新增", exc)
+            return
         self.current_recipe = deepcopy(recipe)
         self._reload_list(preferred_id=recipe.recipe_id)
         self.recipes_changed.emit()
@@ -327,7 +348,11 @@ class RecipeDialogLogicMixin:
         if self.current_recipe is None:
             return
         copied = self._read_form_to_recipe().clone()
-        self.store.upsert(copied)
+        try:
+            self.store.upsert(copied)
+        except Exception as exc:
+            self._show_recipe_operation_failure("Recipe 儲存失敗", "複製", exc)
+            return
         self.current_recipe = deepcopy(copied)
         self._reload_list(preferred_id=copied.recipe_id)
         self.recipes_changed.emit()
@@ -339,7 +364,11 @@ class RecipeDialogLogicMixin:
             self, "刪除 Recipe", f"確定刪除「{self.current_recipe.name}」？"
         ) != QMessageBox.StandardButton.Yes:
             return
-        self.store.delete(self.current_recipe.recipe_id)
+        try:
+            self.store.delete(self.current_recipe.recipe_id)
+        except Exception as exc:
+            self._show_recipe_operation_failure("Recipe 刪除失敗", "刪除", exc)
+            return
         self.current_recipe = None
         self._reload_list()
         self.recipes_changed.emit()
@@ -356,7 +385,11 @@ class RecipeDialogLogicMixin:
         if recipe.state == "active" and errors:
             self._show_validation(errors, recipe.validation_warnings())
             return
-        self.store.upsert(recipe)
+        try:
+            self.store.upsert(recipe)
+        except Exception as exc:
+            self._show_recipe_operation_failure("Recipe 儲存失敗", "儲存", exc)
+            return
         self.current_recipe = deepcopy(self.store.get(recipe.recipe_id) or recipe)
         self._write_recipe_to_form(self.current_recipe)
         self._reload_list(preferred_id=recipe.recipe_id)
@@ -395,7 +428,7 @@ class RecipeDialogLogicMixin:
             payload = json.loads(Path(filename).read_text(encoding="utf-8"))
             recipe = self.store.import_payload(payload)
         except Exception as exc:
-            QMessageBox.warning(self, "匯入失敗", str(exc))
+            self._show_recipe_operation_failure("Recipe 匯入失敗", "匯入", exc)
             return
         self.current_recipe = deepcopy(recipe)
         self._reload_list(preferred_id=recipe.recipe_id)

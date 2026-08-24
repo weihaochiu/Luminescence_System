@@ -100,10 +100,13 @@ class ELMatrixHardwareAdapter:
         if settings.direction == "bidirectional":
             points = ascending + list(reversed(ascending[:-1]))
         rows: list[dict[str, Any]] = []
+        polarity_factor = self.control.polarity.factor
+        if polarity_factor not in (-1, 1):
+            raise RuntimeError("Dark I-V requires a confirmed polarity factor")
         for repeat in range(1, max(1, int(settings.repeat_count)) + 1):
             for point_index, voltage in enumerate(points, start=1):
                 check_cancel()
-                self.control.recipe_output(
+                physical_voltage_v = self.control.recipe_output(
                     "CV", float(voltage), float(settings.current_compliance_ma) / 1000.0
                 )
                 interruptible_wait(float(settings.dwell_s), check_cancel)
@@ -111,7 +114,10 @@ class ELMatrixHardwareAdapter:
                 rows.append({
                     "Repeat": repeat,
                     "PointIndex": point_index,
-                    "CommandedVoltageV": float(voltage),
+                    "SetVoltageV": float(voltage),
+                    "PolarityFactor": polarity_factor,
+                    "CommandedVoltageV": physical_voltage_v,
+                    "CommandedPhysicalVoltageV": physical_voltage_v,
                     "MeasuredVoltageV": reading.voltage_v,
                     "MeasuredCurrentA": reading.current_a,
                     "MeasuredPowerW": reading.power_w,

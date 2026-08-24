@@ -10,6 +10,7 @@ from unittest.mock import patch
 import numpy as np
 import tifffile
 from PIL import Image
+from PySide6.QtWidgets import QMessageBox
 
 from gui.el_matrix_plan import ELMatrixPlan
 from gui.measurement_control_bar import MeasurementControlBar
@@ -83,6 +84,122 @@ class RecipeWorkflowRefactorTests(unittest.TestCase):
                 self.assertTrue(dialog.matrix_gain_edit.isEnabled())
                 self.assertTrue(dialog.matrix_exposure_edit.isEnabled())
                 self.assertTrue(dialog.matrix_repeat_spin.isEnabled())
+            finally:
+                dialog.close()
+
+    def test_recipe_save_new_copy_and_import_failures_have_no_success_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recipes.json"
+            store = RecipeStore(path)
+            original = Recipe(name="Original")
+            store.upsert(original)
+            import_path = Path(directory) / "import.json"
+            import_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": store.schema_version,
+                        "recipe": original.to_dict(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dialog = RecipeManagerDialog(store)
+            emissions: list[bool] = []
+            dialog.recipes_changed.connect(lambda: emissions.append(True))
+            try:
+                self.app.processEvents()
+                self.assertIsNotNone(dialog.current_recipe)
+                selected_id = dialog.current_recipe.recipe_id
+                count_before = len(store.recipes)
+                with (
+                    patch.object(
+                        store,
+                        "upsert",
+                        side_effect=OSError("recipe disk unavailable"),
+                    ),
+                    patch(
+                        "gui.recipe_dialog_logic.QMessageBox.warning"
+                    ) as warning,
+                    patch(
+                        "gui.recipe_dialog_logic.QMessageBox.information"
+                    ) as information,
+                ):
+                    dialog._save_current()
+                    dialog._new_recipe()
+                    dialog._copy_recipe()
+
+                self.assertEqual(3, warning.call_count)
+                information.assert_not_called()
+                self.assertTrue(all(
+                    call.args[1] == "Recipe 儲存失敗"
+                    and "操作未完成" in call.args[2]
+                    and "原 Recipe 仍保留" in call.args[2]
+                    and "recipe disk unavailable" in call.args[2]
+                    for call in warning.call_args_list
+                ))
+                self.assertEqual(count_before, len(store.recipes))
+                self.assertEqual(selected_id, dialog.current_recipe.recipe_id)
+                self.assertEqual([], emissions)
+
+                with (
+                    patch(
+                        "gui.recipe_dialog_logic.QFileDialog.getOpenFileName",
+                        return_value=(str(import_path), "JSON (*.json)"),
+                    ),
+                    patch.object(
+                        store,
+                        "import_payload",
+                        side_effect=OSError("import replace failed"),
+                    ),
+                    patch(
+                        "gui.recipe_dialog_logic.QMessageBox.warning"
+                    ) as warning,
+                ):
+                    dialog._import_recipe()
+                warning.assert_called_once()
+                self.assertEqual("Recipe 匯入失敗", warning.call_args.args[1])
+                self.assertIn("import replace failed", warning.call_args.args[2])
+                self.assertEqual(count_before, len(store.recipes))
+                self.assertEqual(selected_id, dialog.current_recipe.recipe_id)
+                self.assertEqual([], emissions)
+            finally:
+                dialog.close()
+
+    def test_recipe_delete_failure_preserves_selection_and_emits_no_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecipeStore(Path(directory) / "recipes.json")
+            original = Recipe(name="Original")
+            store.upsert(original)
+            dialog = RecipeManagerDialog(store)
+            emissions: list[bool] = []
+            dialog.recipes_changed.connect(lambda: emissions.append(True))
+            try:
+                self.app.processEvents()
+                self.assertIsNotNone(dialog.current_recipe)
+                selected_id = dialog.current_recipe.recipe_id
+                with (
+                    patch(
+                        "gui.recipe_dialog_logic.QMessageBox.question",
+                        return_value=QMessageBox.StandardButton.Yes,
+                    ),
+                    patch.object(
+                        store,
+                        "delete",
+                        side_effect=OSError("delete replace failed"),
+                    ),
+                    patch(
+                        "gui.recipe_dialog_logic.QMessageBox.warning"
+                    ) as warning,
+                ):
+                    dialog._delete_recipe()
+                warning.assert_called_once()
+                self.assertEqual("Recipe 刪除失敗", warning.call_args.args[1])
+                self.assertIn("操作未完成", warning.call_args.args[2])
+                self.assertIn("原 Recipe 仍保留", warning.call_args.args[2])
+                self.assertIn("delete replace failed", warning.call_args.args[2])
+                self.assertEqual([selected_id], [item.recipe_id for item in store.recipes])
+                self.assertEqual(selected_id, dialog.current_recipe.recipe_id)
+                self.assertEqual([], emissions)
             finally:
                 dialog.close()
 

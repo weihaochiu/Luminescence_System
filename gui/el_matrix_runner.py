@@ -420,8 +420,25 @@ class ELMatrixRunner:
         sample_id = self.sample_ids[channel.channel]
         folder = self.run_directory / f"{channel.channel}_{sanitize_filename(sample_id)}" / "DARK_IV"
         folder.mkdir(parents=True, exist_ok=True)
+        polarity = self._polarity[channel.channel]
+        polarity_factor = int(polarity["polarity_factor"])
+        if any(row.get("PolarityFactor") != polarity_factor for row in rows):
+            raise RuntimeError(
+                f"{channel.channel} Dark I-V polarity metadata is inconsistent"
+            )
         csv_path = folder / "dark_iv.csv"
-        fields = list(rows[0]) if rows else ["Repeat", "PointIndex", "CommandedVoltageV"]
+        fields = list(rows[0]) if rows else [
+            "Repeat",
+            "PointIndex",
+            "SetVoltageV",
+            "PolarityFactor",
+            "CommandedVoltageV",
+            "CommandedPhysicalVoltageV",
+            "MeasuredVoltageV",
+            "MeasuredCurrentA",
+            "MeasuredPowerW",
+            "ComplianceTripped",
+        ]
         with csv_path.open("w", newline="", encoding="utf-8-sig") as stream:
             writer = csv.DictWriter(stream, fieldnames=fields)
             writer.writeheader()
@@ -432,7 +449,14 @@ class ELMatrixRunner:
             "Channel": channel.channel,
             "SampleID": sample_id,
             "DeviceAreaCm2": channel.area_cm2,
-            "Polarity": self._polarity[channel.channel],
+            "Polarity": polarity,
+            "PolarityFactor": polarity_factor,
+            "VoltageColumnSemantics": {
+                "SetVoltageV": "recipe_device_coordinate",
+                "CommandedVoltageV": "physical_smu_command",
+                "CommandedPhysicalVoltageV": "physical_smu_command",
+                "MeasuredVoltageV": "smu_readback",
+            },
             "Settings": self.recipe.to_dict()["dark_iv"],
             "CsvPath": str(csv_path),
             "CsvSha256": sha256_file(csv_path),
