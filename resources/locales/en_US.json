@@ -180,6 +180,7 @@
   "measurement.select_output_directory": "Select a measurement output directory",
   "measurement.start": "Start Measurement",
   "progress.captures_remaining": "{count} captures",
+  "progress.completed_status": "✓ {message}",
   "progress.channel_progress": "Channel Progress",
   "progress.condition_status": "Condition / Status",
   "progress.current_step": "Current Step",

@@ -180,6 +180,7 @@
   "measurement.select_output_directory": "選擇量測資料儲存位置",
   "measurement.start": "開始量測",
   "progress.captures_remaining": "{count} 次擷取",
+  "progress.completed_status": "✓ {message}",
   "progress.channel_progress": "Channel 進度",
   "progress.condition_status": "條件 / 狀態",
   "progress.current_step": "目前步驟",

@@ -216,10 +216,14 @@ def _on_measurement_finished(self: Any, result: object) -> None:
     self._last_measurement_result = dict(result)
     if self.emergency_manager.is_active:
         self.status_message.setText(tr("measurement.aborted_emergency"))
+        dialog = getattr(self, "_measurement_progress_dialog", None)
+        if dialog is not None:
+            dialog.set_aborted(tr("measurement.aborted_emergency"))
+        return
     else:
         postprocess = result.get("postprocess", {})
         post_status = str(postprocess.get("status", "not_requested"))
-        if post_status in {"failed", "partial"}:
+        if post_status not in {"completed", "not_requested"}:
             reason = str(postprocess.get("error", tr("progress.postprocess_failed")))
             self.status_message.setText(tr("progress.postprocess_failed"))
             self._pixel_csv_retry_context = {
@@ -237,13 +241,7 @@ def _on_measurement_finished(self: Any, result: object) -> None:
     dialog = getattr(self, "_measurement_progress_dialog", None)
     if dialog is not None:
         total = int(result.get("captures", 0)) if isinstance(result, dict) else 0
-        postprocess = result.get("postprocess", {}) if isinstance(result, dict) else {}
-        post_total = int(postprocess.get("total_files", 0))
-        dialog.set_complete(
-            post_total or total,
-            tr("measurement.completed_with_pixel_csv")
-            if postprocess.get("status") == "completed" else tr("measurement.hardware_completed"),
-        )
+        dialog.set_complete(total)
 
 
 def _on_measurement_cancelled(self: Any) -> None:
@@ -258,7 +256,10 @@ def _on_measurement_cancelled(self: Any) -> None:
     )
     dialog = getattr(self, "_measurement_progress_dialog", None)
     if dialog is not None:
-        dialog.set_stopped()
+        if self.emergency_manager.is_active:
+            dialog.set_aborted(tr("measurement.aborted_emergency"))
+        else:
+            dialog.set_stopped()
 
 
 def _on_measurement_failed(self: Any, message: str) -> None:
@@ -277,7 +278,10 @@ def _on_measurement_failed(self: Any, message: str) -> None:
     )
     dialog = getattr(self, "_measurement_progress_dialog", None)
     if dialog is not None:
-        dialog.set_failed(message)
+        if self.emergency_manager.is_active:
+            dialog.set_aborted(tr("measurement.aborted_emergency"))
+        else:
+            dialog.set_failed(message)
 
 
 def _validate_camera_matrix(self: Any) -> list[str]:

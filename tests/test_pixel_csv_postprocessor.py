@@ -262,7 +262,7 @@ class PixelCSVPostprocessorTests(unittest.TestCase):
         })
         control.safe_shutdown.assert_not_called()
         dialog.set_failed.assert_not_called()
-        dialog.set_complete.assert_called_once_with(5, "量測與 Pixel CSV 後處理完成")
+        dialog.set_complete.assert_called_once_with(3)
 
 
 if __name__ == "__main__":
