@@ -1,7 +1,7 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.8.2
-對應程式版本：V1.8.2
+文件版本：1.9.0
+對應程式版本：V1.9.0
 最後更新：2026-08-25（UTC+8）
 
 ## 0. 雙語與中央錯誤架構
@@ -136,7 +136,27 @@ Camera Temperature Monitoring 的依賴與資料流固定為：
 
 原廠 `sdk/nncam.py` 與 DLL 視為 vendor code，不進行一般格式化或重構。
 
-## 4.5 Relay 控制邊界
+### 4.4 Standalone Ruler Scale Calibration
+
+Ruler calibration 的依賴方向固定為：
+
+```text
+Standalone tester GUI / batch CLI
+                 ↓
+core.calibration.CalibrationService
+                 ↓
+ruler detector → rectifier → tick detector + digit recognizer → scale solver → overlay
+```
+
+- `core/calibration/` 是無 Qt、無相機 SDK、無 SMU／Relay／Recipe 依賴的 production-reusable 數值核心；正式整合只能呼叫相同 service，不可從 tester GUI copy/paste 演算法。
+- `tools/ruler_scale_calibration_tester/` 負責 CameraController 接線、Image File I/O、diagnostic GUI、debug package、batch regression 與 repeatability presentation，不修改正式 Recipe sequence。
+- Camera mode 只使用既有 `CameraController` 的 MONO16 `scientific_frame_ready`；tester 不直接存取 private SDK handle，也不建立第二 camera wrapper。
+- Rectified `(u,v)` 只供 detection/OCR。所有 accepted tick center 以 inverse homography 回到 original image，再沿 original ruler axis fitting；`pixels/mm` 明確屬於 original stored image plane。
+- OCR backend 是可替換 `DigitRecognizer`。預設 pytesseract/Tesseract unavailable 時明確回報 diagnostic，不下載模型、不產生假值；scale 以多 tick geometry 為主，OCR/major/minor tick 只做交叉驗證與 quality evidence。
+- quality score 是已定義的 engineering score，不宣稱 probability。PASS 另要求 ruler、tick intervals、span、finite positive scale 與 fit consistency gate。
+- `local/generated/`、`local/datasets/`、`local/ocr_cache/` 是本機 evidence/data/cache boundary，必須維持 Git ignored。
+
+### 4.5 Relay 控制邊界
 
 | 模組 | 責任 |
 | --- | --- |
@@ -231,4 +251,5 @@ V1.5.1 修正 Manual 實體座標、矛盾 readback 復歸、verified shutdown�
 - `python -m compileall -q gui tests`：所有 Python 檔案語法檢查。
 - `python -m unittest discover -s tests -v`：EL Matrix、Recipe schema、量測快照、UI 結構、輸出與模組邊界。
 - Windows 實機驗證：RisingCam 連線、Live View、曝光／Gain、一般拍攝、VISA 掃描與 B2900 安全連線。
+- Ruler calibration：scale/scale-bar math、missing/false/noisy tick robust fit、OCR sequence outlier、0/30/90/135/180/270° synthetic ruler、no-ruler/no-tick/OCR-unavailable failure regression；synthetic 結果不可替代實際相機＋鐵尺 acceptance。
 - 涉及 SMU 輸出的版本必須另建硬體模擬、錯誤注入與緊急停止測試；race test 使用 Event／Barrier 控制 timing，不以 sleep 猜測 configure 與 OUTPUT ON 的時序，也不能只依賴 GUI 手動測試。

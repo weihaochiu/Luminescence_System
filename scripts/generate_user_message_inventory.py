@@ -45,10 +45,10 @@ TECHNICAL_DISPLAY_LITERALS = {
     "--", "—", "— V", "— mA/cm²", "N/A", "Unknown", "OFF",
     "FPS —", "SMU —", "0 / 0", "0.0%", "100.0%", "SDK", "Sensor",
     "Alignment", "NPLC", "Relay", "Recipe", "Raw DN", "PNG", "JPG",
-    "Dark IV", "EL Matrix", "Channels",
+    "Dark IV", "EL Matrix", "Channels", "PASS", "FAIL",
 }
 TECHNICAL_DISPLAY_RE = re.compile(
-    r"^(?:\{[^}]+\}|v?\{[^}]+\})(?:\s*(?:/|×|%|ms|s|V|mA/cm²|bit|\||｜|—|\([^)]*\))\s*(?:\{[^}]+\})?)*$"
+    r"^(?:\{[^}]+\}|v?\{[^}]+\})(?:\s*(?:/|×|%|ms|s|V|mA/cm²|px/mm|µm/px|cm|mm|µm|px|bit|\||｜|—|\([^)]*\))\s*(?:\{[^}]+\})?)*$"
 )
 INDIRECT_PRESENTATION_FIELDS = re.compile(
     r"(?:status_text|status_message|lock_reason|manual_lock_reason|display_name|"

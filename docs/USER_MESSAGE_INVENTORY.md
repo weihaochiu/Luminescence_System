@@ -7,7 +7,7 @@
 
 The scan covers every repository `*.py` file (including tests and the bundled SDK) and classifies visible Qt constructor/setter text, tooltips, status messages, QMessageBox calls, user-facing signal payloads, logger calls, `print`, and raised exception literals. It follows common local list/tuple → `append()` → `join()` → tooltip flows, but it is not a complete Python data-flow engine. The requested keyword audit (`錯誤`, `失敗`, `警告`, `無法`, `逾時`, `未連接`, `timeout`, `failed`, `error`, `warning`) is also represented where those literals occur in these call sites.
 
-Inventory rows: **552**; user-facing rows: **119**; translation candidates: **0**.
+Inventory rows: **592**; user-facing rows: **131**; translation candidates: **0**.
 Static scanner counts and the supplemental manual indirect-UI audit are reported separately in `I18N_ERROR_SYSTEM_MIGRATION.md`; a zero static count alone is not proof that every dynamic UI path is translated.
 
 Error-code values below are migration candidates, not registry definitions. Final codes are curated by failure condition so multiple call sites can share one stable code.
@@ -16,6 +16,23 @@ Error-code values below are migration candidates, not registry definitions. Fina
 
 | File | Line / function | Current message | Type | User-facing? | Needs translation? | Needs Error Code? | Proposed translation key | Proposed error code | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| core/calibration/image_utils.py | 17 / `normalize_to_uint8` | Unsupported channel count: {source.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/image_utils.py | 19 / `normalize_to_uint8` | Expected a non-empty HxW or HxWxC image, got {source.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/image_utils.py | 22 / `normalize_to_uint8` | Input image has no finite pixels | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/models.py | 71 / `<module>` | FAIL | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment quality_label; canonical technical/value display |
+| core/calibration/scale_solver.py | 36 / `pixels_per_mm_to_um_per_pixel` | pixels_per_mm must be positive and finite | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/scale_solver.py | 44 / `scale_bar_pixels` | Scale bar length and um_per_pixel must be positive and finite | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/scale_solver.py | 57 / `select_scale_bar` | Image width and scale must define a positive physical width | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/scale_solver.py | 69 / `select_scale_bar` | {selected / 10000} cm | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment label; canonical technical/value display |
+| core/calibration/scale_solver.py | 71 / `select_scale_bar` | {selected / 1000} mm | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment label; canonical technical/value display |
+| core/calibration/scale_solver.py | 73 / `select_scale_bar` | {selected} µm | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment label; canonical technical/value display |
+| core/calibration/scale_solver.py | 164 / `solve` | FAIL | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment quality_label; canonical technical/value display |
+| core/calibration/scale_solver.py | 164 / `solve` | PASS | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment quality_label; canonical technical/value display |
+| core/calibration/service.py | 46 / `analyze` | Ruler calibration analysis start source=%s resolution=%sx%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| core/calibration/service.py | 110 / `analyze` | Ruler calibration analysis failed source=%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| core/calibration/service.py | 135 / `save_debug_package` | Failed to write debug image: {path} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/service.py | 143 / `save_debug_package` | Ruler calibration debug package saved path=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| core/calibration/service.py | 156 / `_finish_log` | Ruler calibration analysis end source=%s elapsed_ms=%.1f angle=%s ocr_raw=%s ocr_accepted=%s major_ticks=%s minor_ticks=%s rejected_ticks=%s pixels_per_mm=%s um_per_pixel=%s fit_rmse_px=%s fit_error_percent=%s quality=%s failure_reasons=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | core/error_registry.py | 46 / `__init__` | Duplicate error code: {definition.code} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | core/error_registry.py | 48 / `__init__` | Invalid error code: {definition.code} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | core/error_registry.py | 50 / `__init__` | Invalid subsystem for {definition.code}: {definition.subsystem} | I. Exception / traceback | No | No | No | `—` | — | raise |
@@ -192,7 +209,7 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/main_window_devices.py | 690 / `_refresh_live_view_roi_dn` | EffectiveDNMax must be positive | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/main_window_devices.py | 920 / `on_temperature_availability_changed` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 | gui/main_window_measurement.py | 62 / `start_background_measurement` | Measurement is already running | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/main_window_measurement.py | 508 / `run` | Pixel CSV blocked: safe shutdown was not fully verified | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/main_window_measurement.py | 512 / `run` | Pixel CSV blocked: safe shutdown was not fully verified | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/main_window_ui.py | 252 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/main_window_ui.py | 253 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/main_window_ui.py | 259 / `_build_central_ui` | {self.controller.auto_exposure_target_percent} % | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
@@ -235,29 +252,26 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/measurement_output.py | 258 / `save_matrix_capture` | Scientific frame is unavailable; refusing to create TIFF from Live View | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/measurement_output.py | 263 / `save_matrix_capture` | Camera acquisition must provide a uint16 scientific frame | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/measurement_output.py | 310 / `save_matrix_capture` | Derived output generation modified the scientific source buffer | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_progress_dialog.py | 40 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 41 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 42 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 43 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 44 / `__init__` | 0 / 0 | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 45 / `__init__` | 0.0% | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 46 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 47 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 48 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 77 / `update_progress` | {progress.channel_index} / {progress.channel_total} — {progress.channel} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 101 / `update_progress` | {progress.channel_completed} / {progress.channel_capture_total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 101 / `update_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 105 / `update_progress` | {progress.current} / {progress.total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 107 / `update_progress` | {percent}% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 110 / `update_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 122 / `update_postprocess_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 123 / `update_postprocess_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 124 / `update_postprocess_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 125 / `update_postprocess_progress` | {progress.current} / {progress.total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 126 / `update_postprocess_progress` | {progress.percent}% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 129 / `update_postprocess_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 151 / `set_complete` | {total} / {total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 152 / `set_complete` | 100.0% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 57 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 58 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 59 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 60 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 61 / `__init__` | 0 / 0 | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 62 / `__init__` | 0.0% | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 63 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 64 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 65 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 151 / `update_progress` | {progress.channel_index} / {progress.channel_total} — {progress.channel} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 175 / `update_progress` | {progress.channel_completed} / {progress.channel_capture_total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 175 / `update_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 179 / `update_progress` | {progress.current} / {progress.total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 181 / `update_progress` | {percent}% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 184 / `update_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 196 / `update_postprocess_progress` | {progress.current} / {progress.total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 197 / `update_postprocess_progress` | {progress.percent}% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 200 / `update_postprocess_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 230 / `set_complete` | {total} / {total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 231 / `set_complete` | 100.0% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 | gui/measurement_snapshot.py | 170 / `save_el_matrix_snapshot` | Measurement Snapshot SHA-256 verification failed | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/measurement_worker.py | 78 / `report_progress` | current and total are required for text progress | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/numeric.py | 18 / `decimal_from_number` | Invalid numeric value: {value} | I. Exception / traceback | No | No | No | `—` | — | raise |
@@ -568,6 +582,32 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | tests/test_smu_ui_structure.py | 289 / `test_output_unknown_is_explicit_and_locks_every_manual_field` | ⚠ 無法確認 SMU 輸出狀態 請確認 SMU 前面板 OUTPUT 已關閉 | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field manual_lock_reason; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_ui_structure.py | 319 / `ready_state` | B2901BL | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field device_label; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_ui_structure.py | 328 / `ready_state` | B2901BL｜手動控制可用｜OUTPUT：OFF | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field status_text; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tools/ruler_scale_calibration_tester/batch.py | 35 / `run_batch` | Batch ruler calibration image=%s index=%s total=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| tools/ruler_scale_calibration_tester/batch.py | 70 / `_print_summary` | Images {summary['images']} | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/batch.py | 71 / `_print_summary` | Ruler detected {summary['ruler_detected']} | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/batch.py | 72 / `_print_summary` | OCR usable {summary['ocr_usable']} | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/batch.py | 73 / `_print_summary` | Calibration successful {summary['calibration_successful']} | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/batch.py | 75 / `_print_summary` | Mean px/mm {summary['mean_pixels_per_mm']} | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/batch.py | 76 / `_print_summary` | SD {summary['sd_pixels_per_mm']} | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/batch.py | 77 / `_print_summary` | CV % {summary['cv_percent']} | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/batch.py | 79 / `_print_summary` | Failure reasons: | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/batch.py | 83 / `_print_summary` | - {reason}: {count} | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/batch.py | 85 / `_print_summary` | - none | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/image_loader.py | 18 / `load_image` | Unsupported image format: {source.suffix} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/image_loader.py | 29 / `load_image` | Expected one image, got shape {array.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/window.py | 69 / `set_array` | Unsupported display image shape: {array.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/window.py | 202 / `_build_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 286 / `_on_camera_opened` | Ruler tester camera connected model=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| tools/ruler_scale_calibration_tester/window.py | 294 / `_on_camera_closed` | Ruler tester camera disconnected | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| tools/ruler_scale_calibration_tester/window.py | 314 / `_on_camera_error` | Ruler tester camera error: %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| tools/ruler_scale_calibration_tester/window.py | 416 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 430 / `_show_result` | {result.pixels_per_mm} px/mm | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 430 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 431 / `_show_result` | {result.um_per_pixel} µm/px | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 431 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 432 / `_show_result` | {result.calibration_span_mm} mm | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 433 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 446 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 
 ## Canonical-value audit
 

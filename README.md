@@ -12,7 +12,14 @@
 - Recipe schema v10 不含 HDR；舊 Recipe 的 legacy `hdr` key 只在載入時忽略，重新儲存後即消失。
 - 正式量測順序固定為：初始化／Preflight → 選配極性確認 → 選配 Shared Dark → 各 Channel 的選配 Dark IV → Current Density → Gain → Exposure → Repeat → 輸出 → Safe Shutdown。
 - Gain、Exposure 與 Repeat 完全由 `recipe.el_matrix` 控制；主畫面、Recipe UI、Settings、snapshot、preflight、runner 與輸出均無 HDR 分支。
-- Scientific TIFF 使用 NumPy 與 tifffile；PNG/JPEG 視覺化使用 Pillow，專案不再依賴 OpenCV。
+- Scientific TIFF 使用 NumPy 與 tifffile；PNG/JPEG 視覺化使用 Pillow。正式量測路徑不依賴 OpenCV；獨立式鐵尺校正 tester 使用 headless OpenCV 執行 detection/rectification。
+
+## V1.9.0 Standalone Ruler Scale Calibration Tester
+
+- 新增 production-reusable `core/calibration`：任意位置／角度 ruler detection、homography、multi-tick robust fit、OCR geometry cross-validation、original-plane pixels/mm、µm/pixel、quality gate 與 scale-bar selection。
+- 新增獨立 PySide6 tester，重用既有 CameraController scientific frame，另支援 PNG/JPEG/TIFF、完整 overlay/debug package、batch regression 與 repeatability N/mean/SD/CV。
+- OCR 採 optional pytesseract/Tesseract；外部 executable 不可用時明確診斷，不下載模型或產生假值。正式 Recipe、SMU、Relay、JPG footer 與 TIFF 流程不變。
+- 21 項 calibration unit/synthetic tests 與完整 511 項 repository regression 通過；實際相機＋鐵尺辨識率仍待人工 acceptance。
 
 ## V1.8.2 Safe Pixel CSV Post-processing
 
@@ -361,6 +368,24 @@ Emergency latch 能阻止 Emergency request 之後尚未送出的 `OUTPUT ON`；
 - `gui/smu_base.py`、`keysight_b2900.py`：SMU 身分與安全狀態介面
 - `gui/sdk/`：原廠 Python 封裝與 64-bit DLL
 - `drivers/usb_x64/`：原廠 64-bit USB 驅動
+
+## Standalone Ruler Scale Calibration Tester
+
+工程驗證工具位於 `tools/ruler_scale_calibration_tester/`，可用既有 RisingCam
+`CameraController` Live View/Capture 或 PNG/JPEG/TIFF 檔案，分析任意位置／角度的
+金屬直尺，輸出 robust multi-tick `pixels/mm`、`µm/pixel`、OCR/tick cross-check、
+scale-bar preview、debug package、batch regression 與 repeatability 統計。
+
+啟動：
+
+```text
+tools\ruler_scale_calibration_tester\run_ruler_scale_tester.bat
+```
+
+完整操作、coordinate convention、OCR requirement、人工 acceptance sheet 與已知限制請見
+`tools/ruler_scale_calibration_tester/README.md`。本工具目前不進入 Recipe、不控制白光／
+SMU／Relay，也不修改正式 JPG footer 或 TIFF。尺面 Z height 必須等於未來樣品發光面；
+synthetic regression 不能代表實際相機辨識率。
 
 ## EL 定量注意事項
 

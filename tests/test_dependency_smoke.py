@@ -29,13 +29,14 @@ class DependencySmokeTests(unittest.TestCase):
             "pyvisa": "pyvisa",
             "hid": "hidapi",
             "tifffile": "tifffile",
+            "cv2": "opencv-python-headless",
+            "pytesseract": "pytesseract",
         }
         self.assertTrue(
             set(expected.values()).issubset(declared),
             f"Missing runtime requirements for imports: {expected}; declared={sorted(declared)}",
         )
         self.assertNotIn("opencv-python", declared)
-        self.assertNotIn("opencv-python-headless", declared)
 
     def test_application_import_smoke_commands(self) -> None:
         for statement in ("from gui.app import main", "import gui.measurement_output"):

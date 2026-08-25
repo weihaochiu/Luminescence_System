@@ -1,6 +1,6 @@
 # EL 量測設備控制程式需求紀錄
 
-文件版本：1.5
+文件版本：1.6
 最後更新：2026-08-25（UTC+8）
 
 ## Current requirement — I18N-ERROR-001
@@ -34,6 +34,18 @@
 - Persistence assessment：unresolved fault 尚不跨 process restart；現行沒有 atomic hardware-fault journal，本次保留為明確 remaining risk，不以非原子 QSettings 草率擴張。
 
 註：版本摘要中的「Recipe 停用／暫緩」只描述當時版本，現行狀態一律以 FLOW-ELM-001 與 V1.8.2 為準。
+
+## Current requirement — CAL-RULER-001
+
+- 狀態：軟體實作完成（V1.9.0）；實際相機＋鐵尺大量辨識 acceptance 待執行。
+- 使用者原意：先以 standalone engineering tester 驗證任意 XY／0–360° 鐵尺 detection、旋正／mild perspective rectification、1 mm/5 mm/10 mm tick、尺上單／雙位數 OCR、geometry/OCR cross-validation、robust long-span pixels/mm、µm/pixel、scale bar preview、debug evidence、batch regression 與 random-placement repeatability，再決定是否整合正式 Recipe。
+- 架構：新增無 Qt／硬體依賴的 `core/calibration/` 與只向下呼叫 service 的 `tools/ruler_scale_calibration_tester/`；Camera mode 重用既有 `CameraController`，不複製 SDK wrapper。
+- Coordinate gate：rectified image 只供 detection/OCR；accepted references inverse-transform 回 original frame，最後 `pixels/mm` fitting 對應 original stored image plane。ruler marking surface Z 必須等於未來 sample emission surface Z。
+- OCR：可替換 interface；第一版採 optional pytesseract＋使用者明確安裝的 Windows Tesseract executable；unavailable 時顯示原因、不自動下載、不回傳假值。OCR outlier 可由 geometry 拒絕／提出 correction，但 raw 與 correction 均保存。
+- Quality：min usable intervals 10、min span 10 mm、positive finite scale 與 fit consistency 為必要 gate；quality_score 是 documented engineering score，不宣稱 probability。
+- Evidence：Original/rectified/threshold/edges/ticks/OCR/final overlay 與 result JSON；`local/generated`、dataset、OCR cache 不進 Git。Batch 回報 detection/OCR/calibration counts、mean/SD/CV/failure reasons；GUI 累積 repeatability N/mean/SD/CV/min/max/max deviation，不先宣稱門檻。
+- 明確排除：不修改 Recipe、polarity、measurement runner、SMU output、relay safety、正式 JPG footer 或 TIFF；不自動控制白光。
+- 驗證：21 項 unit/synthetic tests 涵蓋 scale math、scale bar、perfect/missing/false/noisy tick、OCR sequence/outlier、0/30/90/135/180/270°、mild perspective、no ruler/no ticks/insufficient ticks/OCR unavailable/debug package/batch；完整 repository regression 511/511 通過。實際辨識率不得由 synthetic tests 推論。
 
 ## Current superseding requirement — HDR removal
 

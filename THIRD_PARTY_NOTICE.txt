@@ -9,6 +9,10 @@ their manufacturer.
 Application dependencies are installed from PyPI:
 - PySide6 (LGPLv3/GPLv3/commercial licensing options)
 - Pillow (HPND License)
+- NumPy (BSD-3-Clause License)
+- tifffile (BSD-3-Clause License)
+- OpenCV Python headless packages (Apache License 2.0)
+- pytesseract (Apache License 2.0; requires a separately installed Tesseract OCR executable)
 - PyVISA (MIT License)
 - PyVISA-py (MIT License)
 - PyUSB (BSD License)
