@@ -46,8 +46,8 @@ def synthetic_ticks(
             TickMark(
                 rectified_position_px=x,
                 original_position=(x, 100.0),
-                length_px=60.0 if index % 10 == 0 else 30.0,
-                kind="major" if index % 10 == 0 else "minor",
+                length_px=60.0 if index % 10 == 0 else (45.0 if index % 5 == 0 else 30.0),
+                kind="major" if index % 10 == 0 else ("medium" if index % 5 == 0 else "minor"),
             )
         )
     return detection, ticks

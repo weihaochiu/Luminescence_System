@@ -25,13 +25,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.calibration import CalibrationResult, CalibrationService
+from core.calibration import CalibrationResult, CalibrationService, VerificationMode
 from core.calibration.image_utils import normalize_to_uint8
 from core.i18n import tr
 from gui.camera_controller import CameraController
 
 from .image_loader import load_image
-from .repeatability import repeatability_summary
+from .repeatability import DuplicateSourceError, RepeatabilitySession
+from .source import AnalysisSource, FrameCaptureState
 
 
 LOG = logging.getLogger(__name__)
@@ -96,7 +97,7 @@ class AnalysisWorker(QObject):
         self,
         service: CalibrationService,
         image: np.ndarray,
-        source: str,
+        source: AnalysisSource,
     ) -> None:
         super().__init__()
         self.service = service
@@ -105,7 +106,15 @@ class AnalysisWorker(QObject):
 
     @Slot()
     def run(self) -> None:
-        self.finished.emit(self.service.analyze(self.image, input_source=self.source))
+        self.finished.emit(self.service.analyze(
+            self.image,
+            input_source=self.source.display_name or self.source.filename or self.source.source_type,
+            source_type=self.source.source_type,
+            source_identity=self.source.source_identity,
+            source_display_name=self.source.display_name,
+            captured_frame_sequence=self.source.frame_sequence,
+            source_filename=self.source.filename,
+        ))
 
 
 class RulerScaleTesterWindow(QMainWindow):
@@ -117,13 +126,13 @@ class RulerScaleTesterWindow(QMainWindow):
         self.service = CalibrationService()
         self.controller = CameraController(self)
         self.devices: list[Any] = []
-        self._latest_scientific: np.ndarray | None = None
+        self._frame_state = FrameCaptureState()
         self._current_input: np.ndarray | None = None
-        self._current_source = ""
+        self._current_source: AnalysisSource | None = None
         self._current_result: CalibrationResult | None = None
         self._analysis_thread: QThread | None = None
         self._analysis_worker: AnalysisWorker | None = None
-        self._repeatability_values: list[float] = []
+        self._repeatability_session = RepeatabilitySession()
         self._image_labels: dict[str, ImageLabel] = {}
         self._result_labels: dict[str, QLabel] = {}
         self._build_ui()
@@ -168,7 +177,8 @@ class RulerScaleTesterWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.tabs = QTabWidget()
         for key, title in (
-            ("original", "calibration.tester.tab_original"),
+            ("live_view", "calibration.tester.tab_live"),
+            ("captured", "calibration.tester.tab_captured"),
             ("rectified", "calibration.tester.tab_rectified"),
             ("ticks_overlay", "calibration.tester.tab_ticks"),
             ("ocr_overlay", "calibration.tester.tab_ocr"),
@@ -187,6 +197,7 @@ class RulerScaleTesterWindow(QMainWindow):
         result_group = QGroupBox(tr("calibration.tester.result_group"))
         form = QFormLayout(result_group)
         for key, title in (
+            ("source", "calibration.tester.analyzed_source"),
             ("ruler", "calibration.tester.ruler"),
             ("angle", "calibration.tester.angle"),
             ("ocr", "calibration.tester.ocr_numbers"),
@@ -196,6 +207,7 @@ class RulerScaleTesterWindow(QMainWindow):
             ("span", "calibration.tester.span"),
             ("fit", "calibration.tester.fit_error"),
             ("quality", "calibration.tester.quality"),
+            ("verification", "calibration.tester.verification_mode"),
             ("scale_bar", "calibration.tester.scale_bar"),
             ("failure", "calibration.tester.failure_warnings"),
         ):
@@ -214,7 +226,11 @@ class RulerScaleTesterWindow(QMainWindow):
         self.repeatability_text.setReadOnly(True)
         self.repeatability_text.setMaximumBlockCount(500)
         self.clear_repeatability_button = QPushButton(tr("calibration.tester.clear_repeatability"))
+        self.add_repeatability_button = QPushButton(tr("calibration.tester.add_repeatability"))
+        self.export_repeatability_button = QPushButton(tr("calibration.tester.export_repeatability"))
         repeat_layout.addWidget(self.repeatability_text)
+        repeat_layout.addWidget(self.add_repeatability_button)
+        repeat_layout.addWidget(self.export_repeatability_button)
         repeat_layout.addWidget(self.clear_repeatability_button)
         diagnostics_layout.addWidget(repeat_group, 1)
         splitter.addWidget(diagnostics)
@@ -233,10 +249,14 @@ class RulerScaleTesterWindow(QMainWindow):
         self.analyze_button.clicked.connect(self.analyze_again)
         self.save_debug_button.clicked.connect(self.save_debug_package)
         self.clear_repeatability_button.clicked.connect(self.clear_repeatability)
+        self.add_repeatability_button.clicked.connect(self.add_repeatability_run)
+        self.export_repeatability_button.clicked.connect(self.export_repeatability_csv)
         self.disconnect_button.setEnabled(False)
         self.capture_button.setEnabled(False)
         self.analyze_button.setEnabled(False)
         self.save_debug_button.setEnabled(False)
+        self.add_repeatability_button.setEnabled(False)
+        self.export_repeatability_button.setEnabled(False)
         self._update_repeatability()
 
     def _connect_camera_signals(self) -> None:
@@ -287,7 +307,8 @@ class RulerScaleTesterWindow(QMainWindow):
 
     @Slot()
     def _on_camera_closed(self) -> None:
-        self._latest_scientific = None
+        self._frame_state.latest_frame = None
+        self._frame_state.latest_sequence = None
         self.connect_button.setEnabled(bool(self.devices))
         self.disconnect_button.setEnabled(False)
         self.capture_button.setEnabled(False)
@@ -295,8 +316,7 @@ class RulerScaleTesterWindow(QMainWindow):
 
     @Slot(QImage)
     def _on_preview_frame(self, image: QImage) -> None:
-        if self._current_source.startswith("camera:") or self._current_input is None:
-            self._image_labels["original"].set_qimage(image)
+        self._image_labels["live_view"].set_qimage(image)
 
     @Slot(object, QImage, int)
     def _on_scientific_frame(self, scientific: object, preview: QImage, sequence: int) -> None:
@@ -304,10 +324,10 @@ class RulerScaleTesterWindow(QMainWindow):
         if array.ndim != 2:
             self.status.setText(tr("calibration.tester.frame_shape_rejected", shape=array.shape))
             return
-        self._latest_scientific = array.copy()
+        self._frame_state.update_live(array, sequence)
         self.capture_button.setEnabled(self._analysis_thread is None)
         self.input_mode.setText(tr("calibration.tester.input_live_frame", sequence=sequence))
-        self._image_labels["original"].set_qimage(preview)
+        self._image_labels["live_view"].set_qimage(preview)
 
     @Slot(str)
     def _on_camera_error(self, message: str) -> None:
@@ -316,11 +336,21 @@ class RulerScaleTesterWindow(QMainWindow):
 
     @Slot()
     def capture_and_analyze(self) -> None:
-        if self._latest_scientific is None:
+        if self._frame_state.latest_frame is None:
             self.status.setText(tr("calibration.tester.no_camera_frame"))
             return
-        self._current_input = self._latest_scientific.copy()
-        self._current_source = f"camera:{self.controller.device_name}"
+        try:
+            self._current_input, self._current_source = self._frame_state.capture_camera(
+                self.controller.device_name
+            )
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            return
+        self._image_labels["captured"].set_array(self._current_input)
+        self.input_mode.setText(tr(
+            "calibration.tester.input_captured_frame",
+            source=self._current_source.display_name,
+        ))
         self._start_analysis()
 
     @Slot()
@@ -334,13 +364,13 @@ class RulerScaleTesterWindow(QMainWindow):
         if not path:
             return
         try:
-            self._current_input = load_image(path)
+            loaded = load_image(path)
+            self._current_input, self._current_source = self._frame_state.capture_file(path, loaded)
         except Exception as exc:
             QMessageBox.critical(self, tr("calibration.tester.load_failed"), str(exc))
             return
-        self._current_source = str(Path(path).resolve())
         self.input_mode.setText(tr("calibration.tester.input_file", name=Path(path).name))
-        self._image_labels["original"].set_array(self._current_input)
+        self._image_labels["captured"].set_array(self._current_input)
         self.analyze_button.setEnabled(True)
         self._start_analysis()
 
@@ -350,10 +380,11 @@ class RulerScaleTesterWindow(QMainWindow):
             self._start_analysis()
 
     def _start_analysis(self) -> None:
-        if self._current_input is None or self._analysis_thread is not None:
+        if self._current_input is None or self._current_source is None or self._analysis_thread is not None:
             return
         self.status.setText(tr("calibration.tester.analyzing"))
         self._set_analysis_controls(False)
+        self.add_repeatability_button.setEnabled(False)
         thread = QThread(self)
         worker = AnalysisWorker(self.service, self._current_input, self._current_source)
         worker.moveToThread(thread)
@@ -378,9 +409,14 @@ class RulerScaleTesterWindow(QMainWindow):
             if label is not None:
                 label.set_array(image)
         self._show_result(payload)
-        if payload.success and payload.pixels_per_mm is not None:
-            self._repeatability_values.append(payload.pixels_per_mm)
-            self._update_repeatability()
+        self.add_repeatability_button.setEnabled(
+            payload.success
+            and payload.verification_mode
+            in {
+                VerificationMode.TICK_HIERARCHY_VERIFIED.value,
+                VerificationMode.OCR_VERIFIED.value,
+            }
+        )
         self.save_debug_button.setEnabled(bool(payload.debug_images))
         self.status.setText(
             tr("calibration.tester.calibration_pass")
@@ -397,7 +433,9 @@ class RulerScaleTesterWindow(QMainWindow):
     def _set_analysis_controls(self, enabled: bool) -> None:
         self.load_button.setEnabled(enabled)
         self.analyze_button.setEnabled(enabled and self._current_input is not None)
-        self.capture_button.setEnabled(enabled and self.controller.is_open and self._latest_scientific is not None)
+        self.capture_button.setEnabled(
+            enabled and self.controller.is_open and self._frame_state.latest_frame is not None
+        )
 
     def _show_result(self, result: CalibrationResult) -> None:
         numbers = []
@@ -408,6 +446,19 @@ class RulerScaleTesterWindow(QMainWindow):
             elif not item.accepted:
                 text += " (rejected)"
             numbers.append(text)
+        source_text = (
+            result.source_display_name
+            or result.source_filename
+            or result.source_identity
+            or result.source_type
+        )
+        if result.captured_frame_sequence is not None:
+            source_text = tr(
+                "calibration.tester.analyzed_camera_frame",
+                source=source_text,
+                sequence=result.captured_frame_sequence,
+            )
+        self._result_labels["source"].setText(source_text or "—")
         self._result_labels["ruler"].setText(
             tr("calibration.tester.detected")
             if result.ruler_detection and result.ruler_detection.success
@@ -443,6 +494,7 @@ class RulerScaleTesterWindow(QMainWindow):
             state=result.quality_label,
             score=f"{result.quality_score:.1f}",
         ))
+        self._result_labels["verification"].setText(result.verification_mode)
         self._result_labels["scale_bar"].setText(
             tr(
                 "calibration.tester.scale_bar_value",
@@ -473,14 +525,60 @@ class RulerScaleTesterWindow(QMainWindow):
 
     @Slot()
     def clear_repeatability(self) -> None:
-        self._repeatability_values.clear()
+        self._repeatability_session.clear()
         self._update_repeatability()
 
+    @Slot()
+    def add_repeatability_run(self) -> None:
+        if self._current_result is None:
+            return
+        try:
+            self._repeatability_session.add_result(self._current_result)
+        except DuplicateSourceError:
+            QMessageBox.warning(
+                self,
+                tr("calibration.tester.duplicate_repeatability_title"),
+                tr("calibration.tester.duplicate_repeatability"),
+            )
+            return
+        except ValueError as exc:
+            QMessageBox.warning(self, tr("calibration.tester.repeatability"), str(exc))
+            return
+        self.export_repeatability_button.setEnabled(True)
+        self._update_repeatability()
+
+    @Slot()
+    def export_repeatability_csv(self) -> None:
+        if not self._repeatability_session.runs:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            tr("calibration.tester.export_repeatability"),
+            "ruler_repeatability.csv",
+            "CSV (*.csv)",
+        )
+        if not path:
+            return
+        try:
+            output = self._repeatability_session.export_csv(path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, tr("calibration.tester.export_repeatability_failed"), str(exc)
+            )
+            return
+        QMessageBox.information(
+            self, tr("calibration.tester.export_repeatability"), str(output)
+        )
+
     def _update_repeatability(self) -> None:
-        summary = repeatability_summary(self._repeatability_values)
+        summary = self._repeatability_session.summary()
         lines = [
-            tr("calibration.tester.repeat_run", index=f"{index:02d}", value=f"{value:.6f}")
-            for index, value in enumerate(self._repeatability_values, 1)
+            tr(
+                "calibration.tester.repeat_run",
+                index=f"{index:02d}",
+                value=f"{run.pixels_per_mm:.6f}",
+            )
+            for index, run in enumerate(self._repeatability_session.runs, 1)
         ]
         lines.extend((
             "",
@@ -494,6 +592,7 @@ class RulerScaleTesterWindow(QMainWindow):
             tr("calibration.tester.repeat_no_threshold"),
         ))
         self.repeatability_text.setPlainText("\n".join(lines))
+        self.export_repeatability_button.setEnabled(bool(self._repeatability_session.runs))
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.controller.close_camera()

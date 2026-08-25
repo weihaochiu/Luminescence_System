@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -27,6 +28,7 @@ class TickMark:
     length_px: float
     kind: str = "minor"
     accepted: bool = True
+    periodic_grid_index: int | None = None
     fitted_mm: float | None = None
     residual_px: float | None = None
     rejection_reason: str = ""
@@ -53,11 +55,39 @@ class ScaleBarSelection:
     label: str
 
 
+class VerificationMode(str, Enum):
+    UNVERIFIED = "unverified"
+    GEOMETRY_PERIODIC_ONLY = "geometry_periodic_only"
+    TICK_HIERARCHY_VERIFIED = "tick_hierarchy_verified"
+    OCR_VERIFIED = "ocr_verified"
+
+
+@dataclass
+class PhysicalPitchHypothesis:
+    periodic_pitch_px: float
+    physical_pitch_mm: float
+    pixels_per_mm: float
+    minor_support: float = 0.0
+    medium_support: float = 0.0
+    major_support: float = 0.0
+    ocr_support: float = 0.0
+    hierarchy_score: float = 0.0
+    residual_score: float = 0.0
+    total_score: float = 0.0
+    accepted: bool = False
+    acceptance_reason: str = ""
+    rejection_reasons: list[str] = field(default_factory=list)
+
+
 @dataclass
 class CalibrationResult:
     success: bool = False
     pixels_per_mm: float | None = None
     um_per_pixel: float | None = None
+    periodic_pitch_px: float | None = None
+    physical_pitch_mm: float | None = None
+    verification_mode: str = VerificationMode.UNVERIFIED.value
+    pitch_hypotheses: list[PhysicalPitchHypothesis] = field(default_factory=list)
     ruler_angle_deg: float | None = None
     ruler_detection: RulerDetection | None = None
     detected_numbers: list[DetectedNumber] = field(default_factory=list)
@@ -76,18 +106,28 @@ class CalibrationResult:
     warnings: list[str] = field(default_factory=list)
     failure_reasons: list[str] = field(default_factory=list)
     input_resolution: tuple[int, int] = (0, 0)
+    input_dtype: str = ""
+    input_min: float | int | None = None
+    input_max: float | int | None = None
+    source_type: str = "unknown"
+    source_identity: str = ""
+    source_display_name: str = ""
+    captured_frame_sequence: int | None = None
+    source_filename: str = ""
     coordinate_system: str = "original_image_pixels"
-    algorithm_version: str = "ruler-calibration-v1"
+    algorithm_version: str = "ruler-calibration-v2"
     scale_bar: ScaleBarSelection | None = None
     timestamp: str = ""
     debug_images: dict[str, np.ndarray] = field(
         default_factory=dict, repr=False, compare=False
     )
+    raw_input: np.ndarray | None = field(default=None, repr=False, compare=False)
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload.pop("debug_images", None)
+        payload.pop("raw_input", None)
         return _json_safe(payload)
 
 

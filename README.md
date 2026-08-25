@@ -14,6 +14,12 @@
 - Gain、Exposure 與 Repeat 完全由 `recipe.el_matrix` 控制；主畫面、Recipe UI、Settings、snapshot、preflight、runner 與輸出均無 HDR 分支。
 - Scientific TIFF 使用 NumPy 與 tifffile；PNG/JPEG 視覺化使用 Pillow。正式量測路徑不依賴 OpenCV；獨立式鐵尺校正 tester 使用 headless OpenCV 執行 detection/rectification。
 
+## V1.9.1 Ruler Scale Physical Verification Hardening
+
+- 將 `periodic_pitch_px` 與 `physical_pitch_mm` 分離，明確評估 1/2/5/10 mm hypotheses；只有 tick hierarchy 或相鄰公分 OCR 可驗證的結果才 PASS，避免 every-2/5/10 tick 造成 2×/5×/10× scale alias。
+- tester 分離 Live View/Captured frozen frame，分析結果保存 source identity 與 exact MONO16 `raw_input.tiff`；repeatability 改為人工加入、防重並支援 UTF-8 CSV。
+- OpenCV 維持 reusable calibration core 的 mandatory dependency；pytesseract 移至 optional OCR requirements，並新增 repository 根目錄 launcher。
+
 ## V1.9.0 Standalone Ruler Scale Calibration Tester
 
 - 新增 production-reusable `core/calibration`：任意位置／角度 ruler detection、homography、multi-tick robust fit、OCR geometry cross-validation、original-plane pixels/mm、µm/pixel、quality gate 與 scale-bar selection。
@@ -376,10 +382,10 @@ Emergency latch 能阻止 Emergency request 之後尚未送出的 `OUTPUT ON`；
 金屬直尺，輸出 robust multi-tick `pixels/mm`、`µm/pixel`、OCR/tick cross-check、
 scale-bar preview、debug package、batch regression 與 repeatability 統計。
 
-啟動：
+從 repository 根目錄啟動：
 
 ```text
-tools\ruler_scale_calibration_tester\run_ruler_scale_tester.bat
+run_ruler_scale_calibration_tester.bat
 ```
 
 完整操作、coordinate convention、OCR requirement、人工 acceptance sheet 與已知限制請見

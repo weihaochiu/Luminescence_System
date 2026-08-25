@@ -30,13 +30,16 @@ The project uses Python 3.11/3.12 and the repository `.venv`.
 
 1. Run the repository `setup_and_run.bat` once to create `.venv` and install
    `requirements.txt`.
-2. Install the Windows Tesseract executable separately if OCR is required.
-3. Put `tesseract.exe` on `PATH`, then restart the tester.
+2. If OCR is required, explicitly install the optional Python wrapper with
+   `.venv\Scripts\python.exe -m pip install -r tools\ruler_scale_calibration_tester\requirements-ocr.txt`.
+3. Install the Windows Tesseract executable separately, put `tesseract.exe` on
+   `PATH`, then restart the tester. Nothing is downloaded automatically.
 4. Close the production Luminescence_System application so only one process owns
    the physical camera.
-5. Double-click `run_ruler_scale_tester.bat`.
+5. From the repository root, double-click `run_ruler_scale_calibration_tester.bat`.
 
-The launcher never changes system Python and never runs pip automatically. It
+OpenCV is required by reusable calibration core and remains in root
+`requirements.txt`. The launcher never changes system Python and never runs pip automatically. It
 keeps the console open on failure.
 
 Command-line alternatives:
@@ -117,9 +120,12 @@ Hough line is never treated as sufficient evidence.
 
 The polygon is perspective-warped into a horizontal ROI. Tick detection examines
 both edge bands, removes the long ruler border, collects many perpendicular marks,
-and classifies their relative lengths. The solver estimates the fundamental 1 mm
-grid, rejects duplicate/false marks, tolerates missing marks, and fits the longest
-usable span using robust residual rejection.
+and classifies their relative lengths. The solver first estimates an image-only
+`periodic_pitch_px`, then evaluates 1/2/5/10 mm physical-pitch hypotheses using
+position, length hierarchy, periodicity, and OCR. It rejects duplicate/false marks,
+tolerates missing marks, and fits the longest usable span using robust residual
+rejection. A periodic grid alone is `geometry_periodic_only` and always FAIL;
+only `tick_hierarchy_verified` or `ocr_verified` can PASS.
 
 Overlay colors:
 
@@ -187,7 +193,8 @@ Press **Save Debug Package** after any analysis. The default local convention is
 
 ```text
 local/generated/debug/<timestamp>/
-├─ original.png
+├─ raw_input.tiff
+├─ original_preview.png
 ├─ normalized.png
 ├─ ruler_roi.png
 ├─ ruler_candidates.png
@@ -200,7 +207,9 @@ local/generated/debug/<timestamp>/
 └─ result.json
 ```
 
-`result.json` includes timestamp, resolution, algorithm version, coordinate
+`raw_input.tiff` is an exact, non-tone-mapped copy of the input array; a MONO16
+input reloads as the same `uint16` values. `result.json` includes timestamp,
+dtype/min/max, source identity, periodic/physical pitch hypotheses, resolution, algorithm version, coordinate
 convention, polygon/angle, raw and accepted OCR, corrections, accepted/rejected
 ticks, fitted mm indices, scale, span, residuals, quality-score definition,
 warnings, and failure reasons. Debug images, captures, datasets, and OCR caches
@@ -221,7 +230,10 @@ making it suitable for regression automation.
 
 ## 12. Repeatability mode
 
-Every successful GUI analysis is appended as Run 01, Run 02, and so on. The panel
+Analysis never appends a run automatically. After reviewing a physically verified
+PASS, press **Add as Repeatability Run**. The same captured frame/file identity
+cannot be added twice. **Export Repeatability CSV** writes UTF-8 per-run evidence
+and summary statistics. The panel
 reports N, mean pixels/mm, sample SD, CV %, min, max, and maximum deviation from
 the mean. **This phase intentionally asserts no repeatability acceptance
 threshold.** Use **Clear Repeatability Runs** before a new optical setup.

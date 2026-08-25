@@ -8,6 +8,7 @@ from time import monotonic
 
 import cv2
 import numpy as np
+import tifffile
 
 from .config import CalibrationConfig
 from .digit_recognizer import DigitRecognizer, TesseractDigitRecognizer
@@ -38,11 +39,35 @@ class CalibrationService:
         self.digit_recognizer = digit_recognizer or TesseractDigitRecognizer(self.config)
         self.scale_solver = ScaleSolver(self.config)
 
-    def analyze(self, frame: np.ndarray, *, input_source: str = "unknown") -> CalibrationResult:
+    def analyze(
+        self,
+        frame: np.ndarray,
+        *,
+        input_source: str = "unknown",
+        source_type: str | None = None,
+        source_identity: str = "",
+        source_display_name: str = "",
+        captured_frame_sequence: int | None = None,
+        source_filename: str = "",
+    ) -> CalibrationResult:
         started = monotonic()
         timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
-        gray = normalize_to_uint8(frame)
+        raw_input = np.asarray(frame).copy()
+        gray = normalize_to_uint8(raw_input)
         height, width = gray.shape
+        resolved_source_type = source_type or self._infer_source_type(input_source)
+        resolved_filename = source_filename
+        resolved_identity = source_identity
+        resolved_display_name = source_display_name
+        if resolved_source_type == "file" and not resolved_filename:
+            candidate = Path(input_source).resolve()
+            if candidate.is_file():
+                resolved_filename = str(candidate)
+                resolved_display_name = resolved_display_name or candidate.name
+                stat = candidate.stat()
+                resolved_identity = resolved_identity or (
+                    f"file|{candidate}|mtime_ns={stat.st_mtime_ns}|size={stat.st_size}"
+                )
         LOG.info(
             "Ruler calibration analysis start source=%s resolution=%sx%s",
             input_source,
@@ -52,28 +77,37 @@ class CalibrationService:
         result = CalibrationResult(
             timestamp=timestamp,
             input_resolution=(width, height),
+            input_dtype=str(raw_input.dtype),
+            input_min=self._scalar_min(raw_input),
+            input_max=self._scalar_max(raw_input),
+            source_type=resolved_source_type,
+            source_identity=resolved_identity,
+            source_display_name=resolved_display_name,
+            captured_frame_sequence=captured_frame_sequence,
+            source_filename=resolved_filename,
+            raw_input=raw_input,
         )
         rectification: RectificationResult | None = None
         try:
-            detection, detection_artifacts = self.ruler_detector.detect(frame)
+            detection, detection_artifacts = self.ruler_detector.detect(raw_input)
             result.ruler_detection = detection
             result.ruler_angle_deg = detection.angle_deg if detection.success else None
             result.debug_images.update({
-                "original": to_bgr(frame),
+                "original_preview": to_bgr(raw_input),
                 "normalized": detection_artifacts.normalized,
                 "edges": detection_artifacts.edges,
                 "ruler_candidates": detection_artifacts.candidates_overlay,
             })
             if not detection.success:
                 result.failure_reasons.append("ruler_not_found")
-                result.debug_images["final_overlay"] = draw_final_overlay(frame, result, None)
+                result.debug_images["final_overlay"] = draw_final_overlay(raw_input, result, None)
                 self._finish_log(result, started, input_source)
                 return result
 
-            rectification = self.rectifier.rectify(frame, detection)
+            rectification = self.rectifier.rectify(raw_input, detection)
             if not rectification.success:
                 result.failure_reasons.append(rectification.reason or "rectification_failed")
-                result.debug_images["final_overlay"] = draw_final_overlay(frame, result, rectification)
+                result.debug_images["final_overlay"] = draw_final_overlay(raw_input, result, rectification)
                 self._finish_log(result, started, input_source)
                 return result
             result.debug_images["rectified"] = rectification.image
@@ -94,6 +128,15 @@ class CalibrationService:
                 ocr_diagnostic=availability.diagnostic,
             )
             solved.timestamp = timestamp
+            solved.input_dtype = str(raw_input.dtype)
+            solved.input_min = self._scalar_min(raw_input)
+            solved.input_max = self._scalar_max(raw_input)
+            solved.source_type = resolved_source_type
+            solved.source_identity = resolved_identity
+            solved.source_display_name = resolved_display_name
+            solved.captured_frame_sequence = captured_frame_sequence
+            solved.source_filename = resolved_filename
+            solved.raw_input = raw_input
             solved.debug_images = result.debug_images
             solved.diagnostics.update({
                 "input_source": input_source,
@@ -104,14 +147,14 @@ class CalibrationService:
                     "transformed and scale is fitted in original image axis pixels."
                 ),
             })
-            solved.debug_images["final_overlay"] = draw_final_overlay(frame, solved, rectification)
+            solved.debug_images["final_overlay"] = draw_final_overlay(raw_input, solved, rectification)
             result = solved
         except Exception as exc:
             LOG.exception("Ruler calibration analysis failed source=%s", input_source)
             result.failure_reasons.append("analysis_exception")
             result.warnings.append(str(exc))
-            result.debug_images.setdefault("original", to_bgr(frame))
-            result.debug_images["final_overlay"] = draw_final_overlay(frame, result, rectification)
+            result.debug_images.setdefault("original_preview", to_bgr(raw_input))
+            result.debug_images["final_overlay"] = draw_final_overlay(raw_input, result, rectification)
         self._finish_log(result, started, input_source)
         return result
 
@@ -128,6 +171,9 @@ class CalibrationService:
             output = Path(f"{output}_{counter:02d}")
             counter += 1
         output.mkdir(parents=True, exist_ok=False)
+        if result.raw_input is None:
+            raise ValueError("Calibration result does not contain an exact raw input frame")
+        tifffile.imwrite(output / "raw_input.tiff", result.raw_input)
         for name, image in result.debug_images.items():
             path = output / f"{name}.png"
             array = np.asarray(image)
@@ -142,6 +188,29 @@ class CalibrationService:
         temporary.replace(result_path)
         LOG.info("Ruler calibration debug package saved path=%s", output)
         return output
+
+    @staticmethod
+    def _infer_source_type(input_source: str) -> str:
+        lowered = input_source.casefold()
+        if lowered.startswith("camera:"):
+            return "camera"
+        if lowered not in {"", "unknown"}:
+            return "file" if Path(input_source).suffix else "synthetic"
+        return "unknown"
+
+    @staticmethod
+    def _scalar_min(array: np.ndarray) -> float | int | None:
+        if array.size == 0:
+            return None
+        value = np.nanmin(array) if np.issubdtype(array.dtype, np.floating) else np.min(array)
+        return value.item() if isinstance(value, np.generic) else value
+
+    @staticmethod
+    def _scalar_max(array: np.ndarray) -> float | int | None:
+        if array.size == 0:
+            return None
+        value = np.nanmax(array) if np.issubdtype(array.dtype, np.floating) else np.max(array)
+        return value.item() if isinstance(value, np.generic) else value
 
     @staticmethod
     def _ruler_roi(gray: np.ndarray, polygon: list[tuple[float, float]]) -> np.ndarray:

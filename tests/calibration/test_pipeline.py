@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import cv2
+import tifffile
 
 from core.calibration.digit_recognizer import UnavailableDigitRecognizer
 from core.calibration.image_utils import axis_angle_error
@@ -70,10 +71,27 @@ class CalibrationPipelineTests(unittest.TestCase):
         self.assertIn("test unavailable", result.ocr_diagnostic)
 
     def test_debug_package_contains_evidence_and_json(self) -> None:
-        result = self.service.analyze(synthetic_ruler())
+        raw = synthetic_ruler().astype(np.uint16) * 200
+        raw[0, 0] = 52341
+        expected_raw = raw.copy()
+        result = self.service.analyze(
+            raw,
+            input_source="camera:test",
+            source_type="camera",
+            source_identity="camera|test|frame=100|captured=now",
+            captured_frame_sequence=100,
+        )
+        raw.fill(0)
         with tempfile.TemporaryDirectory() as directory:
             output = self.service.save_debug_package(result, directory)
-            self.assertTrue((output / "original.png").is_file())
+            exact = tifffile.imread(output / "raw_input.tiff")
+            self.assertEqual(np.uint16, exact.dtype)
+            self.assertTrue(np.array_equal(expected_raw, exact))
+            self.assertEqual(52341, int(exact.max()))
+            self.assertTrue((output / "original_preview.png").is_file())
+            self.assertTrue((output / "normalized.png").is_file())
+            self.assertTrue((output / "ruler_candidates.png").is_file())
+            self.assertTrue((output / "ruler_roi.png").is_file())
             self.assertTrue((output / "rectified.png").is_file())
             self.assertTrue((output / "threshold.png").is_file())
             self.assertTrue((output / "ticks_overlay.png").is_file())
@@ -81,6 +99,14 @@ class CalibrationPipelineTests(unittest.TestCase):
             self.assertTrue((output / "final_overlay.png").is_file())
             payload = (output / "result.json").read_text(encoding="utf-8")
             self.assertIn('"pixels_per_mm"', payload)
+            self.assertIn('"input_dtype": "uint16"', payload)
+            self.assertIn('"input_max": 52341', payload)
+            self.assertIn('"periodic_pitch_px"', payload)
+            self.assertIn('"physical_pitch_mm"', payload)
+            self.assertIn('"verification_mode"', payload)
+            self.assertIn('"pitch_hypotheses"', payload)
+            self.assertIn('"source_identity": "camera|test|frame=100|captured=now"', payload)
+            self.assertNotIn('"raw_input"', payload)
             self.assertIn('"coordinate_system": "original_image_pixels"', payload)
 
     def test_batch_offline_regression_entry(self) -> None:

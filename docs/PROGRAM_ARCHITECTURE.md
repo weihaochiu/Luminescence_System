@@ -1,7 +1,7 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.9.0
-對應程式版本：V1.9.0
+文件版本：1.9.1
+對應程式版本：V1.9.1
 最後更新：2026-08-25（UTC+8）
 
 ## 0. 雙語與中央錯誤架構
@@ -152,8 +152,9 @@ ruler detector → rectifier → tick detector + digit recognizer → scale solv
 - `tools/ruler_scale_calibration_tester/` 負責 CameraController 接線、Image File I/O、diagnostic GUI、debug package、batch regression 與 repeatability presentation，不修改正式 Recipe sequence。
 - Camera mode 只使用既有 `CameraController` 的 MONO16 `scientific_frame_ready`；tester 不直接存取 private SDK handle，也不建立第二 camera wrapper。
 - Rectified `(u,v)` 只供 detection/OCR。所有 accepted tick center 以 inverse homography 回到 original image，再沿 original ruler axis fitting；`pixels/mm` 明確屬於 original stored image plane。
-- OCR backend 是可替換 `DigitRecognizer`。預設 pytesseract/Tesseract unavailable 時明確回報 diagnostic，不下載模型、不產生假值；scale 以多 tick geometry 為主，OCR/major/minor tick 只做交叉驗證與 quality evidence。
-- quality score 是已定義的 engineering score，不宣稱 probability。PASS 另要求 ruler、tick intervals、span、finite positive scale 與 fit consistency gate。
+- Solver 先估計無單位的 `periodic_pitch_px`，再以 tick position/length/hierarchy 與 OCR 評估 1/2/5/10 mm `PhysicalPitchHypothesis`；只有 `tick_hierarchy_verified` 或 `ocr_verified` 才建立 `pixels_per_mm` 並 PASS，periodic geometry 單獨不得假定為 1 mm。
+- OCR backend 是可替換 `DigitRecognizer`。pytesseract 是 tester optional dependency；Tesseract unavailable 時明確回報 diagnostic，不下載模型、不產生假值。OpenCV 因 reusable calibration core 直接 import，仍是 root mandatory dependency。
+- quality score 是已定義的 engineering score，不宣稱 probability，且不得越過 physical-pitch correctness gate。GUI 的 Live View 與 frozen Captured input 分離；repeatability 僅由人工加入、使用 source identity 防重並可匯出 UTF-8 CSV。
 - `local/generated/`、`local/datasets/`、`local/ocr_cache/` 是本機 evidence/data/cache boundary，必須維持 Git ignored。
 
 ### 4.5 Relay 控制邊界

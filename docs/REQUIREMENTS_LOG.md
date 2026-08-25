@@ -47,6 +47,15 @@
 - 明確排除：不修改 Recipe、polarity、measurement runner、SMU output、relay safety、正式 JPG footer 或 TIFF；不自動控制白光。
 - 驗證：21 項 unit/synthetic tests 涵蓋 scale math、scale bar、perfect/missing/false/noisy tick、OCR sequence/outlier、0/30/90/135/180/270°、mild perspective、no ruler/no ticks/insufficient ticks/OCR unavailable/debug package/batch；完整 repository regression 511/511 通過。實際辨識率不得由 synthetic tests 推論。
 
+### CAL-RULER-002－Physical pitch、evidence 與 repeatability 強化
+
+- 狀態：已完成（V1.9.1）；實際相機＋鐵尺 acceptance 仍待執行。
+- Correctness gate：`periodic_pitch_px` 不再直接當作 px/mm；評估 1/2/5/10 mm hypotheses，只有完整 tick hierarchy 或已 association 的相鄰公分 OCR 能產生 `tick_hierarchy_verified`／`ocr_verified` PASS。ambiguous physical pitch 一律 FAIL，不受 quality score 影響。
+- Evidence：`CalibrationService` 保存 exact raw ndarray copy；debug package 以 tifffile 寫出 exact `raw_input.tiff`，另存 preview/intermediate overlays 與包含 dtype/min/max/source/pitch hypotheses 的 JSON，不把 pixels 塞進 JSON。
+- Source/UI：Live View 與 Captured 分離；camera identity 綁 device、scientific frame sequence、capture timestamp，file identity 綁 absolute path、mtime、size。結果顯示實際 analyzed frame/source。
+- Repeatability：Analyze 不自動新增 run；只有 physically verified success 可人工加入，同 source identity 防重，並輸出逐 run 與 N/mean/SD/CV/min/max/max deviation 的 UTF-8 CSV。
+- Dependency/launcher：OpenCV 因 reusable core 直接使用維持 mandatory；pytesseract 改放 tester `requirements-ocr.txt`，Tesseract executable 由使用者另行安裝且有雙語診斷。根目錄 BAT 使用既有 `.venv`，不自動安裝。
+
 ## Current superseding requirement — HDR removal
 
 - 狀態：已完成（2026-08-14）。

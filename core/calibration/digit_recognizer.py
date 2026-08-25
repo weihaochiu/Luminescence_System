@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from .config import CalibrationConfig
+from core.i18n import tr
 from .models import DetectedNumber
 
 
@@ -53,24 +54,26 @@ class TesseractDigitRecognizer(DigitRecognizer):
             return self._availability
         try:
             import pytesseract  # type: ignore
-        except Exception as exc:
-            self._availability = OCRAvailability(False, f"pytesseract unavailable: {exc}")
+        except Exception:
+            self._availability = OCRAvailability(False, tr("calibration.ocr.package_missing"))
             return self._availability
         executable = shutil.which("tesseract")
         configured = str(getattr(pytesseract.pytesseract, "tesseract_cmd", "tesseract"))
         if executable is None and configured.casefold() == "tesseract":
             self._availability = OCRAvailability(
                 False,
-                "Tesseract executable was not found on PATH; install it explicitly and restart",
+                tr("calibration.ocr.executable_missing"),
             )
             return self._availability
         try:
             version = pytesseract.get_tesseract_version()
-        except Exception as exc:
-            self._availability = OCRAvailability(False, f"Tesseract executable unavailable: {exc}")
+        except Exception:
+            self._availability = OCRAvailability(False, tr("calibration.ocr.executable_missing"))
             return self._availability
         self._module = pytesseract
-        self._availability = OCRAvailability(True, f"Tesseract {version}")
+        self._availability = OCRAvailability(
+            True, tr("calibration.ocr.available", version=version)
+        )
         return self._availability
 
     def recognize(self, rectified_image: np.ndarray) -> list[DetectedNumber]:

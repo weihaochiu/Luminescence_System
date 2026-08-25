@@ -24,6 +24,17 @@ class CalibrationConfig:
     max_fit_error_percent: float = 8.0
     ocr_min_confidence: float = 25.0
     ocr_major_tick_max_distance_mm: float = 4.0
+    physical_pitch_hypotheses_mm: tuple[float, ...] = (1.0, 2.0, 5.0, 10.0)
+    hierarchy_phase_tolerance_steps: float = 0.30
+    hierarchy_min_minor_ticks: int = 6
+    hierarchy_min_medium_ticks: int = 2
+    hierarchy_min_major_ticks: int = 2
+    hierarchy_min_support: float = 0.70
+    hierarchy_score_acceptance: float = 0.62
+    ocr_value_residual_tolerance: float = 0.20
+    ocr_min_associations: int = 2
+    ocr_hypothesis_min_support: float = 0.66
+    physical_pitch_relative_tolerance: float = 0.12
     scale_bar_min_width_fraction: float = 0.15
     scale_bar_target_width_fraction: float = 0.20
     scale_bar_max_width_fraction: float = 0.25
