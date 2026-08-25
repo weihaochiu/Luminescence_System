@@ -40,6 +40,7 @@ from gui.measurement_output import (
 from gui.measurement_execution_plan import build_measurement_execution_plan
 from gui.measurement_progress_dialog import MeasurementProgressDialog
 from gui.main_window_devices import MainWindowDeviceMixin
+from gui.smu_base import SMUDevice
 from gui.recipe_store import Recipe
 from gui.recipe_dialog import RecipeManagerDialog
 from gui.recipe_store import RecipeStore
@@ -153,6 +154,14 @@ class _FakeHardware:
 
 class _RecordingSMUDriver:
     def __init__(self) -> None:
+        self.device = SMUDevice(
+            "USB0::EL-MATRIX::INSTR",
+            manufacturer="Keysight Technologies",
+            model="B2901B",
+            serial_number="EL-MATRIX-SERIAL",
+            idn="Keysight Technologies,B2901B,EL-MATRIX-SERIAL,1.0",
+            supported=True,
+        )
         self.commands: list[tuple[object, ...]] = []
         self.output = False
         self.voltage_v = 0.0

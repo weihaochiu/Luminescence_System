@@ -27,7 +27,7 @@ from gui.manual_smu_settings import (
 from gui.main_window import MainWindow
 from gui.main_window_devices import MainWindowDeviceMixin
 from gui.relay_controller import RelayService
-from gui.smu_base import SMUDriver
+from gui.smu_base import SMUDevice, SMUDriver
 from gui.smu_control import PolarityState, SMUControlManager
 from gui.smu_manual_panel import ManualSMUPanel
 from tests.qt_test_utils import ensure_qapplication
@@ -143,12 +143,24 @@ class ManualSMUSettingsTests(unittest.TestCase):
     def settings(self) -> QSettings:
         return QSettings(str(self.settings_path), QSettings.Format.IniFormat)
 
+    @staticmethod
+    def driver_device() -> SMUDevice:
+        return SMUDevice(
+            "USB0::MANUAL-SETTINGS::INSTR",
+            manufacturer="Keysight Technologies",
+            model="B2901B",
+            serial_number="MANUAL-SETTINGS-SERIAL",
+            idn="Keysight Technologies,B2901B,MANUAL-SETTINGS-SERIAL,1.0",
+            supported=True,
+        )
+
     def production_boundaries(
         self,
         panel: ManualSMUPanel,
     ) -> tuple[SMUControlManager, Mock, Mock, Mock, Mock]:
         control = SMUControlManager()
         driver = Mock(spec=SMUDriver)
+        driver.device = self.driver_device()
         control.bind_driver(driver, output_confirmed_off=True)
         manual_sequence = Mock(
             name="SMUControlManager.request_manual_output_sequence"
@@ -595,6 +607,7 @@ class ManualSMUSettingsTests(unittest.TestCase):
         panel = ManualSMUPanel(settings=settings)
         control = SMUControlManager()
         driver = Mock(spec=SMUDriver)
+        driver.device = self.driver_device()
         control.bind_driver(driver, output_confirmed_off=True)
         manual_sequence = Mock(name="SMUControlManager.request_manual_output_sequence")
         control.request_manual_output_sequence = manual_sequence

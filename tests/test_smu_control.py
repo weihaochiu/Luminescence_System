@@ -21,7 +21,17 @@ from gui.smu_manager import SMUManager
 
 class FakeSMU(SMUDriver):
     def __init__(self) -> None:
-        super().__init__(object(), SMUDevice("FAKE", supported=True))
+        super().__init__(
+            object(),
+            SMUDevice(
+                "USB0::FAKE::INSTR",
+                manufacturer="Keysight Technologies",
+                model="B2901B",
+                serial_number="FAKE-SERIAL-001",
+                idn="Keysight Technologies,B2901B,FAKE-SERIAL-001,1.0",
+                supported=True,
+            ),
+        )
         self.commands: list[tuple] = []
         self.output = False
         self.voltage = 0.0

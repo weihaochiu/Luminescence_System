@@ -29,6 +29,24 @@ class UserMessageInventoryScannerTests(unittest.TestCase):
         )
         self.assertTrue(all("indirect presentation field" in entry.reason for entry in entries))
 
+    def test_joined_tooltip_list_literals_are_flagged(self) -> None:
+        entries = self._entries(
+            '''
+lines = [
+    f"Requested: {requested}",
+    f"Readback: {readback}",
+]
+lines.append(f"Error: {error}")
+widget.setToolTip("\\n".join(lines))
+'''
+        )
+        self.assertEqual(
+            {"Requested: {requested}", "Readback: {readback}", "Error: {error}"},
+            {entry.message for entry in entries},
+        )
+        self.assertTrue(all(entry.kind == "B. Tooltip" for entry in entries))
+        self.assertTrue(all(entry.translation for entry in entries))
+
     def test_repository_audit_has_no_unresolved_translation_candidates(self) -> None:
         unresolved = [
             entry

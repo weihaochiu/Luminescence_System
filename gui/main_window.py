@@ -117,7 +117,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         self._measurement_thread: Any | None = None
         self._measurement_worker: Any | None = None
         self._auto_connect_after_scan = False
-        self._smu_reconnect_safety_pending = False
+        self._pending_smu_safety_reconnect = None
         self._close_in_progress = False
 
         self._build_actions()

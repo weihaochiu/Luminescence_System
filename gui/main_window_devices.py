@@ -21,7 +21,12 @@ from .instrument_state_manager import SMUUIState
 from .relay_controller import RelayError
 from .scientific_dn import mean_effective_dn_roi
 from .smu_base import SMUDevice
-from .smu_control import SMUInterlockError, SMUOwnership
+from .smu_control import (
+    SMUErrorEvent,
+    SMUErrorKind,
+    SMUInterlockError,
+    SMUOwnership,
+)
 from .smu_manager import select_auto_connect_device
 
 
@@ -47,6 +52,37 @@ class MainWindowDeviceMixin:
         self.instrument_state_manager.set_disconnected()
         auto_connect = self._auto_connect_after_scan
         self._auto_connect_after_scan = False
+        pending = self._pending_smu_safety_reconnect
+        if pending is not None:
+            matches = [
+                device for device in devices if pending.target.matches_device(device)
+            ]
+            if len(matches) != 1:
+                self._pending_smu_safety_reconnect = None
+                self.report_error(
+                    pending.error_code,
+                    context={
+                        **pending.target.to_context(),
+                        "operation": "scan_for_smu_safety_reconnect",
+                        "expected": "exactly one matching physical SMU",
+                        "actual": f"matching devices: {len(matches)}",
+                    },
+                )
+                return
+            target = matches[0]
+            self.device_panel.select_smu(target.visa_address)
+            if not self.smu_manager.reconnect_device_for_safety(target):
+                self._pending_smu_safety_reconnect = None
+            return
+        fault_identity = self.smu_manager.control.fault_identity
+        if fault_identity is not None:
+            self.status_message.setText(
+                tr(
+                    "smu.unresolved_fault_target",
+                    target=fault_identity.display_name,
+                )
+            )
+            return
         if not auto_connect:
             return
         selected = select_auto_connect_device(
@@ -77,6 +113,7 @@ class MainWindowDeviceMixin:
         self.instrument_state_manager.set_connecting(label)
 
     def on_smu_connection_failed(self, message: str) -> None:
+        self._pending_smu_safety_reconnect = None
         self.device_panel.set_smu_disconnected(error=True)
         self.instrument_state_manager.set_connection_error(message)
 
@@ -142,8 +179,20 @@ class MainWindowDeviceMixin:
         self.instrument_state_manager.set_connected(device.display_name, device.supported)
         if device.supported:
             self.smu_monitor.start()
-        if self._smu_reconnect_safety_pending:
-            self._smu_reconnect_safety_pending = False
+        pending = self._pending_smu_safety_reconnect
+        if pending is not None:
+            self._pending_smu_safety_reconnect = None
+            if not pending.target.matches_device(device):
+                self.report_error(
+                    pending.error_code,
+                    context={
+                        **pending.target.to_context(),
+                        "operation": "post_reconnect_identity_verification",
+                        "expected": pending.target.display_name,
+                        "actual": device.idn or device.visa_address,
+                    },
+                )
+                return
             if self.smu_manager.control.output_unknown_latched:
                 self.smu_manager.control.request_safe_output_off(
                     "post-reconnect safety verification"
@@ -168,7 +217,10 @@ class MainWindowDeviceMixin:
         else:
             accepted = control.request_safe_output_off("manual panel recovery")
         if not accepted:
-            self.show_smu_error(tr("smu.error_output_off_unconfirmed"))
+            self.show_smu_error(
+                tr("smu.error_output_off_unconfirmed"),
+                SMUErrorKind.OUTPUT_OFF_UNCONFIRMED,
+            )
             return
         self.status_message.setText(tr("smu.confirming_output_off_and_routing"))
 
@@ -591,12 +643,12 @@ class MainWindowDeviceMixin:
         else:
             text = tr("camera.ae_metering_empty")
         tooltip_lines = [
-            f"Requested: {requested}",
-            f"Readback: {readback}",
-            f"Status: {verification}",
+            tr("camera.ae_metering_requested", requested=requested),
+            tr("camera.ae_metering_readback", readback=readback),
+            tr("camera.ae_metering_status", status=verification),
         ]
         if error:
-            tooltip_lines.append(f"Error: {error}")
+            tooltip_lines.append(tr("camera.ae_metering_error", error=error))
         self.live_view_ae_metering_value.setText(text)
         self.live_view_ae_metering_value.setToolTip("\n".join(tooltip_lines))
 
@@ -880,32 +932,56 @@ class MainWindowDeviceMixin:
             context={"operation": "camera_control", "actual": message},
         )
 
-    def show_smu_error(self, message: str) -> None:
+    def show_smu_error_event(self, event: SMUErrorEvent) -> None:
+        self.show_smu_error(event.message, event.kind)
+
+    def show_smu_error(
+        self,
+        message: str,
+        kind: SMUErrorKind = SMUErrorKind.OPERATION_FAILED,
+    ) -> None:
         self.status_message.setText(message)
         if not self.smu_manager.is_connected:
             self.device_panel.set_smu_disconnected(error=True)
-        folded = message.casefold()
-        if (
-            not self.smu_manager.control.output_confirmed_off
-            and any(token in folded for token in ("output off", "safe shutdown", "unconfirmed", "無法確認"))
-        ):
-            code = "SMU-203"
-        elif "unexpected" in folded and "output" in folded:
-            code = "SMU-205"
-        elif "compliance" in folded:
-            code = "SMU-204"
-        else:
-            code = "SMU-201"
+        code = {
+            SMUErrorKind.OUTPUT_OFF_UNCONFIRMED: "SMU-203",
+            SMUErrorKind.UNEXPECTED_OUTPUT: "SMU-205",
+            SMUErrorKind.COMPLIANCE_ACTIVE: "SMU-204",
+            SMUErrorKind.OPERATION_FAILED: "SMU-201",
+        }[kind]
+        control = self.smu_manager.control
+        fault_identity = control.fault_identity
+        connected = self.smu_manager.connected_device
         selected = self.device_panel.selected_smu()
+        context: dict[str, object] = {
+            "operation": "smu_control",
+            "actual": message,
+            "expected": "OUTPUT OFF" if code in {"SMU-203", "SMU-205"} else None,
+            "smu_error_kind": kind.value,
+        }
+        if fault_identity is not None:
+            context.update(fault_identity.to_context())
+        elif connected is not None:
+            context.update(
+                {
+                    "instrument": connected.display_name,
+                    "resource": connected.visa_address,
+                    "smu_serial_number": connected.serial_number,
+                    "smu_idn": connected.idn,
+                }
+            )
+        elif selected is not None:
+            context.update(
+                {
+                    "instrument": selected.display_name,
+                    "resource": selected.visa_address,
+                    "smu_serial_number": selected.serial_number,
+                    "smu_idn": selected.idn,
+                }
+            )
         self.report_error(
             code,
-            context={
-                "operation": "smu_control",
-                "instrument": selected.display_name if selected is not None else None,
-                "resource": selected.visa_address if selected is not None else None,
-                "actual": message,
-                "expected": "OUTPUT OFF" if code in {"SMU-203", "SMU-205"} else None,
-            },
+            context=context,
         )
 
     @staticmethod

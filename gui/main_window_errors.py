@@ -2,15 +2,39 @@ from __future__ import annotations
 
 """Main-window presentation boundary for centralized errors and diagnostics."""
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from core.error_reporter import ErrorEvent
 
 from .dialogs import ErrorDialog
 from .error_center import ErrorCenterDialog
+from .smu_base import SMUFaultIdentity
 
 if TYPE_CHECKING:
     from .main_window import MainWindow
+
+
+@dataclass(frozen=True)
+class PendingSMUSafetyReconnect:
+    target: SMUFaultIdentity
+    requested_resource: str
+    requested_serial: str
+    error_code: str
+    requested_at: str
+
+    @classmethod
+    def create(cls, target: SMUFaultIdentity, error_code: str) -> "PendingSMUSafetyReconnect":
+        return cls(
+            target=target,
+            requested_resource=target.visa_address,
+            requested_serial=target.serial_number,
+            error_code=error_code,
+            requested_at=datetime.now(timezone.utc).astimezone().isoformat(
+                timespec="milliseconds"
+            ),
+        )
 
 
 def open_error_center(self: MainWindow, code: str | None = None) -> None:
@@ -77,18 +101,23 @@ def _error_reconnect_available(self: MainWindow, event: ErrorEvent) -> bool:
         return True
     if subsystem != "smu" or self.smu_manager.is_busy:
         return False
+    control = self.smu_manager.control
+    if control.fault_identity is not None:
+        connected = self.smu_manager.connected_device
+        return bool(
+            connected is None or control.fault_identity.matches_device(connected)
+        )
     device = _smu_reconnect_target(self, event)
     if device is None:
         return False
-    control = self.smu_manager.control
     return bool(
         not self.smu_manager.is_connected
-        or control.output_unknown_latched
         or control.output_confirmed_off
     )
 
 
 def _smu_reconnect_target(self: MainWindow, event: ErrorEvent):
+    fault_identity = self.smu_manager.control.fault_identity
     requested_resource = str(event.context.resource or "")
     connected = self.smu_manager.connected_device
     selected = self.device_panel.selected_smu()
@@ -96,6 +125,11 @@ def _smu_reconnect_target(self: MainWindow, event: ErrorEvent):
     candidates.extend(
         device for device in self.smu_manager.devices if device not in candidates
     )
+    if fault_identity is not None:
+        matches = [
+            device for device in candidates if fault_identity.matches_device(device)
+        ]
+        return matches[0] if len(matches) == 1 else None
     if requested_resource:
         for device in candidates:
             if device.visa_address == requested_resource:
@@ -118,14 +152,24 @@ def _error_dialog_reconnect(self: MainWindow, event: ErrorEvent) -> bool:
         return True
     if subsystem != "smu":
         return False
+    control = self.smu_manager.control
+    fault_identity = control.fault_identity
+    if fault_identity is not None:
+        pending = PendingSMUSafetyReconnect.create(fault_identity, event.code)
+        self._pending_smu_safety_reconnect = pending
+        device = _smu_reconnect_target(self, event)
+        if device is None:
+            self._auto_connect_after_scan = False
+            self.refresh_smu_devices()
+            return True
+        accepted = self.smu_manager.reconnect_device_for_safety(device)
+        if not accepted:
+            self._pending_smu_safety_reconnect = None
+        return accepted
     device = _smu_reconnect_target(self, event)
     if device is None or not self._error_reconnect_available(event):
         return False
-    self._smu_reconnect_safety_pending = bool(
-        event.code in {"SMU-203", "SMU-205"}
-        or self.smu_manager.control.output_unknown_latched
-    )
-    return self.smu_manager.reconnect_device_for_safety(device)
+    return self.smu_manager.reconnect_device(device)
 
 
 def _on_emergency_completed(self: MainWindow, report: object) -> None:

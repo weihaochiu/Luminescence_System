@@ -219,6 +219,7 @@ class Collector(ast.NodeVisitor):
     def __init__(self, relative: str) -> None:
         self.relative = relative
         self.functions: list[str] = []
+        self._literal_collections: list[dict[str, list[str]]] = [{}]
         self.entries: list[Entry] = []
         self._seen: set[tuple[int, str, str]] = set()
 
@@ -228,10 +229,26 @@ class Collector(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self.functions.append(node.name)
+        self._literal_collections.append({})
         self.generic_visit(node)
+        self._literal_collections.pop()
         self.functions.pop()
 
     visit_AsyncFunctionDef = visit_FunctionDef
+
+    def _joined_collection_texts(self, node: ast.AST) -> list[str]:
+        if not (
+            isinstance(node, ast.Call)
+            and _call_name(node.func) == "join"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+        ):
+            return []
+        name = node.args[0].id
+        for scope in reversed(self._literal_collections):
+            if name in scope:
+                return list(scope[name])
+        return []
 
     def _add(
         self,
@@ -278,7 +295,8 @@ class Collector(ast.NodeVisitor):
             kind = "B. Tooltip" if name in TOOLTIP_METHODS else (
                 "C. Status bar message" if name in STATUS_METHODS else "A. UI label / button / menu"
             )
-            for message in _texts(display):
+            messages = _texts(display) or self._joined_collection_texts(display)
+            for message in messages:
                 self._add(node, message, kind, True, True, name)
         elif owner == "QMessageBox" and name in MESSAGEBOX_METHODS:
             title = _text(node.args[1]) if len(node.args) > 1 else None
@@ -309,6 +327,16 @@ class Collector(ast.NodeVisitor):
                     True,
                     f"presentation helper {name}",
                 )
+        elif name == "_emit_error_event" and len(node.args) > 1:
+            for message in _texts(node.args[1]):
+                self._add(
+                    node,
+                    message,
+                    "F. User-facing error",
+                    True,
+                    True,
+                    "structured SMU error presentation",
+                )
         elif name in USER_PRESENTATION_HELPERS and node.args:
             for message in _texts(node.args[0]):
                 self._add(
@@ -325,6 +353,12 @@ class Collector(ast.NodeVisitor):
             and isinstance(node.func, ast.Attribute)
         ):
             collection = _qualified_name(node.func.value).casefold()
+            if isinstance(node.func.value, ast.Name):
+                values = _texts(node.args[0]) if node.args else []
+                for scope in reversed(self._literal_collections):
+                    if node.func.value.id in scope:
+                        scope[node.func.value.id].extend(values)
+                        break
             if collection.rsplit(".", 1)[-1] in {"errors", "warnings", "review", "messages"}:
                 for message in (_texts(node.args[0]) if node.args else []):
                     self._add(
@@ -374,6 +408,8 @@ class Collector(ast.NodeVisitor):
             name = target.id if isinstance(target, ast.Name) else (
                 target.attr if isinstance(target, ast.Attribute) else ""
             )
+            if isinstance(target, ast.Name) and isinstance(node.value, (ast.List, ast.Tuple)):
+                self._literal_collections[-1][target.id] = _texts(node.value)
             if INDIRECT_PRESENTATION_FIELDS.search(name):
                 for message in _texts(node.value):
                     self._add(
@@ -445,9 +481,10 @@ def render(entries: list[Entry]) -> str:
         "",
         "## Scope and method",
         "",
-        "The scan covers every repository `*.py` file (including tests and the bundled SDK) and classifies visible Qt constructor/setter text, tooltips, status messages, QMessageBox calls, user-facing signal payloads, logger calls, `print`, and raised exception literals. The requested keyword audit (`錯誤`, `失敗`, `警告`, `無法`, `逾時`, `未連接`, `timeout`, `failed`, `error`, `warning`) is also represented where those literals occur in these call sites. Dynamic strings whose value is assembled outside the call are noted by the absence of a literal row and require call-path review during migration.",
+        "The scan covers every repository `*.py` file (including tests and the bundled SDK) and classifies visible Qt constructor/setter text, tooltips, status messages, QMessageBox calls, user-facing signal payloads, logger calls, `print`, and raised exception literals. It follows common local list/tuple → `append()` → `join()` → tooltip flows, but it is not a complete Python data-flow engine. The requested keyword audit (`錯誤`, `失敗`, `警告`, `無法`, `逾時`, `未連接`, `timeout`, `failed`, `error`, `warning`) is also represented where those literals occur in these call sites.",
         "",
         f"Inventory rows: **{len(entries)}**; user-facing rows: **{user_count}**; translation candidates: **{translation_count}**.",
+        "Static scanner counts and the supplemental manual indirect-UI audit are reported separately in `I18N_ERROR_SYSTEM_MIGRATION.md`; a zero static count alone is not proof that every dynamic UI path is translated.",
         "",
         "Error-code values below are migration candidates, not registry definitions. Final codes are curated by failure condition so multiple call sites can share one stable code.",
         "",

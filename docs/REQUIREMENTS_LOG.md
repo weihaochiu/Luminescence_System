@@ -23,6 +23,16 @@
 - 測試與驗證：新增 Error action/mapping、MainWindow runtime i18n、inventory scanner、diagnostics redaction 與 Recipe default regressions；完整命令與結果記錄於 `I18N_ERROR_SYSTEM_MIGRATION.md` 及本次 Git 報告。
 - 取代或關聯需求：補強 `I18N-ERROR-001`，不取代既有 SMU／Relay／Emergency／close safety requirements。
 
+### I18N-ERROR-003－SMU safety fault 實體 identity 綁定
+
+- 狀態：已完成（2026-08-25）。
+- P0 原因：舊版只保存 OUTPUT UNKNOWN boolean；A disconnect 後，任何新 driver 都可能繼承 latch，導致 B 的 OUTPUT OFF readback 錯誤清除 A 的 fault。
+- 驗收：第一次 fault 保存 immutable VISA/serial/manufacturer/model/IDN；serial 為強 identity；同 resource／不同 serial 拒絕，同 serial/model／新 resource 可受控復原；identity 跨 unbind 保留且不可覆寫；所有 normal/auto/reconnect/bind/recovery path fail closed。
+- 復原成功條件：相同實體 SMU、authoritative OUTPUT OFF、Relay routing OFF、White Light OFF 全部驗證成功後，才清除 identity、UNKNOWN/fault latch 並回到 IDLE/READY。
+- Error boundary：SMU-203/205 context 優先使用 fault target；OUTPUT OFF unconfirmed、unexpected output、compliance、generic failure 改由 canonical `SMUErrorKind` 決定 code，不解析翻譯文字。
+- Diagnostics/i18n：補強 JSON credential、access/refresh token、Authorization schemes、URL query redaction；AE metering list-joined tooltip 完成雙語並納入 scanner regression。
+- Persistence assessment：unresolved fault 尚不跨 process restart；現行沒有 atomic hardware-fault journal，本次保留為明確 remaining risk，不以非原子 QSettings 草率擴張。
+
 註：版本摘要中的「Recipe 停用／暫緩」只描述當時版本，現行狀態一律以 FLOW-ELM-001 與 V1.8.2 為準。
 
 ## Current superseding requirement — HDR removal

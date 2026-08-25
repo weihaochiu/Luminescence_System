@@ -6,6 +6,7 @@ import unittest
 
 from PySide6.QtCore import Qt
 
+from gui.smu_base import SMUDevice
 from gui.smu_control import (
     PolarityState,
     SMUControlManager,
@@ -18,6 +19,14 @@ from gui.polarity_settings import PolarityMeasurementSettings
 
 class SequenceSMU:
     def __init__(self, events: list[object]) -> None:
+        self.device = SMUDevice(
+            "USB0::SEQUENCE::INSTR",
+            manufacturer="Keysight Technologies",
+            model="B2901B",
+            serial_number="SEQUENCE-SERIAL",
+            idn="Keysight Technologies,B2901B,SEQUENCE-SERIAL,1.0",
+            supported=True,
+        )
         self.events = events
         self.output = False
         self.jsc_current_a = -0.002

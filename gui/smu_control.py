@@ -15,7 +15,7 @@ from PySide6.QtCore import QObject, Signal
 
 from core.i18n import tr
 
-from .smu_base import SMUDriver
+from .smu_base import SMUDevice, SMUDriver, SMUFaultIdentity
 from .polarity_measurement import (
     PolarityMeasurementError,
     PolarityMeasurementService,
@@ -50,6 +50,21 @@ class SMUOutputState(str, Enum):
     OFF = "OFF"
     ON = "ON"
     UNKNOWN = "UNKNOWN"
+
+
+class SMUErrorKind(str, Enum):
+    """Canonical user-facing SMU failure conditions, independent of prose."""
+
+    OUTPUT_OFF_UNCONFIRMED = "output_off_unconfirmed"
+    UNEXPECTED_OUTPUT = "unexpected_output"
+    COMPLIANCE_ACTIVE = "compliance_active"
+    OPERATION_FAILED = "operation_failed"
+
+
+@dataclass(frozen=True)
+class SMUErrorEvent:
+    kind: SMUErrorKind
+    message: str
 
 
 class PolarityState(str, Enum):
@@ -190,6 +205,7 @@ class SMUControlManager(QObject):
     command_applied = Signal(str, float, float, float, int)
     readback_ready = Signal(object)
     error_occurred = Signal(str)
+    error_event = Signal(object)
 
     def __init__(
         self,
@@ -207,6 +223,7 @@ class SMUControlManager(QObject):
         self._output_state = SMUOutputState.UNKNOWN
         self._output_confirmed_off = False
         self._output_unknown_latched = False
+        self._fault_identity: SMUFaultIdentity | None = None
         self._ever_output_enabled = False
         self._fault_reason = ""
         self._last_shutdown_ok: bool | None = None
@@ -233,6 +250,8 @@ class SMUControlManager(QObject):
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="smu-io")
         self._pending: set[Future[Any]] = set()
         self._safe_off_pending = False
+        self._compliance_active_reported = False
+        self._unexpected_output_reported = False
 
     @property
     def ownership(self) -> SMUOwnership:
@@ -263,6 +282,11 @@ class SMUControlManager(QObject):
     def fault_reason(self) -> str:
         with self._lock:
             return self._fault_reason
+
+    @property
+    def fault_identity(self) -> SMUFaultIdentity | None:
+        with self._lock:
+            return self._fault_identity
 
     @property
     def requires_close_output_confirmation(self) -> bool:
@@ -375,6 +399,15 @@ class SMUControlManager(QObject):
             self._recovery_routing_off = routing_off
             self._recovery_white_light_off = white_light_off
 
+    def device_matches_fault(self, device: SMUDevice) -> bool:
+        """Return whether ``device`` is the physical target of the fault latch."""
+
+        with self._lock:
+            identity = self._fault_identity
+        return bool(
+            identity is not None and identity.matches_device(device)
+        )
+
     def bind_driver(
         self,
         driver: SMUDriver | None,
@@ -384,19 +417,44 @@ class SMUControlManager(QObject):
         with self._lock:
             previous_driver = self._driver
             existing_unknown_latch = self._output_unknown_latched
+            existing_fault_latch = self._fault_latched
             existing_external_fault = self._external_interlock_fault
             existing_fault_reason = self._fault_reason
-            reconnecting_unknown = bool(
+            existing_fault_identity = self._fault_identity
+            previous_identity = (
+                SMUFaultIdentity.from_device(previous_driver.device)
+                if previous_driver is not None
+                else None
+            )
+            incoming_identity = (
+                SMUFaultIdentity.from_device(driver.device)
+                if driver is not None
+                else None
+            )
+            unresolved_fault = bool(existing_fault_latch or existing_unknown_latch)
+            if driver is not None and unresolved_fault:
+                if (
+                    existing_fault_identity is None
+                    or incoming_identity is None
+                    or not existing_fault_identity.matches(incoming_identity)
+                ):
+                    raise SMUInterlockError(
+                        "Cannot bind a different physical SMU while a safety fault is unresolved"
+                    )
+            reconnecting_fault = bool(
                 driver is not None
                 and previous_driver is None
-                and existing_unknown_latch
+                and unresolved_fault
+                and existing_fault_identity is not None
+                and incoming_identity is not None
+                and existing_fault_identity.matches(incoming_identity)
             )
             lost_unconfirmed_output = bool(
                 driver is None
                 and previous_driver is not None
                 and self._output_state is not SMUOutputState.OFF
             )
-            if not force and not reconnecting_unknown and (
+            if not force and not reconnecting_fault and (
                 self._ownership is not SMUOwnership.IDLE
                 or self._output_enabled
                 or self._pending
@@ -412,11 +470,15 @@ class SMUControlManager(QObject):
             self._output_confirmed_off = bool(driver is not None and output_confirmed_off)
             keep_fault_latched = bool(
                 lost_unconfirmed_output
-                or (driver is not None and existing_unknown_latch)
+                or existing_fault_latch
+                or existing_unknown_latch
             )
+            keep_unknown_latched = bool(lost_unconfirmed_output or existing_unknown_latch)
+            if keep_fault_latched and existing_fault_identity is None:
+                existing_fault_identity = previous_identity
             self._output_state = (
                 SMUOutputState.UNKNOWN
-                if keep_fault_latched
+                if keep_unknown_latched
                 else (
                     SMUOutputState.OFF
                     if self._output_confirmed_off
@@ -439,7 +501,10 @@ class SMUControlManager(QObject):
             self._external_interlock_fault = bool(
                 keep_fault_latched and existing_external_fault
             )
-            self._output_unknown_latched = keep_fault_latched
+            self._output_unknown_latched = keep_unknown_latched
+            self._fault_identity = (
+                existing_fault_identity if keep_fault_latched else None
+            )
             self._fault_reason = (
                 "SMU communication was lost before OUTPUT OFF could be confirmed"
                 if lost_unconfirmed_output
@@ -455,6 +520,8 @@ class SMUControlManager(QObject):
             )
             if driver is not None and not keep_fault_latched:
                 self._ever_output_enabled = False
+                self._compliance_active_reported = False
+                self._unexpected_output_reported = False
             ownership = self._ownership
             operation = self._operation_state
         self.output_changed.emit(False)
@@ -894,7 +961,10 @@ class SMUControlManager(QObject):
                     "UNAVAILABLE",
                     "driver is not connected",
                 )
-                self.error_occurred.emit(tr("smu.error_not_connected"))
+                self._emit_error_event(
+                    SMUErrorKind.OPERATION_FAILED,
+                    tr("smu.error_not_connected"),
+                )
                 return False
             if self._safe_off_pending:
                 self._log_output_off_diagnostics(
@@ -961,8 +1031,18 @@ class SMUControlManager(QObject):
             driver = self._driver
             routing_off = self._recovery_routing_off
             white_light_off = self._recovery_white_light_off
+            fault_identity = self._fault_identity
         if driver is None or routing_off is None or white_light_off is None:
             LOG.error("SMU_RECOVERY blocked: device or relay safety verifier unavailable")
+            return False
+        current_identity = SMUFaultIdentity.from_device(driver.device)
+        if fault_identity is None or not fault_identity.matches(current_identity):
+            LOG.critical(
+                "SMU_RECOVERY blocked: connected physical identity does not match fault target "
+                "fault=%s connected=%s",
+                fault_identity,
+                current_identity,
+            )
             return False
         try:
             with self._io_lock:
@@ -1012,6 +1092,7 @@ class SMUControlManager(QObject):
             self._external_interlock_fault = False
             self._fault_latched = False
             self._fault_reason = ""
+            self._fault_identity = None
             self._emergency_latch.clear()
             self._recipe_cancel_latch.clear()
             self._manual_cancel_latch.clear()
@@ -1054,7 +1135,10 @@ class SMUControlManager(QObject):
 
         with self._lock:
             if self._ownership is not SMUOwnership.RECIPE:
-                self.error_occurred.emit(tr("smu.error_recipe_not_owner"))
+                self._emit_error_event(
+                    SMUErrorKind.OPERATION_FAILED,
+                    tr("smu.error_recipe_not_owner"),
+                )
                 return False
             if self._pending:
                 return False
@@ -1158,15 +1242,12 @@ class SMUControlManager(QObject):
                 "OUTPUT OFF not confirmed (observed "
                 + ("UNKNOWN" if observed is None else "ON") + ")"
             )
+        if failures:
+            self._manual_cancel_latch.set()
+            self._recipe_cancel_latch.set()
         with self._lock:
             if failures:
-                self._output_confirmed_off = False
-                self._output_state = SMUOutputState.UNKNOWN
-                self._output_unknown_latched = True
-                self._fault_latched = True
-                self._fault_reason = "; ".join(failures)
-                self._ownership = SMUOwnership.FAULT
-                self._operation_state = SMUOperationState.FAULT
+                self._latch_output_unknown_locked("; ".join(failures))
             else:
                 self._output_enabled = False
                 self._output_confirmed_off = True
@@ -1175,7 +1256,9 @@ class SMUControlManager(QObject):
         if failures:
             self.output_state_changed.emit(SMUOutputState.UNKNOWN.value)
             self.operation_state_changed.emit(SMUOperationState.FAULT.value)
-            raise SMUInterlockError("Recipe OUTPUT OFF failed: " + "; ".join(failures))
+            message = "Recipe OUTPUT OFF failed: " + "; ".join(failures)
+            self._emit_error_event(SMUErrorKind.OUTPUT_OFF_UNCONFIRMED, message)
+            raise SMUInterlockError(message)
         LOG.info("RECIPE_SMU OUTPUT OFF verified reason=%s", reason)
         self.output_changed.emit(False)
         self.output_state_changed.emit(SMUOutputState.OFF.value)
@@ -1198,7 +1281,9 @@ class SMUControlManager(QObject):
             current = float(driver.measure_current())
             compliance = driver.query_compliance_tripped(mode)
         if compliance:
-            raise SMUInterlockError("SMU compliance tripped during EL Matrix capture")
+            message = tr("smu.error_compliance_detected")
+            self._emit_error_event(SMUErrorKind.COMPLIANCE_ACTIVE, message)
+            raise SMUInterlockError(message)
         return SMUReadback(voltage, current, voltage * current, True, compliance)
 
     def recipe_polarity_measurement(
@@ -1332,14 +1417,15 @@ class SMUControlManager(QObject):
 
         with self._lock:
             if failures:
-                self._output_enabled = False if smu_off_confirmed else self._output_enabled
-                self._output_confirmed_off = smu_off_confirmed
-                if smu_off_confirmed:
+                if not smu_off_confirmed:
+                    self._latch_output_unknown_locked("; ".join(failures))
+                else:
+                    if self._fault_identity is None and driver is not None:
+                        self._fault_identity = SMUFaultIdentity.from_device(driver.device)
+                    self._output_enabled = False
+                    self._output_confirmed_off = True
                     if not self._output_unknown_latched:
                         self._output_state = SMUOutputState.OFF
-                else:
-                    self._output_state = SMUOutputState.UNKNOWN
-                    self._output_unknown_latched = True
                 self._last_shutdown_ok = False
                 self._fault_latched = True
                 self._fault_reason = "; ".join(failures)
@@ -1414,10 +1500,13 @@ class SMUControlManager(QObject):
             self.output_confirmation_changed.emit(smu_off_confirmed)
             self.ownership_changed.emit(SMUOwnership.FAULT.value)
             self.operation_state_changed.emit(SMUOperationState.FAULT.value)
-            self.error_occurred.emit(
+            self._emit_error_event(
+                SMUErrorKind.OPERATION_FAILED
+                if smu_off_confirmed
+                else SMUErrorKind.OUTPUT_OFF_UNCONFIRMED,
                 tr("smu.error_routing_recovery_incomplete")
                 if smu_off_confirmed
-                else tr("smu.error_output_off_unconfirmed")
+                else tr("smu.error_output_off_unconfirmed"),
             )
             if routing_clear is not None:
                 self.manual_channel_changed.emit("FAULT")
@@ -1446,15 +1535,8 @@ class SMUControlManager(QObject):
         self._recipe_cancel_latch.set()
         self._manual_cancel_latch.set()
         with self._lock:
-            self._manual_generation += 1
             self._external_interlock_fault = True
-            self._output_unknown_latched = True
-            self._output_state = SMUOutputState.UNKNOWN
-            self._output_confirmed_off = False
-            self._fault_latched = True
-            self._fault_reason = str(reason)
-            self._ownership = SMUOwnership.FAULT
-            self._operation_state = SMUOperationState.FAULT
+            self._latch_output_unknown_locked(reason)
             has_driver = self._driver is not None
             busy = bool(self._pending)
         LOG.critical("SMU_EXTERNAL_INTERLOCK latched reason=%s", reason)
@@ -1462,7 +1544,7 @@ class SMUControlManager(QObject):
         self.output_confirmation_changed.emit(False)
         self.ownership_changed.emit(SMUOwnership.FAULT.value)
         self.operation_state_changed.emit(SMUOperationState.FAULT.value)
-        self.error_occurred.emit(reason)
+        self._emit_error_event(SMUErrorKind.OPERATION_FAILED, reason)
         if not has_driver or busy:
             return True
         return self._submit(
@@ -1578,6 +1660,17 @@ class SMUControlManager(QObject):
                     compliance_tripped = driver.query_compliance_tripped(mode)
                     if compliance_tripped:
                         LOG.warning("MANUAL_SMU COMPLIANCE_ACTIVE mode=%s", mode)
+                        with self._lock:
+                            report_compliance = not self._compliance_active_reported
+                            self._compliance_active_reported = True
+                        if report_compliance:
+                            self._emit_error_event(
+                                SMUErrorKind.COMPLIANCE_ACTIVE,
+                                tr("smu.error_compliance_detected"),
+                            )
+                    else:
+                        with self._lock:
+                            self._compliance_active_reported = False
                     LOG.debug(
                         "SMU_READBACK output=ON owner=MANUAL mode=MEASURE"
                     )
@@ -1595,8 +1688,19 @@ class SMUControlManager(QObject):
                             ownership.value,
                             operation_state.value,
                         )
+                        with self._lock:
+                            report_unexpected = not self._unexpected_output_reported
+                            self._unexpected_output_reported = True
+                        if report_unexpected:
+                            self._emit_error_event(
+                                SMUErrorKind.UNEXPECTED_OUTPUT,
+                                tr("smu.error_unexpected_output_detected"),
+                            )
                     else:
                         LOG.debug("SMU_READBACK output=UNKNOWN mode=OUTPUT_ONLY")
+                    if output_enabled is not True:
+                        with self._lock:
+                            self._unexpected_output_reported = False
                 reading = SMUReadback(
                     voltage_v=voltage,
                     current_a=current,
@@ -1695,21 +1799,39 @@ class SMUControlManager(QObject):
         self._manual_cancel_latch.set()
         self._recipe_cancel_latch.set()
         with self._lock:
-            self._manual_generation += 1
-            self._output_state = SMUOutputState.UNKNOWN
-            self._output_confirmed_off = False
-            self._output_unknown_latched = True
-            self._fault_latched = True
-            self._fault_reason = str(reason)
-            self._ownership = SMUOwnership.FAULT
-            self._operation_state = SMUOperationState.FAULT
+            self._latch_output_unknown_locked(reason)
         LOG.critical("SMU_OUTPUT_UNKNOWN latched reason=%s", reason)
         self.output_state_changed.emit(SMUOutputState.UNKNOWN.value)
         self.output_confirmation_changed.emit(False)
         self.ownership_changed.emit(SMUOwnership.FAULT.value)
         self.operation_state_changed.emit(SMUOperationState.FAULT.value)
         self.manual_channel_changed.emit("FAULT")
-        self.error_occurred.emit(str(reason))
+        self._emit_error_event(SMUErrorKind.OUTPUT_OFF_UNCONFIRMED, str(reason))
+
+    def _latch_output_unknown_locked(
+        self,
+        reason: str,
+        identity: SMUFaultIdentity | None = None,
+    ) -> None:
+        """Mutate the fail-closed state without ever replacing its first identity."""
+
+        if self._fault_identity is None:
+            if identity is None and self._driver is not None:
+                identity = SMUFaultIdentity.from_device(self._driver.device)
+            self._fault_identity = identity
+        self._manual_generation += 1
+        self._output_state = SMUOutputState.UNKNOWN
+        self._output_confirmed_off = False
+        self._output_unknown_latched = True
+        self._fault_latched = True
+        self._fault_reason = str(reason)
+        self._ownership = SMUOwnership.FAULT
+        self._operation_state = SMUOperationState.FAULT
+
+    def _emit_error_event(self, kind: SMUErrorKind, message: str) -> None:
+        event = SMUErrorEvent(kind=kind, message=str(message))
+        self.error_event.emit(event)
+        self.error_occurred.emit(event.message)
 
     def _required_driver(self) -> SMUDriver:
         if self._driver is None:
@@ -1935,7 +2057,10 @@ class SMUControlManager(QObject):
                 if cleanup_owner is not None:
                     self.safe_shutdown(cleanup_owner, reason="failed output operation")
                 if report_errors and not isinstance(exc, _SMUEmergencyAbort):
-                    self.error_occurred.emit(str(exc))
+                    self._emit_error_event(
+                        SMUErrorKind.OPERATION_FAILED,
+                        str(exc),
+                    )
             finally:
                 with self._lock:
                     self._pending.discard(completed)

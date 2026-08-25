@@ -605,6 +605,9 @@ class MainWindowUIMixin:
         self._update_white_light_control()
         self._update_measurement_controls()
         self._update_live_view_roi_controls()
+        self._refresh_live_view_ae_metering_status(
+            self._latest_effective_dn_status
+        )
 
         metrics = self.main_toolbar.fontMetrics()
         for action in self.main_toolbar.actions():
@@ -705,7 +708,7 @@ class MainWindowUIMixin:
         self.smu_manager.disconnected.connect(self.on_smu_disconnected)
         self.smu_manager.disconnected.connect(self._update_measurement_controls)
         self.smu_manager.error_occurred.connect(self.show_smu_error)
-        self.smu_manager.control.error_occurred.connect(self.show_smu_error)
+        self.smu_manager.control.error_event.connect(self.show_smu_error_event)
         self.instrument_state_manager.state_changed.connect(self.update_smu_ui_state)
         self.smu_manager.control.manual_polarity_changed.connect(
             self.manual_smu_panel.update_polarity

@@ -80,6 +80,21 @@ class ErrorDialogTests(unittest.TestCase):
         dialog.copy_diagnostics()
         self.assertEqual(expected, QApplication.clipboard().text())
 
+    def test_copy_diagnostics_never_copies_credentials(self) -> None:
+        event = ErrorReporter().report(
+            "SMU-201",
+            context={"command": "Authorization: Basic dXNlcjpwYXNz"},
+            exception=RuntimeError('"access_token":"clipboard-secret"'),
+            present=False,
+        )
+        dialog = ErrorDialog(event)
+        self.addCleanup(dialog.close)
+        dialog.copy_diagnostics()
+        copied = QApplication.clipboard().text()
+        self.assertNotIn("dXNlcjpwYXNz", copied)
+        self.assertNotIn("clipboard-secret", copied)
+        self.assertIn("[REDACTED]", copied)
+
     def test_view_details_deep_link_callback_receives_code(self) -> None:
         opened: list[str] = []
         event = ErrorReporter().report("CAM-203", present=False)

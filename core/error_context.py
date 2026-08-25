@@ -13,15 +13,19 @@ MAX_TEXT_LENGTH = 2_000
 MAX_TRACEBACK_LENGTH = 12_000
 SENSITIVE_FRAGMENTS = (
     "password", "passwd", "secret", "token", "credential", "api_key",
-    "apikey", "authorization",
+    "api-key", "apikey", "authorization",
 )
 REDACTED = "[REDACTED]"
 _AUTHORIZATION_RE = re.compile(
-    r"(?i)(\bauthorization\b\s*[:=]\s*)(?:bearer\s+)?[^\s,;&]+"
+    r"(?i)(\bauthorization\b\s*[:=]\s*)"
+    r"(?:(?:bearer|basic|token)\s+)?"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;&}\]]+)"
 )
 _SECRET_VALUE_RE = re.compile(
-    r"(?i)(\b(?:password|passwd|token|secret|api[_-]?key|apikey|credential)\b"
-    r"\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
+    r"(?i)(?<![A-Za-z0-9_])((?:[\"']?)(?:access[_-]?token|refresh[_-]?token|"
+    r"password|passwd|token|"
+    r"secret|api[_-]?key|apikey|credential)(?:[\"']?)\s*[:=]\s*)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;&}\]]+)"
 )
 _BEARER_RE = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+")
 

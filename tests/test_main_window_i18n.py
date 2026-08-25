@@ -112,6 +112,31 @@ class MainWindowI18nTests(unittest.TestCase):
         panel.set_smu_disconnected(error=False)
         self.assertEqual("● Disconnected", panel.smu_state.text())
 
+    def test_ae_metering_tooltip_labels_retranslate_but_values_remain_canonical(self) -> None:
+        window = self._window(Language.ZH_TW)
+        status = {
+            "AutoExposureROIRequested": (1, 2, 30, 40),
+            "AutoExposureROIReadback": (1, 2, 30, 40),
+            "AutoExposureROIMode": "CustomROI",
+            "AutoExposureROIVerified": True,
+            "AutoExposureROIVerificationStatus": "Verified",
+            "AutoExposureROIError": "SDK_CODE_7",
+        }
+        window._latest_effective_dn_status = dict(status)
+        window._refresh_live_view_ae_metering_status(status)
+        zh_tooltip = window.live_view_ae_metering_value.toolTip()
+        self.assertIn("要求值", zh_tooltip)
+        self.assertIn("(1, 2, 30, 40)", zh_tooltip)
+        self.assertIn("SDK_CODE_7", zh_tooltip)
+
+        set_language(Language.EN_US, persist=False)
+        self.app.processEvents()
+        en_tooltip = window.live_view_ae_metering_value.toolTip()
+        self.assertIn("Requested", en_tooltip)
+        self.assertIn("Readback", en_tooltip)
+        self.assertIn("(1, 2, 30, 40)", en_tooltip)
+        self.assertIn("SDK_CODE_7", en_tooltip)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,9 +5,10 @@
 
 ## Scope and method
 
-The scan covers every repository `*.py` file (including tests and the bundled SDK) and classifies visible Qt constructor/setter text, tooltips, status messages, QMessageBox calls, user-facing signal payloads, logger calls, `print`, and raised exception literals. The requested keyword audit (`錯誤`, `失敗`, `警告`, `無法`, `逾時`, `未連接`, `timeout`, `failed`, `error`, `warning`) is also represented where those literals occur in these call sites. Dynamic strings whose value is assembled outside the call are noted by the absence of a literal row and require call-path review during migration.
+The scan covers every repository `*.py` file (including tests and the bundled SDK) and classifies visible Qt constructor/setter text, tooltips, status messages, QMessageBox calls, user-facing signal payloads, logger calls, `print`, and raised exception literals. It follows common local list/tuple → `append()` → `join()` → tooltip flows, but it is not a complete Python data-flow engine. The requested keyword audit (`錯誤`, `失敗`, `警告`, `無法`, `逾時`, `未連接`, `timeout`, `failed`, `error`, `warning`) is also represented where those literals occur in these call sites.
 
-Inventory rows: **546**; user-facing rows: **118**; translation candidates: **0**.
+Inventory rows: **548**; user-facing rows: **119**; translation candidates: **0**.
+Static scanner counts and the supplemental manual indirect-UI audit are reported separately in `I18N_ERROR_SYSTEM_MIGRATION.md`; a zero static count alone is not proof that every dynamic UI path is translated.
 
 Error-code values below are migration candidates, not registry definitions. Final codes are curated by failure condition so multiple call sites can share one stable code.
 
@@ -165,31 +166,31 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/main_window_close.py | 25 / `closeEvent` | Manual SMU settings flush failed during application close | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
 | gui/main_window_close.py | 35 / `closeEvent` | FORCED_APPLICATION_EXIT_WITH_UNCONFIRMED_SMU_OUTPUT | H. Developer-only log | No | No | No | `—` | — | logger.critical |
 | gui/main_window_close.py | 39 / `closeEvent` | Forced-exit emergency cleanup failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/main_window_devices.py | 245 / `on_camera_opened` | {width} × {height} | A. UI label / button / menu | Yes | No | No | `—` | — | addItem; canonical technical/value display |
-| gui/main_window_devices.py | 334 / `on_camera_closed` | FPS — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 335 / `on_camera_closed` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 338 / `on_camera_closed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 339 / `on_camera_closed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 342 / `on_camera_closed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 343 / `on_camera_closed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 344 / `on_camera_closed` | Unknown | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 414 / `on_exposure_changed` | {exposure_us / 1000.0} ms | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 415 / `on_exposure_changed` | {gain} % | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 424 / `on_exposure_status_changed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 425 / `on_exposure_status_changed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 429 / `on_exposure_status_changed` | {exposure_us / 1000.0} ms | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 430 / `on_exposure_status_changed` | {gain} % | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 467 / `on_effective_dn_status_changed` | Unknown | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 467 / `on_effective_dn_status_changed` | {sensor_bits}-bit | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 482 / `on_effective_dn_status_changed` | Unknown | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment alignment_text; canonical technical/value display |
-| gui/main_window_devices.py | 484 / `on_effective_dn_status_changed` | {round(float(mean_dn))} /{int(maximum)} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 489 / `on_effective_dn_status_changed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 489 / `on_effective_dn_status_changed` | {float(percent)} % | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 492 / `on_effective_dn_status_changed` | {target_percent} % | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 494 / `on_effective_dn_status_changed` | {int(target_dn)} /{int(maximum)} | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment target_text; canonical technical/value display |
-| gui/main_window_devices.py | 519 / `on_frame_ready` | {image.width()} × {image.height()} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 638 / `_refresh_live_view_roi_dn` | EffectiveDNMax must be positive | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/main_window_devices.py | 868 / `on_temperature_availability_changed` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 297 / `on_camera_opened` | {width} × {height} | A. UI label / button / menu | Yes | No | No | `—` | — | addItem; canonical technical/value display |
+| gui/main_window_devices.py | 386 / `on_camera_closed` | FPS — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 387 / `on_camera_closed` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 390 / `on_camera_closed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 391 / `on_camera_closed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 394 / `on_camera_closed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 395 / `on_camera_closed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 396 / `on_camera_closed` | Unknown | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 466 / `on_exposure_changed` | {exposure_us / 1000.0} ms | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 467 / `on_exposure_changed` | {gain} % | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 476 / `on_exposure_status_changed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 477 / `on_exposure_status_changed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 481 / `on_exposure_status_changed` | {exposure_us / 1000.0} ms | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 482 / `on_exposure_status_changed` | {gain} % | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 519 / `on_effective_dn_status_changed` | Unknown | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 519 / `on_effective_dn_status_changed` | {sensor_bits}-bit | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 534 / `on_effective_dn_status_changed` | Unknown | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment alignment_text; canonical technical/value display |
+| gui/main_window_devices.py | 536 / `on_effective_dn_status_changed` | {round(float(mean_dn))} /{int(maximum)} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 541 / `on_effective_dn_status_changed` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 541 / `on_effective_dn_status_changed` | {float(percent)} % | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 544 / `on_effective_dn_status_changed` | {target_percent} % | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 546 / `on_effective_dn_status_changed` | {int(target_dn)} /{int(maximum)} | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment target_text; canonical technical/value display |
+| gui/main_window_devices.py | 571 / `on_frame_ready` | {image.width()} × {image.height()} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 690 / `_refresh_live_view_roi_dn` | EffectiveDNMax must be positive | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/main_window_devices.py | 920 / `on_temperature_availability_changed` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 | gui/main_window_measurement.py | 62 / `start_background_measurement` | Measurement is already running | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/main_window_measurement.py | 508 / `run` | Pixel CSV blocked: safe shutdown was not fully verified | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/main_window_ui.py | 252 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
@@ -206,7 +207,7 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/main_window_ui.py | 325 / `_build_central_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/main_window_ui.py | 329 / `_build_central_ui` | SDK | A. UI label / button / menu | Yes | No | No | `—` | — | addRow; canonical technical/value display |
 | gui/main_window_ui.py | 576 / `_retranslate_ui` | {self.last_image.width()} × {self.last_image.height()} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_ui.py | 658 / `_build_status_bar` | SMU — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 661 / `_build_status_bar` | SMU — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/manual_smu_settings.py | 147 / `save` | Manual SMU settings readback verification failed | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/manual_smu_settings.py | 151 / `save` | Manual SMU settings readback verification failed | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/manual_smu_settings.py | 160 / `_raise_for_status` | Manual SMU settings {operation} failed: {status_name} | I. Exception / traceback | No | No | No | `—` | — | raise |
@@ -385,109 +386,111 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/sidebar/registry.py | 147 / `apply` | SIDEBAR item hidden id=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | gui/sidebar/registry.py | 149 / `apply` | SIDEBAR layout applied | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | gui/sidebar/settings_dialog.py | 97 / `reset_defaults` | SIDEBAR settings reset to defaults | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_base.py | 53 / `set_voltage` | This SMU driver does not support voltage-source control | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_base.py | 56 / `set_current` | This SMU driver does not support current-source control | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_base.py | 59 / `set_output_enabled` | This SMU driver does not support output control | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_base.py | 100 / `set_measurement_nplc` | This SMU driver does not support measurement NPLC | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_base.py | 112 / `set_measurement_nplc_auto` | This SMU driver does not support automatic measurement NPLC | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_base.py | 123 / `temporary_measurement_nplc` | Cannot safely change NPLC because its current value is unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_base.py | 128 / `temporary_measurement_nplc` | Cannot safely change NPLC because its automatic-mode state is unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 106 / `set_confirmed_factor` | Polarity factor must be +1 or -1 | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 127 / `validate` | Voltage setpoint {requested} V exceeds safety range {limits.minimum_voltage_v} to {limits.maximum_voltage_v} V | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 132 / `validate` | Current compliance must be > 0 and <= {limits.maximum_current_compliance_a * 1000} mA | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 139 / `validate` | Current setpoint {requested * 1000} mA exceeds safety range {limits.minimum_current_a * 1000} to {limits.maximum_current_a * 1000} mA | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 145 / `validate` | Voltage compliance must be > 0 and <= {limits.maximum_voltage_compliance_v} V | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 151 / `validate` | SMU mode must be CV or CC | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 153 / `validate` | Setpoint × compliance ({estimated_power * 1000} mW) exceeds the {limits.maximum_power_w * 1000} mW safety limit | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 361 / `confirm_output_off_for_routing` | SMU_ROUTING blocked: authoritative OUTPUT state=%s | H. Developer-only log | No | No | No | `—` | — | logger.error |
-| gui/smu_control.py | 409 / `bind_driver` | Cannot replace SMU driver while output is owned | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 471 / `set_confirmed_polarity_factor` | Polarity cannot change while SMU is owned | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 473 / `set_confirmed_polarity_factor` | SMU_POLARITY confirmed factor=%+d | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 478 / `acquire` | Only MANUAL or RECIPE can acquire normal ownership | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 481 / `acquire` | No supported SMU is connected | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 486 / `acquire` | SMU is owned by {self._ownership.value}; {owner.value} is blocked | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 490 / `acquire` | SMU OUTPUT OFF has not been confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 499 / `acquire` | SMU_OWNERSHIP %s acquired | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 509 / `release` | Cannot release SMU ownership before OUTPUT OFF is confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 515 / `release` | SMU_OWNERSHIP %s released | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 528 / `request_manual_output` | No supported SMU is connected | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 531 / `request_manual_output` | SMU is owned by {self._ownership.value}; MANUAL is blocked | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 535 / `request_manual_output` | SMU OUTPUT OFF has not been confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 563 / `request_manual_output` | MANUAL_SMU PHYSICAL_REQUEST=%+.9g MODE=%s COMPLIANCE=%g | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 588 / `request_manual_output_sequence` | Device area must be greater than 0 cm² | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 597 / `request_manual_output_sequence` | Polarity Jsc current compliance exceeds the SMU safety limit: {polarity_current_compliance_a * 1000} mA > {limits.maximum_current_compliance_a * 1000} mA | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 603 / `request_manual_output_sequence` | Polarity Voc voltage compliance exceeds the SMU safety limit: {settings.voc_compliance_v} V > {limits.maximum_voltage_compliance_v} V | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 613 / `request_manual_output_sequence` | No supported SMU is connected | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 616 / `request_manual_output_sequence` | SMU is owned by {self._ownership.value}; MANUAL is blocked | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 620 / `request_manual_output_sequence` | SMU OUTPUT OFF has not been confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 636 / `request_manual_output_sequence` | MANUAL_SMU OUTPUT_ON_REQUEST channel=%s area_cm2=%g mode=%s requested=%+.9g compliance=%g generation=%d | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 660 / `operation` | SMU OUTPUT OFF must be authoritatively confirmed before Relay switching (observed {observed}) | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 676 / `operation` | Verified SMU routing relay does not match the selected channel | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 683 / `operation` | MANUAL_SMU ROUTING channel=%s mapped_relay=%d verified=true | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 692 / `verified_light_on` | SMU routing changed before White Light ON | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 731 / `operation` | MANUAL_SMU POLARITY JSC_A=%+.9g JSC_MA_CM2=%+.9g VOC_V=%+.9g result=%s factor=%s snapshot=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 751 / `operation` | SMU routing changed after polarity measurement | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 765 / `operation` | SMU routing changed before OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 772 / `operation` | SMU OUTPUT ON could not be confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 775 / `operation` | SMU routing changed after OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 797 / `operation` | Manual SMU sequence was cancelled immediately after OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 809 / `operation` | MANUAL_SMU OUTPUT_ON channel=%s relay=%d mode=%s requested=%+.9g physical=%+.9g compliance=%g factor=%+d | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 821 / `operation` | MANUAL_SMU OUTPUT_ON_CANCELLED generation=%d | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/smu_control.py | 850 / `operation` | MANUAL_SMU OUTPUT_ON_ABORT generation=%d | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/smu_control.py | 931 / `recover` | Safety recovery requires confirmed SMU OFF, routing all OFF, and White Light OFF | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 965 / `recover_safety_fault` | SMU_RECOVERY blocked: device or relay safety verifier unavailable | H. Developer-only log | No | No | No | `—` | — | logger.error |
-| gui/smu_control.py | 985 / `recover_safety_fault` | SMU_RECOVERY blocked: OUTPUT is %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
-| gui/smu_control.py | 994 / `recover_safety_fault` | SMU_RECOVERY routing OFF verification failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/smu_control.py | 999 / `recover_safety_fault` | SMU_RECOVERY White Light OFF verification failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/smu_control.py | 1001 / `recover_safety_fault` | SMU_RECOVERY blocked: routing_off=%s white_light_off=%s | H. Developer-only log | No | No | No | `—` | — | logger.error |
-| gui/smu_control.py | 1025 / `recover_safety_fault` | SMU_RECOVERY complete: OUTPUT OFF, routing OFF, White Light OFF | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/smu_control.py | 1042 / `prepare_recipe_start` | Manual SMU ownership must be safely closed first | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1043 / `prepare_recipe_start` | SMU_HANDOVER MANUAL -> RECIPE: confirming OUTPUT OFF | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 1048 / `prepare_recipe_start` | Manual SMU output could not be safely disabled | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1050 / `prepare_recipe_start` | SMU_HANDOVER -> RECIPE complete | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 1062 / `request_recipe_handover_to_manual` | SMU_HANDOVER RECIPE -> MANUAL requested; Recipe output blocked | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 1081 / `recipe_output` | Recipe does not own the SMU | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1084 / `recipe_output` | Recipe output is blocked by a handover request | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1114 / `recipe_output` | Recipe output ownership changed immediately after OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1118 / `recipe_output` | RECIPE_SMU DEVICE_REQUEST=%+.9g POLARITY_FACTOR=%+d PHYSICAL=%+.9g | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 1131 / `set_recipe_polarity_factor` | Recipe does not own the SMU | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1133 / `set_recipe_polarity_factor` | Polarity can change only while Recipe OUTPUT is confirmed OFF | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1146 / `recipe_output_off` | Recipe does not own the SMU | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1179 / `recipe_output_off` | RECIPE_SMU OUTPUT OFF verified reason=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 1190 / `recipe_readback` | Recipe does not own the SMU | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1196 / `recipe_readback` | Recipe formal image readback requires confirmed OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1201 / `recipe_readback` | SMU compliance tripped during EL Matrix capture | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1219 / `recipe_polarity_measurement` | Recipe does not own the SMU | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1221 / `recipe_polarity_measurement` | Recipe polarity requires confirmed OUTPUT OFF | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1288 / `safe_shutdown` | SMU_OUTPUT_OFF physical OFF recovered despite attempt diagnostics attempt=%d diagnostics=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/smu_control.py | 1302 / `safe_shutdown` | SMU_OUTPUT_OFF retrying after unconfirmed physical state reason=%s diagnostics=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/smu_control.py | 1329 / `safe_shutdown` | MANUAL_SMU STOP routing all OFF confirmed | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 1399 / `safe_shutdown` | SMU_FAULT shutdown failed reason=%s: %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
-| gui/smu_control.py | 1426 / `safe_shutdown` | SMU_SAFE_SHUTDOWN OUTPUT OFF confirmed reason=%s previous_owner=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 1460 / `request_external_interlock` | SMU_EXTERNAL_INTERLOCK latched reason=%s | H. Developer-only log | No | No | No | `—` | — | logger.critical |
-| gui/smu_control.py | 1497 / `request_emergency_off` | SMU_EMERGENCY safe: no SMU is connected | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 1503 / `request_emergency_off` | SMU_EMERGENCY latched; output blocked; OFF queued behind active VISA I/O | H. Developer-only log | No | No | No | `—` | — | logger.critical |
-| gui/smu_control.py | 1580 / `operation` | MANUAL_SMU COMPLIANCE_ACTIVE mode=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/smu_control.py | 1581 / `operation` | SMU_READBACK output=ON owner=MANUAL mode=MEASURE | H. Developer-only log | No | No | No | `—` | — | logger.debug |
-| gui/smu_control.py | 1590 / `operation` | SMU_READBACK output=OFF mode=OUTPUT_ONLY | H. Developer-only log | No | No | No | `—` | — | logger.debug |
-| gui/smu_control.py | 1592 / `operation` | SMU_UNEXPECTED_OUTPUT_ON detected during readback owner=%s operation=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/smu_control.py | 1599 / `operation` | SMU_READBACK output=UNKNOWN mode=OUTPUT_ONLY | H. Developer-only log | No | No | No | `—` | — | logger.debug |
-| gui/smu_control.py | 1642 / `operation` | SMU readback OUTPUT state is UNKNOWN | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1706 / `_latch_output_unknown` | SMU_OUTPUT_UNKNOWN latched reason=%s | H. Developer-only log | No | No | No | `—` | — | logger.critical |
-| gui/smu_control.py | 1716 / `_required_driver` | No supported SMU is connected | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1735 / `_ensure_normal_output_allowed_locked` | SMU Emergency OFF is latched; output is blocked | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1737 / `_ensure_normal_output_allowed_locked` | Previous SMU safety stop failed; run Emergency OFF or safe recovery | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1743 / `_raise_if_output_blocked` | SMU output cancelled by Emergency OFF | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1745 / `_raise_if_output_blocked` | SMU output cancelled by Recipe handover | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1747 / `_raise_if_output_blocked` | Manual SMU output was cancelled | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1759 / `_check_manual_generation` | Manual SMU sequence was cancelled | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1785 / `_measure_with_temporary_output` | SMU measurement OUTPUT ON could not be confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1798 / `_measure_with_temporary_output` | SMU measurement OUTPUT OFF could not be confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1828 / `_apply_output` | SMU OUTPUT ON could not be confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1859 / `_apply_output` | SMU ownership changed immediately after OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/smu_control.py | 1860 / `_apply_output` | %s_SMU OUTPUT=ON | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/smu_control.py | 1932 / `done` | %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/smu_control.py | 1934 / `done` | SMU operation failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/smu_base.py | 73 / `display_name` | {instrument} ({self.serial_number}) | A. UI label / button / menu | Yes | No | No | `—` | — | presentation helper display_name; canonical technical/value display |
+| gui/smu_base.py | 139 / `set_voltage` | This SMU driver does not support voltage-source control | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_base.py | 142 / `set_current` | This SMU driver does not support current-source control | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_base.py | 145 / `set_output_enabled` | This SMU driver does not support output control | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_base.py | 186 / `set_measurement_nplc` | This SMU driver does not support measurement NPLC | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_base.py | 198 / `set_measurement_nplc_auto` | This SMU driver does not support automatic measurement NPLC | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_base.py | 209 / `temporary_measurement_nplc` | Cannot safely change NPLC because its current value is unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_base.py | 214 / `temporary_measurement_nplc` | Cannot safely change NPLC because its automatic-mode state is unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 121 / `set_confirmed_factor` | Polarity factor must be +1 or -1 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 142 / `validate` | Voltage setpoint {requested} V exceeds safety range {limits.minimum_voltage_v} to {limits.maximum_voltage_v} V | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 147 / `validate` | Current compliance must be > 0 and <= {limits.maximum_current_compliance_a * 1000} mA | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 154 / `validate` | Current setpoint {requested * 1000} mA exceeds safety range {limits.minimum_current_a * 1000} to {limits.maximum_current_a * 1000} mA | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 160 / `validate` | Voltage compliance must be > 0 and <= {limits.maximum_voltage_compliance_v} V | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 166 / `validate` | SMU mode must be CV or CC | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 168 / `validate` | Setpoint × compliance ({estimated_power * 1000} mW) exceeds the {limits.maximum_power_w * 1000} mW safety limit | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 385 / `confirm_output_off_for_routing` | SMU_ROUTING blocked: authoritative OUTPUT state=%s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/smu_control.py | 441 / `bind_driver` | Cannot bind a different physical SMU while a safety fault is unresolved | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 467 / `bind_driver` | Cannot replace SMU driver while output is owned | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 538 / `set_confirmed_polarity_factor` | Polarity cannot change while SMU is owned | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 540 / `set_confirmed_polarity_factor` | SMU_POLARITY confirmed factor=%+d | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 545 / `acquire` | Only MANUAL or RECIPE can acquire normal ownership | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 548 / `acquire` | No supported SMU is connected | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 553 / `acquire` | SMU is owned by {self._ownership.value}; {owner.value} is blocked | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 557 / `acquire` | SMU OUTPUT OFF has not been confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 566 / `acquire` | SMU_OWNERSHIP %s acquired | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 576 / `release` | Cannot release SMU ownership before OUTPUT OFF is confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 582 / `release` | SMU_OWNERSHIP %s released | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 595 / `request_manual_output` | No supported SMU is connected | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 598 / `request_manual_output` | SMU is owned by {self._ownership.value}; MANUAL is blocked | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 602 / `request_manual_output` | SMU OUTPUT OFF has not been confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 630 / `request_manual_output` | MANUAL_SMU PHYSICAL_REQUEST=%+.9g MODE=%s COMPLIANCE=%g | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 655 / `request_manual_output_sequence` | Device area must be greater than 0 cm² | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 664 / `request_manual_output_sequence` | Polarity Jsc current compliance exceeds the SMU safety limit: {polarity_current_compliance_a * 1000} mA > {limits.maximum_current_compliance_a * 1000} mA | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 670 / `request_manual_output_sequence` | Polarity Voc voltage compliance exceeds the SMU safety limit: {settings.voc_compliance_v} V > {limits.maximum_voltage_compliance_v} V | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 680 / `request_manual_output_sequence` | No supported SMU is connected | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 683 / `request_manual_output_sequence` | SMU is owned by {self._ownership.value}; MANUAL is blocked | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 687 / `request_manual_output_sequence` | SMU OUTPUT OFF has not been confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 703 / `request_manual_output_sequence` | MANUAL_SMU OUTPUT_ON_REQUEST channel=%s area_cm2=%g mode=%s requested=%+.9g compliance=%g generation=%d | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 727 / `operation` | SMU OUTPUT OFF must be authoritatively confirmed before Relay switching (observed {observed}) | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 743 / `operation` | Verified SMU routing relay does not match the selected channel | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 750 / `operation` | MANUAL_SMU ROUTING channel=%s mapped_relay=%d verified=true | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 759 / `verified_light_on` | SMU routing changed before White Light ON | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 798 / `operation` | MANUAL_SMU POLARITY JSC_A=%+.9g JSC_MA_CM2=%+.9g VOC_V=%+.9g result=%s factor=%s snapshot=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 818 / `operation` | SMU routing changed after polarity measurement | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 832 / `operation` | SMU routing changed before OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 839 / `operation` | SMU OUTPUT ON could not be confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 842 / `operation` | SMU routing changed after OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 864 / `operation` | Manual SMU sequence was cancelled immediately after OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 876 / `operation` | MANUAL_SMU OUTPUT_ON channel=%s relay=%d mode=%s requested=%+.9g physical=%+.9g compliance=%g factor=%+d | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 888 / `operation` | MANUAL_SMU OUTPUT_ON_CANCELLED generation=%d | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/smu_control.py | 917 / `operation` | MANUAL_SMU OUTPUT_ON_ABORT generation=%d | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/smu_control.py | 1001 / `recover` | Safety recovery requires confirmed SMU OFF, routing all OFF, and White Light OFF | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1036 / `recover_safety_fault` | SMU_RECOVERY blocked: device or relay safety verifier unavailable | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/smu_control.py | 1040 / `recover_safety_fault` | SMU_RECOVERY blocked: connected physical identity does not match fault target fault=%s connected=%s | H. Developer-only log | No | No | No | `—` | — | logger.critical |
+| gui/smu_control.py | 1065 / `recover_safety_fault` | SMU_RECOVERY blocked: OUTPUT is %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/smu_control.py | 1074 / `recover_safety_fault` | SMU_RECOVERY routing OFF verification failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/smu_control.py | 1079 / `recover_safety_fault` | SMU_RECOVERY White Light OFF verification failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/smu_control.py | 1081 / `recover_safety_fault` | SMU_RECOVERY blocked: routing_off=%s white_light_off=%s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/smu_control.py | 1106 / `recover_safety_fault` | SMU_RECOVERY complete: OUTPUT OFF, routing OFF, White Light OFF | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/smu_control.py | 1123 / `prepare_recipe_start` | Manual SMU ownership must be safely closed first | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1124 / `prepare_recipe_start` | SMU_HANDOVER MANUAL -> RECIPE: confirming OUTPUT OFF | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 1129 / `prepare_recipe_start` | Manual SMU output could not be safely disabled | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1131 / `prepare_recipe_start` | SMU_HANDOVER -> RECIPE complete | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 1146 / `request_recipe_handover_to_manual` | SMU_HANDOVER RECIPE -> MANUAL requested; Recipe output blocked | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 1165 / `recipe_output` | Recipe does not own the SMU | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1168 / `recipe_output` | Recipe output is blocked by a handover request | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1198 / `recipe_output` | Recipe output ownership changed immediately after OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1202 / `recipe_output` | RECIPE_SMU DEVICE_REQUEST=%+.9g POLARITY_FACTOR=%+d PHYSICAL=%+.9g | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 1215 / `set_recipe_polarity_factor` | Recipe does not own the SMU | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1217 / `set_recipe_polarity_factor` | Polarity can change only while Recipe OUTPUT is confirmed OFF | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1230 / `recipe_output_off` | Recipe does not own the SMU | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1262 / `recipe_output_off` | RECIPE_SMU OUTPUT OFF verified reason=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 1273 / `recipe_readback` | Recipe does not own the SMU | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1279 / `recipe_readback` | Recipe formal image readback requires confirmed OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1304 / `recipe_polarity_measurement` | Recipe does not own the SMU | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1306 / `recipe_polarity_measurement` | Recipe polarity requires confirmed OUTPUT OFF | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1373 / `safe_shutdown` | SMU_OUTPUT_OFF physical OFF recovered despite attempt diagnostics attempt=%d diagnostics=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/smu_control.py | 1387 / `safe_shutdown` | SMU_OUTPUT_OFF retrying after unconfirmed physical state reason=%s diagnostics=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/smu_control.py | 1414 / `safe_shutdown` | MANUAL_SMU STOP routing all OFF confirmed | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 1485 / `safe_shutdown` | SMU_FAULT shutdown failed reason=%s: %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/smu_control.py | 1515 / `safe_shutdown` | SMU_SAFE_SHUTDOWN OUTPUT OFF confirmed reason=%s previous_owner=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 1542 / `request_external_interlock` | SMU_EXTERNAL_INTERLOCK latched reason=%s | H. Developer-only log | No | No | No | `—` | — | logger.critical |
+| gui/smu_control.py | 1579 / `request_emergency_off` | SMU_EMERGENCY safe: no SMU is connected | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 1585 / `request_emergency_off` | SMU_EMERGENCY latched; output blocked; OFF queued behind active VISA I/O | H. Developer-only log | No | No | No | `—` | — | logger.critical |
+| gui/smu_control.py | 1662 / `operation` | MANUAL_SMU COMPLIANCE_ACTIVE mode=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/smu_control.py | 1674 / `operation` | SMU_READBACK output=ON owner=MANUAL mode=MEASURE | H. Developer-only log | No | No | No | `—` | — | logger.debug |
+| gui/smu_control.py | 1683 / `operation` | SMU_READBACK output=OFF mode=OUTPUT_ONLY | H. Developer-only log | No | No | No | `—` | — | logger.debug |
+| gui/smu_control.py | 1685 / `operation` | SMU_UNEXPECTED_OUTPUT_ON detected during readback owner=%s operation=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/smu_control.py | 1700 / `operation` | SMU_READBACK output=UNKNOWN mode=OUTPUT_ONLY | H. Developer-only log | No | No | No | `—` | — | logger.debug |
+| gui/smu_control.py | 1746 / `operation` | SMU readback OUTPUT state is UNKNOWN | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1803 / `_latch_output_unknown` | SMU_OUTPUT_UNKNOWN latched reason=%s | H. Developer-only log | No | No | No | `—` | — | logger.critical |
+| gui/smu_control.py | 1838 / `_required_driver` | No supported SMU is connected | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1857 / `_ensure_normal_output_allowed_locked` | SMU Emergency OFF is latched; output is blocked | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1859 / `_ensure_normal_output_allowed_locked` | Previous SMU safety stop failed; run Emergency OFF or safe recovery | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1865 / `_raise_if_output_blocked` | SMU output cancelled by Emergency OFF | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1867 / `_raise_if_output_blocked` | SMU output cancelled by Recipe handover | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1869 / `_raise_if_output_blocked` | Manual SMU output was cancelled | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1881 / `_check_manual_generation` | Manual SMU sequence was cancelled | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1907 / `_measure_with_temporary_output` | SMU measurement OUTPUT ON could not be confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1920 / `_measure_with_temporary_output` | SMU measurement OUTPUT OFF could not be confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1950 / `_apply_output` | SMU OUTPUT ON could not be confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1981 / `_apply_output` | SMU ownership changed immediately after OUTPUT ON | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/smu_control.py | 1982 / `_apply_output` | %s_SMU OUTPUT=ON | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/smu_control.py | 2054 / `done` | %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/smu_control.py | 2056 / `done` | SMU operation failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
 | gui/smu_manual_panel.py | 108 / `__init__` | OFF | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/smu_manual_panel.py | 109 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/smu_manual_panel.py | 111 / `__init__` | — V | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
@@ -514,21 +517,21 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | relay_hardware_diagnostic.py | 27 / `main` | Diagnostic completed: USBRelay8 controller logical state verified. | H. Developer-only log | No | No | No | `—` | — | print |
 | relay_hardware_diagnostic.py | 28 / `main` | Confirm external 5 V Relay power separately; software cannot verify coil or COM-NO contacts. | H. Developer-only log | No | No | No | `—` | — | print |
 | scripts/generate_error_code_reference.py | 66 / `main` | Wrote {OUTPUT_PATH} | H. Developer-only log | No | No | No | `—` | — | print |
-| scripts/generate_user_message_inventory.py | 504 / `main` | Wrote {OUTPUT} with {len(entries)} rows | H. Developer-only log | No | No | No | `—` | — | print |
+| scripts/generate_user_message_inventory.py | 541 / `main` | Wrote {OUTPUT} with {len(entries)} rows | H. Developer-only log | No | No | No | `—` | — | print |
 | tests/qt_test_utils.py | 23 / `ensure_qapplication` | Qt tests require QApplication, but a non-GUI application already exists | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_camera_ae_roi.py | 38 / `put_AEAuxRect` | AEAuxRect write after Close | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_camera_ae_roi.py | 46 / `get_AEAuxRect` | AEAuxRect read after Close | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_camera_temperature.py | 218 / `test_temperature_formatting_and_unavailable_gui` | old | A. UI label / button / menu | No | No | No | `—` | — | QLabel; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_camera_temperature.py | 219 / `test_temperature_formatting_and_unavailable_gui` | old | A. UI label / button / menu | No | No | No | `—` | — | QLabel; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_close_safety.py | 149 / `fail_flush` | settings backend unavailable | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_el_matrix.py | 120 / `capture` | camera failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_el_matrix.py | 349 / `test_dialog_mode_switch_preserves_both_lists_and_compliance_values` | 0.9, 1.2 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_el_matrix.py | 388 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | 2, 4, 6 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_el_matrix.py | 406 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | nan | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_el_matrix.py | 412 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | inf | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_el_matrix.py | 418 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | 0.9, 1.1 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_el_matrix.py | 419 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | -inf | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_el_matrix.py | 1050 / `failed_shutdown` | safe shutdown verification failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_el_matrix.py | 121 / `capture` | camera failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_el_matrix.py | 358 / `test_dialog_mode_switch_preserves_both_lists_and_compliance_values` | 0.9, 1.2 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_el_matrix.py | 397 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | 2, 4, 6 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_el_matrix.py | 415 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | nan | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_el_matrix.py | 421 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | inf | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_el_matrix.py | 427 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | 0.9, 1.1 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_el_matrix.py | 428 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | -inf | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_el_matrix.py | 1059 / `failed_shutdown` | safe shutdown verification failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_emergency_manager.py | 48 / `safe_smu_output_channels_off` | routing relay failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_emergency_manager.py | 63 / `fail` | worker failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_error_center.py | 29 / `test_search_subsystem_and_severity_filters` | SMU-203 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
@@ -548,14 +551,14 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | tests/test_relay.py | 468 / `test_settings_round_trip_and_channel_conflict` | Fixture | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation assignment display_name; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_sidebar_settings.py | 31 / `signal_receiver_count` | Qt signal not found: {type(obj).__name__}.{signal_name} | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_autoconnect.py | 43 / `query` | unexpected query: {command} | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_smu_control.py | 69 / `configure_voltage_source` | configure failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_smu_control.py | 82 / `configure_current_source` | configure failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_smu_control.py | 132 / `query_output_enabled` | simulated VISA timeout | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_smu_control.py | 260 / `test_recipe_cleanup_and_exception_style_finally_leave_output_off` | simulated Recipe failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_smu_manual_sequence.py | 34 / `configure_voltage_source` | configuration failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_smu_manual_sequence.py | 39 / `configure_current_source` | configuration failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_smu_manual_sequence.py | 112 / `clear_channels` | routing clear failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_smu_manual_sequence.py | 234 / `fail_light` | relay failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_smu_control.py | 79 / `configure_voltage_source` | configure failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_smu_control.py | 92 / `configure_current_source` | configure failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_smu_control.py | 142 / `query_output_enabled` | simulated VISA timeout | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_smu_control.py | 270 / `test_recipe_cleanup_and_exception_style_finally_leave_output_off` | simulated Recipe failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_smu_manual_sequence.py | 43 / `configure_voltage_source` | configuration failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_smu_manual_sequence.py | 48 / `configure_current_source` | configuration failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_smu_manual_sequence.py | 121 / `clear_channels` | routing clear failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_smu_manual_sequence.py | 243 / `fail_light` | relay failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_safety.py | 18 / `write` | VISA failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_ui_structure.py | 141 / `test_busy_state_immediately_disables_manual_editing` | 手動命令執行中 | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field manual_lock_reason; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_ui_structure.py | 289 / `test_output_unknown_is_explicit_and_locks_every_manual_field` | ⚠ 無法確認 SMU 輸出狀態 請確認 SMU 前面板 OUTPUT 已關閉 | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field manual_lock_reason; test fixture/vendor SDK, not application UI; test fixture/assertion |

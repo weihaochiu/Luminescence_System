@@ -10,7 +10,9 @@
 
 錯誤依賴方向為 `hardware/workflow failure → GUI/controller boundary → ErrorReporter → structured log + bounded session history + presentation`。`resources/errors/error_registry.json` 只保存穩定 code、subsystem、severity、recoverability、translation key 與 actions；`core/error_context.py` 建立有界且可序列化的 diagnostics；`gui/dialogs/error_dialog.py` 與 `gui/error_center/` 負責 UI。硬體層不匯入 PySide dialog，Critical definitions 不得包含 Ignore／Continue。
 
-Registry action 不是裝飾性 metadata：Dialog 只有在 MainWindow/controller 提供該事件的真實 handler 時才顯示按鈕。沒有通用 Retry；Camera、Relay、SMU reconnect 各自 dispatch。SMU reconnect 必須使用明確選定的相同 resource，禁止跨設備替代，且 OUTPUT UNKNOWN／OFF 未確認 latch 不因 transport reconnect 清除；只有既有 safe-output-off readback 與 routing／white-light verification 成功後才解除。量測進行中不提供 reconnect。
+Registry action 不是裝飾性 metadata：Dialog 只有在 MainWindow/controller 提供該事件的真實 handler 時才顯示按鈕。沒有通用 Retry；Camera、Relay、SMU reconnect 各自 dispatch。Handler 回傳 True 只表示 request accepted／action started，不代表非同步硬體復原已成功。量測進行中不提供 reconnect。
+
+SMU safety faults are identity-bound. An OUTPUT UNKNOWN fault can only be recovered by the same physical SMU that generated the fault. `SMUFaultIdentity` 保存 VISA resource、serial、manufacturer、model 與完整 IDN；serial 是強 identity，並要求 manufacturer/model 相符。同 serial/model 在重新插拔後允許 VISA resource 改變；同 resource 但 serial 不同必須拒絕。serial 不可取得時，只接受相同 resource 與完整非空 IDN 的保守 fallback。fault identity 在第一次 UNKNOWN/fault latch 後不可由後續錯誤覆寫，跨 transport unbind/disconnect 保留，且 `bind_driver()`、connection manager、pending reconnect target、connected callback 與 `recover_safety_fault()` 都各自重新驗證。
 
 Runtime 語言切換由 `language_changed` 觸發集中 retranslation。所有 ComboBox 以 `QSignalBlocker` 保留 canonical `itemData()` 與 selection，retranslation 不送硬體命令、不改 Recipe／Settings／metadata。`InstrumentStateManager` 只發布 canonical state 派生的當前語言 snapshot，不保存長期翻譯狀態。
 
@@ -189,6 +191,10 @@ Emergency request 先設定 threading Event latch，再排入相同 single-worke
 Manual → Recipe 交接必須先完成 verified shutdown，釋放至 IDLE 後才允許 Recipe acquire。Recipe → Manual 交接先設 cancel latch 封鎖新 Recipe output、通知 worker cancel、關閉白光，再等待目前 I/O safe point 執行 verified shutdown；只有 `OUTPUT OFF` 明確確認後才回到可手動狀態。EL Matrix 的 Channel transition 使用 `recipe_output_off()` 保留 Recipe ownership，但仍要求 OUTPUT OFF readback 後才允許 routing break-before-make。
 
 一般 disconnect 只有在 hardware query 明確回傳 OFF、ownership 為 IDLE 且 control 無 pending I/O 時才允許；True 或 `None` 均 fail-closed。`safe_shutdown()` 的固定順序為 `:OUTP OFF` → `:OUTP? == False` → source 歸零，並以 `output_confirmed_off`／`last_shutdown_ok` 區分完整成功與失敗；query 為 ON、UNKNOWN、exception 或任何 `safe_stop()` failure 都不得宣告安全，必須進入 FAULT。
+
+Identity-bound recovery 的唯一成功路徑為 `UNKNOWN detected → identity latched → transport disconnected → reconnect same physical SMU → OUTPUT OFF readback → Relay routing OFF verification → White Light OFF verification → clear fault identity/latches → IDLE/READY`。找不到 target、掃描結果為零或多個、serial/model mismatch、reconnect failure、OUTPUT 非 OFF、Relay verification failure、White Light verification failure，任何一項都保留原 fault identity、FAULT ownership 與 global output lock。普通 connect／startup auto-connect 不可選擇另一台 SMU；pending reconnect request 失敗時只清除 pending operation，不清除 persistent fault。
+
+目前 fault identity 與 UNKNOWN latch 僅存在 process memory。Repository 尚無可沿用的 atomic persistent hardware-fault journal，因此本次不以 QSettings 草率新增 crash-recovery state；若 application 在 unresolved fault 時被強制終止或斷電，重新啟動後不會恢復該 latch。這是已知 remaining risk，實體設備仍須由 operator 面板確認 OUTPUT OFF。
 
 Readback 由 `SMUMonitor` 的 Qt timer 觸發，但實際 query 在控制層的單一 worker 執行；I/O lock 同時涵蓋 Manual、Recipe、readback 與 shutdown。Recipe ownership 或 busy 時不排入 readback，避免 critical command 中插入 query。B2901BL 實機已確認 OUTPUT OFF 時送出 `:MEAS:VOLT?` 會自動開啟 Source Output，因此 periodic readback 採 OUTP-first：先查 `:OUTP?`，OFF 時禁止 voltage/current/compliance measurement；只有 `MANUAL + OUTPUT_ON` 才量測。其他 OUTPUT ON 組合只發布 output 狀態，保留既有 `UNEXPECTED_OUTPUT_ON` 復歸流程。
 

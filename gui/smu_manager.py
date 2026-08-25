@@ -8,7 +8,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from core.i18n import tr
 
 from .keysight_b2900 import KeysightB2900Driver, is_keysight_b2900
-from .smu_base import SMUDevice, SMUDriver
+from .smu_base import SMUDevice, SMUDriver, SMUFaultIdentity
 from .smu_control import SMUControlManager
 from .smu_control import SMUOwnership
 
@@ -90,15 +90,25 @@ class SMUManager(QObject):
         self.status_changed.emit(tr("smu.manager.scanning"))
         self._start_operation("scan", self._scan_worker)
 
-    def connect_device(self, device: SMUDevice) -> None:
+    def connect_device(self, device: SMUDevice) -> bool:
         if self.is_busy:
-            return
+            return False
         if self.is_connected:
             self.error_occurred.emit(tr("smu.manager.disconnect_before_connect"))
-            return
+            return False
+        fault_identity = self.control.fault_identity
+        if fault_identity is not None and not fault_identity.matches_device(device):
+            self.error_occurred.emit(
+                tr(
+                    "smu.error_fault_identity_mismatch",
+                    target=fault_identity.display_name,
+                )
+            )
+            return False
         self.connection_started.emit(device.visa_address)
         self.status_changed.emit(tr("smu.manager.connecting", resource=device.visa_address))
         self._start_operation("connect", lambda: self._connect_worker(device))
+        return True
 
     def reconnect_device_for_safety(self, device: SMUDevice) -> bool:
         """Reopen one explicit SMU while preserving any fail-closed latch.
@@ -111,18 +121,35 @@ class SMUManager(QObject):
 
         if self.is_busy:
             return False
+        fault_identity = self.control.fault_identity
+        if fault_identity is None or not fault_identity.matches_device(device):
+            return False
         target = device
         if self.is_connected:
             if (
                 self.connected_device is None
-                or self.connected_device.visa_address != device.visa_address
+                or not fault_identity.matches_device(self.connected_device)
             ):
                 return False
             if not self._close_session(safe_output=False, force_unbind=True):
                 return False
             self.disconnected.emit()
-        self.connect_device(target)
-        return True
+        return self.connect_device(target)
+
+    def reconnect_device(self, device: SMUDevice) -> bool:
+        """Reconnect an ordinary, non-faulted session without bypassing OFF gates."""
+
+        if self.is_busy or self.control.fault_identity is not None:
+            return False
+        if self.is_connected:
+            if self.connected_device is None:
+                return False
+            connected_identity = SMUFaultIdentity.from_device(self.connected_device)
+            if not connected_identity.matches_device(device):
+                return False
+            if not self.disconnect(force=False):
+                return False
+        return self.connect_device(device)
 
     def output_enabled(self) -> bool | None:
         if not self._driver:

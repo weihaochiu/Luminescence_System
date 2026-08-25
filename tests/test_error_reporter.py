@@ -78,27 +78,59 @@ class ErrorReporterTests(unittest.TestCase):
         self.assertIn("Exception Message: disk full", diagnostics)
 
     def test_credentials_are_redacted_everywhere_but_normal_resources_survive(self) -> None:
-        secret = RuntimeError(
-            "password=abc123 token: xyz Authorization: Bearer abc"
+        secrets = (
+            "password=plain-password",
+            '"password":"json-password"',
+            "token: plain-token",
+            '"token": "json-token"',
+            "access_token=access-secret",
+            "refresh_token=refresh-secret",
+            "api-key=api-secret",
+            "Authorization: Bearer bearer-secret",
+            "Authorization: Basic dXNlcjpwYXNz",
+            "Authorization=Token authorization-secret",
+            "https://x.test?a=1&token=query-secret&mode=read",
         )
+        secret = RuntimeError(" | ".join(secrets))
         with self.assertLogs("luminescence.errors", level="ERROR") as captured:
             event = ErrorReporter().report(
                 "SMU-201",
                 context={
-                    "resource": "USB0::0x2A8D::0x9201::MY123::INSTR",
-                    "command": "GET https://example.test/path?api_key=hidden&mode=read",
+                    "resource": "USB0::0x2A8D::0x9201::MY61390254::INSTR",
+                    "command": "GET https://example.test/path?api_key=context-secret&mode=read",
                     "note": "credential: topsecret",
+                    "api-key": "direct-key-secret",
+                    "path": r"D:\Measurement\data",
+                    "channel": "CH1",
                 },
                 exception=secret,
                 present=False,
             )
         diagnostics = format_diagnostics(event)
         payload = captured.output[0]
-        for forbidden in ("abc123", "xyz", "Bearer abc", "hidden", "topsecret"):
-            self.assertNotIn(forbidden, event.context.as_dict().values())
+        context_payload = json.dumps(event.context.as_dict(), ensure_ascii=False)
+        for forbidden in (
+            "plain-password",
+            "json-password",
+            "plain-token",
+            "json-token",
+            "access-secret",
+            "refresh-secret",
+            "api-secret",
+            "bearer-secret",
+            "dXNlcjpwYXNz",
+            "authorization-secret",
+            "query-secret",
+            "context-secret",
+            "topsecret",
+            "direct-key-secret",
+        ):
+            self.assertNotIn(forbidden, context_payload)
             self.assertNotIn(forbidden, diagnostics)
             self.assertNotIn(forbidden, payload)
-        self.assertIn("USB0::0x2A8D::0x9201::MY123::INSTR", diagnostics)
+        self.assertIn("USB0::0x2A8D::0x9201::MY61390254::INSTR", diagnostics)
+        self.assertIn(r"D:\Measurement\data", diagnostics)
+        self.assertIn("CH1", diagnostics)
         self.assertIn("mode=read", diagnostics)
 
 
