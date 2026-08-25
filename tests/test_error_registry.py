@@ -74,6 +74,12 @@ class ErrorRegistryTests(unittest.TestCase):
     def test_measurement_failure_has_no_automatic_retry(self) -> None:
         self.assertNotIn("retry", default_error_registry.require("MEAS-201").actions)
 
+    def test_polarity_quality_error_is_measurement_not_smu_taxonomy(self) -> None:
+        definition = default_error_registry.require("MEAS-202")
+        self.assertEqual("measurement", definition.subsystem)
+        self.assertNotIn("errors.cause.connection", definition.cause_keys)
+        self.assertNotIn("errors.solution.check_connection", definition.solution_keys)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from PySide6.QtCore import QSignalBlocker, QStandardPaths, QTimer
 from PySide6.QtGui import QImage
@@ -933,12 +933,22 @@ class MainWindowDeviceMixin:
         )
 
     def show_smu_error_event(self, event: SMUErrorEvent) -> None:
-        self.show_smu_error(event.message, event.kind)
+        self.show_smu_error(
+            event.message,
+            event.kind,
+            context=event.context,
+            user_message_key=event.user_message_key,
+            user_message_args=event.user_message_args,
+        )
 
     def show_smu_error(
         self,
         message: str,
         kind: SMUErrorKind = SMUErrorKind.OPERATION_FAILED,
+        *,
+        context: Mapping[str, object] | None = None,
+        user_message_key: str | None = None,
+        user_message_args: Mapping[str, object] | None = None,
     ) -> None:
         self.status_message.setText(message)
         if not self.smu_manager.is_connected:
@@ -948,21 +958,22 @@ class MainWindowDeviceMixin:
             SMUErrorKind.UNEXPECTED_OUTPUT: "SMU-205",
             SMUErrorKind.COMPLIANCE_ACTIVE: "SMU-204",
             SMUErrorKind.OPERATION_FAILED: "SMU-201",
+            SMUErrorKind.POLARITY_MEASUREMENT_FAILED: "MEAS-202",
         }[kind]
         control = self.smu_manager.control
         fault_identity = control.fault_identity
         connected = self.smu_manager.connected_device
         selected = self.device_panel.selected_smu()
-        context: dict[str, object] = {
+        context_payload: dict[str, object] = {
             "operation": "smu_control",
             "actual": message,
             "expected": "OUTPUT OFF" if code in {"SMU-203", "SMU-205"} else None,
             "smu_error_kind": kind.value,
         }
         if fault_identity is not None:
-            context.update(fault_identity.to_context())
+            context_payload.update(fault_identity.to_context())
         elif connected is not None:
-            context.update(
+            context_payload.update(
                 {
                     "instrument": connected.display_name,
                     "resource": connected.visa_address,
@@ -971,7 +982,7 @@ class MainWindowDeviceMixin:
                 }
             )
         elif selected is not None:
-            context.update(
+            context_payload.update(
                 {
                     "instrument": selected.display_name,
                     "resource": selected.visa_address,
@@ -979,10 +990,13 @@ class MainWindowDeviceMixin:
                     "smu_idn": selected.idn,
                 }
             )
-        self.report_error(
-            code,
-            context=context,
-        )
+        if context:
+            context_payload.update(context)
+        report_kwargs: dict[str, object] = {"context": context_payload}
+        if user_message_key:
+            report_kwargs["message_key"] = user_message_key
+            report_kwargs["message_args"] = dict(user_message_args or {})
+        self.report_error(code, **report_kwargs)
 
     @staticmethod
     def _format_exposure(exposure_us: int) -> str:

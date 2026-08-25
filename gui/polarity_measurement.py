@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
+from enum import Enum
 import logging
 import math
 from statistics import fmean, median, pstdev
@@ -48,16 +49,33 @@ class PolarityMeasurementResult:
         }
 
 
+class PolarityFailureCategory(str, Enum):
+    """Separate sample validity from hardware/readback safety failures."""
+
+    MEASUREMENT_QUALITY = "measurement_quality"
+    OUTPUT_ON_UNCONFIRMED = "output_on_unconfirmed"
+    OUTPUT_OFF_UNCONFIRMED = "output_off_unconfirmed"
+
+
 class PolarityMeasurementError(RuntimeError):
     def __init__(
         self,
         message: str,
         result: PolarityMeasurementResult | None = None,
         details: dict[str, Any] | None = None,
+        *,
+        category: PolarityFailureCategory = PolarityFailureCategory.MEASUREMENT_QUALITY,
+        measurement_type: str = "",
+        user_message_key: str = "errors.MEAS-202.message",
+        user_message_args: dict[str, object] | None = None,
     ) -> None:
         super().__init__(message)
         self.result = result
         self.details = dict(details or {})
+        self.category = category
+        self.measurement_type = str(measurement_type)
+        self.user_message_key = str(user_message_key)
+        self.user_message_args = dict(user_message_args or {})
 
 
 class PolarityMeasurementService:
@@ -109,6 +127,7 @@ class PolarityMeasurementService:
                     check_cancel,
                     wait_ms,
                 )
+            partial_results["Jsc_raw_current_a"] = jsc_a
             jsc_density = tuple(value * 1000.0 / area_cm2 for value in jsc_a)
             jsc = self.analyze(
                 jsc_density,
@@ -196,7 +215,31 @@ class PolarityMeasurementService:
             log("POLARITY_MEASUREMENT %s", result.to_dict())
             return result
         except PolarityMeasurementError as exc:
-            exc.details = {**partial_results, **exc.details}
+            self._enrich_failure_diagnostics(
+                exc,
+                settings=settings,
+                settings_snapshot=snapshot,
+                area_cm2=area_cm2,
+                partial_results=partial_results,
+            )
+            statistics = exc.details
+            if exc.measurement_type:
+                LOG.warning(
+                    "POLARITY_%s samples=%s representative=%s minimum=%s maximum=%s "
+                    "range=%s standard_deviation=%s variation_percent=%s "
+                    "maximum_variation_percent=%s nplc=%s aggregation=%s",
+                    exc.measurement_type.upper(),
+                    statistics.get("raw_samples"),
+                    statistics.get("representative"),
+                    statistics.get("minimum"),
+                    statistics.get("maximum"),
+                    statistics.get("range"),
+                    statistics.get("standard_deviation"),
+                    statistics.get("variation_percent"),
+                    statistics.get("configured_maximum_variation_percent"),
+                    statistics.get("nplc"),
+                    statistics.get("aggregation_method"),
+                )
             LOG.warning("POLARITY_MEASUREMENT_FAILED reason=%s details=%s", exc, exc.details)
             raise
         except Exception:
@@ -229,12 +272,18 @@ class PolarityMeasurementService:
             raise PolarityMeasurementError(
                 f"{label} contains missing or invalid samples",
                 details={label: {"samples": values}},
+                measurement_type=label,
+                user_message_key="polarity.error.invalid_samples",
+                user_message_args={"measurement": label},
             )
         signs = {1 if value > 0 else -1 if value < 0 else 0 for value in values}
         if 0 in signs or len(signs) != 1:
             raise PolarityMeasurementError(
                 f"{label} sample signs are inconsistent",
                 details={label: {"samples": values}},
+                measurement_type=label,
+                user_message_key="polarity.error.inconsistent_sign",
+                user_message_args={"measurement": label},
             )
         representative = median(values) if aggregation == "median" else fmean(values)
         value_range = max(values) - min(values)
@@ -252,11 +301,25 @@ class PolarityMeasurementService:
             raise PolarityMeasurementError(
                 f"{label} representative is below the configured minimum",
                 details={label: asdict(statistics)},
+                measurement_type=label,
+                user_message_key="polarity.error.below_minimum",
+                user_message_args={
+                    "measurement": label,
+                    "representative": f"{representative:.6g}",
+                    "minimum": f"{minimum_absolute:.6g}",
+                },
             )
         if variation > maximum_variation_percent:
             raise PolarityMeasurementError(
                 f"{label} variation {variation:.3g}% exceeds {maximum_variation_percent:.3g}%",
                 details={label: asdict(statistics)},
+                measurement_type=label,
+                user_message_key="polarity.error.variation",
+                user_message_args={
+                    "measurement": label,
+                    "variation": f"{variation:.1f}",
+                    "maximum": f"{maximum_variation_percent:.1f}",
+                },
             )
         return statistics
 
@@ -292,7 +355,7 @@ class PolarityMeasurementService:
                 source_mode,
                 measurement_mode,
                 compliance,
-                settings.integration_nplc,
+                settings.integration_nplc if settings.anti_flicker_enabled else None,
             )
             return nullcontext()
 
@@ -327,7 +390,10 @@ class PolarityMeasurementService:
             output_shutdown_required = True
             driver.set_output_enabled(True)
             if driver.query_output_enabled() is not True:
-                raise PolarityMeasurementError("Temporary measurement OUTPUT ON was not confirmed")
+                raise PolarityMeasurementError(
+                    "Temporary measurement OUTPUT ON was not confirmed",
+                    category=PolarityFailureCategory.OUTPUT_ON_UNCONFIRMED,
+                )
             wait_ms(settle_ms)
             readings: list[float] = []
             for _index in range(sample_count):
@@ -339,4 +405,60 @@ class PolarityMeasurementService:
             if output_shutdown_required:
                 driver.set_output_enabled(False)
                 if driver.query_output_enabled() is not False:
-                    raise PolarityMeasurementError("Temporary measurement OUTPUT OFF was not confirmed")
+                    raise PolarityMeasurementError(
+                        "Temporary measurement OUTPUT OFF was not confirmed",
+                        category=PolarityFailureCategory.OUTPUT_OFF_UNCONFIRMED,
+                    )
+
+    @staticmethod
+    def _enrich_failure_diagnostics(
+        error: PolarityMeasurementError,
+        *,
+        settings: PolarityMeasurementSettings,
+        settings_snapshot: dict[str, Any],
+        area_cm2: float,
+        partial_results: dict[str, Any],
+    ) -> None:
+        """Attach flat, copy-friendly diagnostics without changing thresholds."""
+
+        label = error.measurement_type
+        raw = error.details.get(label, {}) if label else {}
+        samples = tuple(raw.get("samples", ())) if isinstance(raw, dict) else ()
+        measurement = label.casefold()
+        maximum_variation = getattr(
+            settings, f"{measurement}_max_variation_percent", None
+        )
+        settle_ms = getattr(settings, f"{measurement}_settle_ms", None)
+        compliance: float | None
+        if label == "Jsc":
+            compliance = settings.jsc_compliance_ma_cm2 * area_cm2 / 1000.0
+        elif label == "Voc":
+            compliance = settings.voc_compliance_v
+        else:
+            compliance = None
+        flat = {
+            "polarity_failure_category": error.category.value,
+            "measurement_type": label or None,
+            "raw_samples": samples or None,
+            "sample_count": len(samples) if samples else None,
+            "aggregation_method": raw.get("aggregation") if isinstance(raw, dict) else None,
+            "representative": raw.get("representative") if isinstance(raw, dict) else None,
+            "minimum": min(samples) if samples else None,
+            "maximum": max(samples) if samples else None,
+            "range": raw.get("value_range") if isinstance(raw, dict) else None,
+            "standard_deviation": raw.get("standard_deviation") if isinstance(raw, dict) else None,
+            "variation_percent": raw.get("variation_percent") if isinstance(raw, dict) else None,
+            "configured_maximum_variation_percent": maximum_variation,
+            "nplc": settings.integration_nplc,
+            "anti_flicker_enabled": settings.anti_flicker_enabled,
+            "mains_frequency_hz": settings.mains_frequency_hz,
+            "settle_time_ms": settle_ms,
+            "sample_area_cm2": area_cm2,
+            "compliance": compliance,
+            "settings_snapshot_sha256": settings_snapshot.get("sha256"),
+            "partial_results": partial_results or None,
+        }
+        error.details = {
+            **error.details,
+            **{key: value for key, value in flat.items() if value is not None},
+        }

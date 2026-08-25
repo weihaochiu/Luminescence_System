@@ -3,13 +3,13 @@ from __future__ import annotations
 """Central SMU ownership, coordinate mapping, safety, and serialized I/O."""
 
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 import logging
 from threading import Event, RLock
 from time import monotonic
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from PySide6.QtCore import QObject, Signal
 
@@ -17,6 +17,7 @@ from core.i18n import tr
 
 from .smu_base import SMUDevice, SMUDriver, SMUFaultIdentity
 from .polarity_measurement import (
+    PolarityFailureCategory,
     PolarityMeasurementError,
     PolarityMeasurementService,
 )
@@ -59,12 +60,16 @@ class SMUErrorKind(str, Enum):
     UNEXPECTED_OUTPUT = "unexpected_output"
     COMPLIANCE_ACTIVE = "compliance_active"
     OPERATION_FAILED = "operation_failed"
+    POLARITY_MEASUREMENT_FAILED = "polarity_measurement_failed"
 
 
 @dataclass(frozen=True)
 class SMUErrorEvent:
     kind: SMUErrorKind
     message: str
+    context: Mapping[str, object] = field(default_factory=dict)
+    user_message_key: str | None = None
+    user_message_args: Mapping[str, object] = field(default_factory=dict)
 
 
 class PolarityState(str, Enum):
@@ -673,6 +678,19 @@ class SMUControlManager(QObject):
                 f"{limits.maximum_voltage_compliance_v:g} V"
             )
         self.safety.validate(mode, requested, compliance)
+        manual_diagnostics: dict[str, object] = {
+            "white_light_final_state": "NOT_ATTEMPTED",
+            "routing_final_state": "NOT_SELECTED",
+        }
+
+        def diagnostic_clear_channels() -> None:
+            try:
+                clear_channels()
+            except Exception as exc:
+                manual_diagnostics["routing_final_state"] = f"OFF not confirmed: {exc}"
+                raise
+            manual_diagnostics["routing_final_state"] = "OFF (confirmed)"
+
         with self._lock:
             if self._pending:
                 return False
@@ -693,7 +711,7 @@ class SMUControlManager(QObject):
             self._selected_manual_channel = str(channel_id)
             self._active_manual_channel = ""
             self._active_manual_relay = None
-            self._manual_routing_clear = clear_channels
+            self._manual_routing_clear = diagnostic_clear_channels
             self._manual_routing_verify = verify_channel
             self._ownership = SMUOwnership.MANUAL
             self._operation_state = SMUOperationState.BUSY
@@ -752,6 +770,10 @@ class SMUControlManager(QObject):
                     channel_id,
                     physical_relay,
                 )
+                manual_diagnostics["physical_relay_channel"] = physical_relay
+                manual_diagnostics["routing_final_state"] = (
+                    f"Relay {physical_relay} ON (confirmed)"
+                )
 
                 def verified_light_on() -> None:
                     self._check_manual_generation(generation)
@@ -759,10 +781,18 @@ class SMUControlManager(QObject):
                         raise SMUInterlockError("SMU routing changed before White Light ON")
                     self._check_manual_generation(generation)
                     light_on()
+                    manual_diagnostics["white_light_final_state"] = "ON (confirmed)"
                     self._check_manual_generation(generation)
 
                 def verified_light_off() -> None:
-                    light_off()
+                    try:
+                        light_off()
+                    except Exception as exc:
+                        manual_diagnostics["white_light_final_state"] = (
+                            f"OFF not confirmed: {exc}"
+                        )
+                        raise
+                    manual_diagnostics["white_light_final_state"] = "OFF (confirmed)"
                     self._check_manual_generation(generation)
 
                 with self._io_lock:
@@ -805,12 +835,16 @@ class SMUControlManager(QObject):
                     measured.to_dict(),
                 )
                 if result.factor is None:
-                    raise SMUInterlockError(
+                    raise PolarityMeasurementError(
                         "Invalid polarity measurement: "
-                        + (
-                            measured.failure_reason
-                            or "Jsc/Voc measurements do not identify a safe output polarity"
-                        )
+                        + (measured.failure_reason or "Jsc/Voc measurements do not identify a safe output polarity"),
+                        result=measured,
+                        details={
+                            "Jsc": asdict(measured.jsc_ma_cm2),
+                            "Voc": asdict(measured.voc_v),
+                            "failure_reason": measured.failure_reason,
+                        },
+                        user_message_key="polarity.error.invalid_polarity",
                     )
 
                 self._check_manual_generation(generation)
@@ -919,10 +953,27 @@ class SMUControlManager(QObject):
             finally:
                 self.manual_sequence_finished.emit(success)
 
+        def failure_context(exception: BaseException) -> Mapping[str, object]:
+            context: dict[str, object] = dict(manual_diagnostics)
+            context["selected_smu_channel"] = channel_id
+            if isinstance(exception, PolarityMeasurementError):
+                context.update(exception.details)
+            with self._lock:
+                driver = self._driver
+                output_state = self._output_state.value
+                output_confirmed_off = self._output_confirmed_off
+            context["output_state_after_abort"] = (
+                f"{output_state} (confirmed)" if output_confirmed_off else output_state
+            )
+            if driver is not None:
+                context.update(SMUFaultIdentity.from_device(driver.device).to_context())
+            return context
+
         accepted = self._submit(
             operation,
             cleanup_owner=SMUOwnership.MANUAL,
             operation_state=SMUOperationState.BUSY,
+            error_context_provider=failure_context,
         )
         if not accepted:
             with self._lock:
@@ -1828,8 +1879,22 @@ class SMUControlManager(QObject):
         self._ownership = SMUOwnership.FAULT
         self._operation_state = SMUOperationState.FAULT
 
-    def _emit_error_event(self, kind: SMUErrorKind, message: str) -> None:
-        event = SMUErrorEvent(kind=kind, message=str(message))
+    def _emit_error_event(
+        self,
+        kind: SMUErrorKind,
+        message: str,
+        *,
+        context: Mapping[str, object] | None = None,
+        user_message_key: str | None = None,
+        user_message_args: Mapping[str, object] | None = None,
+    ) -> None:
+        event = SMUErrorEvent(
+            kind=kind,
+            message=str(message),
+            context=dict(context or {}),
+            user_message_key=user_message_key,
+            user_message_args=dict(user_message_args or {}),
+        )
         self.error_event.emit(event)
         self.error_occurred.emit(event.message)
 
@@ -2027,6 +2092,7 @@ class SMUControlManager(QObject):
         report_errors: bool = True,
         allow_busy: bool = False,
         operation_state: SMUOperationState | None = None,
+        error_context_provider: Callable[[BaseException], Mapping[str, object]] | None = None,
     ) -> bool:
         start_gate = Event()
 
@@ -2052,15 +2118,64 @@ class SMUControlManager(QObject):
             except Exception as exc:  # noqa: BLE001 - report async hardware failure
                 if isinstance(exc, _SMUEmergencyAbort):
                     LOG.warning("%s", exc)
+                elif (
+                    isinstance(exc, PolarityMeasurementError)
+                    and exc.category is PolarityFailureCategory.MEASUREMENT_QUALITY
+                ):
+                    LOG.warning("Polarity measurement quality failure: %s", exc)
                 else:
                     LOG.exception("SMU operation failed")
+                if (
+                    isinstance(exc, PolarityMeasurementError)
+                    and exc.category is PolarityFailureCategory.OUTPUT_OFF_UNCONFIRMED
+                ):
+                    self._latch_output_unknown(str(exc))
+                cleanup_ok = True
                 if cleanup_owner is not None:
-                    self.safe_shutdown(cleanup_owner, reason="failed output operation")
-                if report_errors and not isinstance(exc, _SMUEmergencyAbort):
-                    self._emit_error_event(
-                        SMUErrorKind.OPERATION_FAILED,
-                        str(exc),
+                    cleanup_ok = self.safe_shutdown(
+                        cleanup_owner, reason="failed output operation"
                     )
+                if (
+                    report_errors
+                    and not isinstance(exc, _SMUEmergencyAbort)
+                    and cleanup_ok
+                    and not (
+                        isinstance(exc, PolarityMeasurementError)
+                        and exc.category
+                        is PolarityFailureCategory.OUTPUT_OFF_UNCONFIRMED
+                    )
+                ):
+                    context = (
+                        dict(error_context_provider(exc))
+                        if error_context_provider is not None
+                        else {}
+                    )
+                    if (
+                        isinstance(exc, PolarityMeasurementError)
+                        and exc.category is PolarityFailureCategory.MEASUREMENT_QUALITY
+                    ):
+                        self._emit_error_event(
+                            SMUErrorKind.POLARITY_MEASUREMENT_FAILED,
+                            str(exc),
+                            context=context,
+                            user_message_key=exc.user_message_key,
+                            user_message_args=exc.user_message_args,
+                        )
+                    elif (
+                        isinstance(exc, PolarityMeasurementError)
+                        and exc.category is PolarityFailureCategory.OUTPUT_OFF_UNCONFIRMED
+                    ):
+                        self._emit_error_event(
+                            SMUErrorKind.OUTPUT_OFF_UNCONFIRMED,
+                            str(exc),
+                            context=context,
+                        )
+                    else:
+                        self._emit_error_event(
+                            SMUErrorKind.OPERATION_FAILED,
+                            str(exc),
+                            context=context,
+                        )
             finally:
                 with self._lock:
                     self._pending.discard(completed)

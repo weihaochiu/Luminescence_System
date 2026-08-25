@@ -41,7 +41,7 @@ class KeysightB2900Driver(SMUDriver):
         source_mode: str,
         measurement_mode: str,
         compliance: float,
-        nplc: float,
+        nplc: float | None,
     ) -> None:
         """Configure a verified zero-level Jsc/Voc measurement transition."""
 
@@ -52,8 +52,9 @@ class KeysightB2900Driver(SMUDriver):
         self._configure_source_mode(source)
         self.resource.write(f':SENS:FUNC "{measurement}"')
         self.resource.write(f":SENS:{measurement}:RANG:AUTO ON")
-        self.set_measurement_nplc_auto(measurement, False)
-        self.set_measurement_nplc(measurement, nplc)
+        if nplc is not None:
+            self.set_measurement_nplc_auto(measurement, False)
+            self.set_measurement_nplc(measurement, nplc)
         if source == "VOLT":
             self.resource.write(f":SENS:CURR:PROT {format_scpi_number(compliance)}")
         else:
@@ -61,10 +62,11 @@ class KeysightB2900Driver(SMUDriver):
         self._set_and_verify_source_level(source, 0.0)
         LOG.info(
             "B2900_MEASUREMENT_CONFIG source_mode=%s measurement_mode=%s "
-            "range=AUTO nplc_auto=OFF nplc=%g compliance=%g source_level=0",
+            "range=AUTO nplc_auto=%s nplc=%s compliance=%g source_level=0",
             source,
             measurement,
-            nplc,
+            "OFF" if nplc is not None else "UNCHANGED",
+            f"{nplc:g}" if nplc is not None else "UNCHANGED",
             compliance,
         )
 

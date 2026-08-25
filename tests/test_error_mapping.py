@@ -103,6 +103,53 @@ class ErrorConditionMappingTests(unittest.TestCase):
             context["smu_error_kind"],
         )
 
+    def test_polarity_quality_condition_maps_to_meas_202_with_diagnostics(self) -> None:
+        device = SMUDevice(
+            "USB0::POLARITY::INSTR",
+            manufacturer="Keysight Technologies",
+            model="B2901BL",
+            serial_number="MY61390254",
+            supported=True,
+        )
+        report_error = Mock()
+        dummy = SimpleNamespace(
+            status_message=SimpleNamespace(setText=Mock()),
+            smu_manager=SimpleNamespace(
+                is_connected=True,
+                connected_device=device,
+                control=SimpleNamespace(fault_identity=None),
+            ),
+            device_panel=SimpleNamespace(selected_smu=lambda: device),
+            report_error=report_error,
+        )
+
+        MainWindowDeviceMixin.show_smu_error(
+            dummy,
+            "Jsc variation 54.6% exceeds 30%",
+            SMUErrorKind.POLARITY_MEASUREMENT_FAILED,
+            context={
+                "measurement_type": "Jsc",
+                "raw_samples": (-1.0, -1.5, -1.1, -1.4, -1.2),
+                "variation_percent": 54.6,
+                "configured_maximum_variation_percent": 30.0,
+            },
+            user_message_key="polarity.error.variation",
+            user_message_args={
+                "measurement": "Jsc",
+                "variation": "54.6",
+                "maximum": "30.0",
+            },
+        )
+
+        self.assertEqual("MEAS-202", report_error.call_args.args[0])
+        self.assertEqual(
+            "polarity.error.variation",
+            report_error.call_args.kwargs["message_key"],
+        )
+        context = report_error.call_args.kwargs["context"]
+        self.assertEqual(54.6, context["variation_percent"])
+        self.assertEqual("MY61390254", context["smu_serial_number"])
+
 
 if __name__ == "__main__":
     unittest.main()

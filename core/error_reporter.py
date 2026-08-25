@@ -25,6 +25,8 @@ class ErrorEvent:
     definition: ErrorDefinition
     context: ErrorContext
     requested_code: str
+    message_key: str | None = None
+    message_args: Mapping[str, object] | None = None
 
     @property
     def code(self) -> str:
@@ -40,7 +42,7 @@ class ErrorEvent:
 
     @property
     def message(self) -> str:
-        return tr(self.definition.message_key)
+        return tr(self.message_key or self.definition.message_key, **dict(self.message_args or {}))
 
     @property
     def causes(self) -> tuple[str, ...]:
@@ -89,6 +91,8 @@ class ErrorReporter(QObject):
         context: Mapping[str, object] | None = None,
         exception: BaseException | None = None,
         present: bool = True,
+        message_key: str | None = None,
+        message_args: Mapping[str, object] | None = None,
     ) -> ErrorEvent:
         requested = str(code).upper()
         definition = self.registry.get(requested)
@@ -101,7 +105,13 @@ class ErrorReporter(QObject):
             exception=exception,
             subsystem=definition.subsystem,
         )
-        event = ErrorEvent(definition, error_context, requested)
+        event = ErrorEvent(
+            definition,
+            error_context,
+            requested,
+            message_key=message_key,
+            message_args=dict(message_args or {}),
+        )
         self._history.append(event)
         log_payload = {
             "timestamp": error_context.timestamp,
@@ -109,6 +119,7 @@ class ErrorReporter(QObject):
             "error_code": definition.code,
             "subsystem": definition.subsystem,
             "message_key": definition.message_key,
+            "presented_message_key": message_key or definition.message_key,
             "context": error_context.as_dict(),
             "exception": error_context.exception_message,
         }

@@ -17,16 +17,32 @@ def report_error(
     context: Mapping[str, object] | None = None,
     exception: BaseException | None = None,
     present: bool = True,
+    message_key: str | None = None,
+    message_args: Mapping[str, object] | None = None,
 ) -> ErrorEvent:
     current: object | None = widget
     while current is not None:
         reporter = getattr(current, "error_reporter", None)
         if isinstance(reporter, ErrorReporter):
-            return reporter.report(code, context=context, exception=exception, present=present)
+            return reporter.report(
+                code,
+                context=context,
+                exception=exception,
+                present=present,
+                message_key=message_key,
+                message_args=message_args,
+            )
         parent = getattr(current, "parent", None)
         current = parent() if callable(parent) else None
     reporter = ErrorReporter()
-    event = reporter.report(code, context=context, exception=exception, present=False)
+    event = reporter.report(
+        code,
+        context=context,
+        exception=exception,
+        present=False,
+        message_key=message_key,
+        message_args=message_args,
+    )
     # Production dialogs are parented under MainWindow and always find its
     # reporter/presenter. An isolated widget (notably a unit-test fixture) has
     # no owner able to retain or deep-link a modeless dialog, so logging the

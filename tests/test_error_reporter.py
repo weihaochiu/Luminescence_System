@@ -64,6 +64,23 @@ class ErrorReporterTests(unittest.TestCase):
         set_language(Language.EN_US, persist=False)
         self.assertEqual("Unable to Confirm SMU Output OFF", event.title)
 
+    def test_polarity_message_uses_localized_runtime_statistics(self) -> None:
+        configure_i18n(None)
+        event = ErrorReporter().report(
+            "MEAS-202",
+            message_key="polarity.error.variation",
+            message_args={
+                "measurement": "Jsc",
+                "variation": "54.6",
+                "maximum": "30.0",
+            },
+            present=False,
+        )
+        self.assertIn("Jsc 量測變動 54.6%", event.message)
+        self.assertNotIn("USB", event.message)
+        set_language(Language.EN_US, persist=False)
+        self.assertIn("Jsc measurement variation was 54.6%", event.message)
+
     def test_diagnostics_are_plain_text_and_include_exception(self) -> None:
         reporter = ErrorReporter()
         event = reporter.report(

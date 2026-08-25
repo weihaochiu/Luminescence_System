@@ -20,6 +20,8 @@ def _now() -> str:
 class PolarityMeasurementSettings:
     white_light_stabilization_ms: int = 500
     anti_flicker_enabled: bool = True
+    # Diagnostic metadata only: B2900 NPLC is expressed in the instrument's
+    # own power-line cycles, so the SMU line-frequency integration owns timing.
     mains_frequency_hz: float = 60.0
     integration_nplc: float = 5.0
     jsc_settle_ms: int = 100

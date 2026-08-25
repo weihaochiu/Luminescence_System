@@ -360,6 +360,14 @@ class PolarityMeasurementTests(unittest.TestCase):
         self.assertIn(":SENS:VOLT:NPLC 5", resource.writes)
         self.assertIn(":SOUR:CURR 0", resource.writes)
 
+    def test_b2900_disabled_anti_flicker_leaves_nplc_unchanged(self) -> None:
+        resource = Resource()
+        driver = KeysightB2900Driver(resource, SMUDevice("USB", supported=True))
+        driver.configure_zero_level_measurement("VOLT", "CURR", 0.02, None)
+        self.assertIn(":SENS:CURR:RANG:AUTO ON", resource.writes)
+        self.assertNotIn(":SENS:CURR:NPLC:AUTO OFF", resource.writes)
+        self.assertFalse(any(command.startswith(":SENS:CURR:NPLC ") for command in resource.writes))
+
     def test_b2900_safe_stop_zeros_only_verified_active_source_mode(self) -> None:
         for mode, expected, forbidden in (
             ("VOLT", ":SOUR:VOLT 0", ":SOUR:CURR 0"),

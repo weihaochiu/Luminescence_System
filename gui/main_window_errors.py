@@ -54,9 +54,16 @@ def report_error(
     context: dict[str, object] | None = None,
     exception: BaseException | None = None,
     present: bool = True,
+    message_key: str | None = None,
+    message_args: dict[str, object] | None = None,
 ) -> ErrorEvent:
     return self.error_reporter.report(
-        code, context=context, exception=exception, present=present
+        code,
+        context=context,
+        exception=exception,
+        present=present,
+        message_key=message_key,
+        message_args=message_args,
     )
 
 

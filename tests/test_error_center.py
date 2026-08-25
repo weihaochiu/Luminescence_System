@@ -46,6 +46,12 @@ class ErrorCenterTests(unittest.TestCase):
         self.assertEqual("REL-102", self.dialog.detail_panel.code_value.text())
         self.assertEqual(0, self.dialog.tabs.currentIndex())
 
+    def test_polarity_measurement_code_is_searchable(self) -> None:
+        self.dialog.search_edit.setText("MEAS-202")
+        self.assertEqual(1, self.dialog.proxy.rowCount())
+        self.assertTrue(self.dialog.open_code("MEAS-202"))
+        self.assertEqual("MEAS-202", self.dialog.detail_panel.code_value.text())
+
     def test_session_history_refresh_and_selection(self) -> None:
         self.reporter.report("CAM-203", present=False)
         self.reporter.report("FILE-201", present=False)
