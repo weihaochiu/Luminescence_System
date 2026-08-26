@@ -1,22 +1,24 @@
 @echo off
-setlocal EnableExtensions
+setlocal
 cd /d "%~dp0"
-chcp 65001 >nul
 
-if not exist ".venv\Scripts\python.exe" (
-    echo 找不到 Luminescence_System 虛擬環境。
-    echo 請先執行 setup_and_run.bat 完成環境建立。
-    pause
-    exit /b 1
-)
+if not exist ".venv\Scripts\python.exe" goto no_venv
 
 ".venv\Scripts\python.exe" -m tools.ruler_scale_calibration_tester.main
-set "RULER_TESTER_EXIT_CODE=%ERRORLEVEL%"
-if not "%RULER_TESTER_EXIT_CODE%"=="0" (
-    echo.
-    echo Ruler Scale Calibration Tester 執行失敗，exit code: %RULER_TESTER_EXIT_CODE%
-    pause
-    exit /b %RULER_TESTER_EXIT_CODE%
-)
+set "EXIT_CODE=%ERRORLEVEL%"
 
+if not "%EXIT_CODE%"=="0" goto failed
 exit /b 0
+
+:no_venv
+echo ERROR: Python virtual environment was not found.
+echo Run setup_and_run.bat first.
+pause
+exit /b 1
+
+:failed
+echo.
+echo ERROR: Ruler Scale Calibration Tester failed.
+echo Exit code: %EXIT_CODE%
+pause
+exit /b %EXIT_CODE%

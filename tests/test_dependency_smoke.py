@@ -76,20 +76,34 @@ class DependencySmokeTests(unittest.TestCase):
         self.assertEqual(0, completed.returncode, completed.stderr)
 
     def test_root_ruler_launcher_is_single_source_of_truth(self) -> None:
-        root_launcher = (ROOT / "run_ruler_scale_calibration_tester.bat").read_text(
-            encoding="utf-8"
-        )
+        root_path = ROOT / "run_ruler_scale_calibration_tester.bat"
+        root_bytes = root_path.read_bytes()
+        self.assertFalse(root_bytes.startswith(b"\xef\xbb\xbf"))
+        self.assertTrue(root_bytes.endswith(b"\r\n"))
+        self.assertNotIn(b"\n", root_bytes.replace(b"\r\n", b""))
+        self.assertTrue(all(value < 128 for value in root_bytes))
+        root_launcher = root_bytes.decode("ascii")
         self.assertIn('cd /d "%~dp0"', root_launcher)
-        self.assertIn('.venv\\Scripts\\python.exe', root_launcher)
+        self.assertIn('".venv\\Scripts\\python.exe"', root_launcher)
         self.assertIn('-m tools.ruler_scale_calibration_tester.main', root_launcher)
-        self.assertIn('找不到 Luminescence_System 虛擬環境。', root_launcher)
-        self.assertIn('請先執行 setup_and_run.bat 完成環境建立。', root_launcher)
         self.assertNotIn('pip install', root_launcher.casefold())
-        forwarding = (
+        tool_path = (
             ROOT / "tools" / "ruler_scale_calibration_tester" / "run_ruler_scale_tester.bat"
-        ).read_text(encoding="utf-8")
+        )
+        tool_bytes = tool_path.read_bytes()
+        self.assertFalse(tool_bytes.startswith(b"\xef\xbb\xbf"))
+        self.assertTrue(tool_bytes.endswith(b"\r\n"))
+        self.assertNotIn(b"\n", tool_bytes.replace(b"\r\n", b""))
+        self.assertTrue(all(value < 128 for value in tool_bytes))
+        forwarding = tool_bytes.decode("ascii")
         self.assertIn('run_ruler_scale_calibration_tester.bat', forwarding)
         self.assertNotIn('-m tools.ruler_scale_calibration_tester.main', forwarding)
+        attributes = (ROOT / ".gitattributes").read_text(encoding="ascii")
+        self.assertIn('/run_ruler_scale_calibration_tester.bat text eol=crlf', attributes)
+        self.assertIn(
+            '/tools/ruler_scale_calibration_tester/run_ruler_scale_tester.bat text eol=crlf',
+            attributes,
+        )
 
     def test_setup_script_installs_only_from_requirements(self) -> None:
         script = (ROOT / "setup_and_run.bat").read_text(encoding="utf-8")
