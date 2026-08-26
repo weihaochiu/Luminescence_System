@@ -65,6 +65,11 @@ Camera enumeration/open/read errors are shown as diagnostics and do not terminat
 Image File mode. The tester uses the latest independent `uint16 H×W` scientific
 frame for analysis. The grayscale QImage is only the preview.
 
+Each camera capture also freezes the controller readbacks available at that time:
+Exposure Time, Gain, SDK Auto Exposure state/mode/target, sensor bit depth, raw
+alignment, EffectiveDNMax, temperature, and timestamp. An unavailable readback is
+stored as JSON `null` with an explicit availability flag; it is never invented.
+
 Every camera **Capture & Analyze** is persisted automatically before calibration
 starts. The worker freezes an independent scientific frame, writes its exact TIFF
 and a visualization-only PNG, then runs calibration and saves PASS, FAIL, or
@@ -87,6 +92,56 @@ then is atomically replaced with the complete result. Unexpected exceptions are
 recorded as `analysis_exception`; raw and preview remain available. The UI reports
 the capture ID, history count, disk use, and folder. History is local-only and is
 never deleted automatically.
+
+### Ruler calibration Auto Exposure
+
+Enable **Ruler Auto Exposure** before **Capture & Analyze** to use the standalone
+calibration-specific acquisition controller. It reuses the existing
+`CameraController` and pull-mode stream; it does not start another SDK stream and
+does not change Recipe acquisition.
+
+The controller first freezes the original Exposure, Gain, and SDK Auto Exposure
+mode. It then uses manual Exposure at minimum hardware Gain, analyzes each raw
+MONO16 frame through the existing `CalibrationService`, and records every attempt
+before continuing. The UI shows current Exposure/Gain, attempt number, ruler/tick
+saturation, Michelson contrast, and the decision. **Cancel Ruler AE**, window
+close, PASS, FAIL, timeout, and exceptions all restore the original camera state.
+
+The first-stage targets are deliberately centralized and marked provisional:
+
+- ruler ROI and tick-band exact-DN clipping: at most 15%;
+- median accepted-tick Michelson contrast: at least 0.50;
+- normalized accepted-tick contrast: at least 0.14 of EffectiveDNMax;
+- two consecutive acceptable frames, with metric change at most 5%, angle change
+  at most 2°, and polygon displacement at most 3%;
+- at most six Exposure/Gain adjustments, two unchanged-exposure candidate retries,
+  and twelve total attempts.
+
+Exposure is the primary control. Gain starts at the camera minimum and is raised
+only when Exposure has reached its maximum, tick contrast remains weak, and local
+clipping is at most 2%. Clipping always reduces Exposure and never raises Gain.
+An unreliable ruler candidate is rejected before brightness metrics can drive the
+controller. Good contrast without verified tick hierarchy still FAILs; Auto
+Exposure never relaxes the physical scale solver's
+`tick_hierarchy_verified`/`ocr_verified` requirement.
+
+These values came from the first ten local real MONO16 captures (five PASS and
+five FAIL) and are not final acceptance specifications. The read-only regression
+kept all five existing PASS candidates reliable, treated the valid but clipped
+frame 32 candidate as reliable, and rejected the known wrong candidates in frames
+172, 393, 423, and 453 before AE decisions.
+
+For a repeatable diagnostic-only sweep, close the main application and run:
+
+```powershell
+.\.venv\Scripts\python.exe -m tools.ruler_scale_calibration_tester.exposure_sweep_main
+```
+
+The sweep uses minimum Gain, nine clamped exposures from 0.25× to 4× the starting
+readback, three captures per exposure, and one settling frame. Exact raw frames,
+metadata, result JSON, CSV metrics, and a summary are written only below
+`local/generated/ruler_exposure_sweeps/`. The original camera state is restored;
+the sweep does not tune production thresholds automatically.
 
 ## 4. Image File mode
 

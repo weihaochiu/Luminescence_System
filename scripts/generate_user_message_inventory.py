@@ -10,6 +10,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs" / "USER_MESSAGE_INVENTORY.md"
+LOCAL_ONLY_TOP_LEVEL = {"backup", "local", "ruler"}
 
 UI_CONSTRUCTORS = {
     "QAction",
@@ -450,7 +451,11 @@ def collect() -> list[Entry]:
     entries: list[Entry] = []
     for path in sorted(ROOT.rglob("*.py")):
         relative = path.relative_to(ROOT).as_posix()
-        if any(part in {".git", ".venv", "__pycache__"} for part in path.parts):
+        relative_parts = path.relative_to(ROOT).parts
+        if (
+            any(part in {".git", ".venv", "__pycache__"} for part in path.parts)
+            or (relative_parts and relative_parts[0] in LOCAL_ONLY_TOP_LEVEL)
+        ):
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=relative)
@@ -481,7 +486,7 @@ def render(entries: list[Entry]) -> str:
         "",
         "## Scope and method",
         "",
-        "The scan covers every repository `*.py` file (including tests and the bundled SDK) and classifies visible Qt constructor/setter text, tooltips, status messages, QMessageBox calls, user-facing signal payloads, logger calls, `print`, and raised exception literals. It follows common local list/tuple → `append()` → `join()` → tooltip flows, but it is not a complete Python data-flow engine. The requested keyword audit (`錯誤`, `失敗`, `警告`, `無法`, `逾時`, `未連接`, `timeout`, `failed`, `error`, `warning`) is also represented where those literals occur in these call sites.",
+        "The scan covers repository source `*.py` files (including tests and the bundled SDK), excluding local-only `local/`, `ruler/`, and `backup/` data, and classifies visible Qt constructor/setter text, tooltips, status messages, QMessageBox calls, user-facing signal payloads, logger calls, `print`, and raised exception literals. It follows common local list/tuple → `append()` → `join()` → tooltip flows, but it is not a complete Python data-flow engine. The requested keyword audit (`錯誤`, `失敗`, `警告`, `無法`, `逾時`, `未連接`, `timeout`, `failed`, `error`, `warning`) is also represented where those literals occur in these call sites.",
         "",
         f"Inventory rows: **{len(entries)}**; user-facing rows: **{user_count}**; translation candidates: **{translation_count}**.",
         "Static scanner counts and the supplemental manual indirect-UI audit are reported separately in `I18N_ERROR_SYSTEM_MIGRATION.md`; a zero static count alone is not proof that every dynamic UI path is translated.",

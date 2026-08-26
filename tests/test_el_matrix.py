@@ -1239,6 +1239,7 @@ class _FakeCameraController(QObject):
         self.device_name = "Fake Camera"
         self.requested = (0, 0)
         self.configure_calls = 0
+        self.restored_state = None
 
     def set_manual_exposure(self, exposure_us: int, gain: int) -> None:
         self.configure_calls += 1
@@ -1250,6 +1251,9 @@ class _FakeCameraController(QObject):
     def read_temperature_c(self):
         return 39.8
 
+    def restore_exposure_state(self, state):
+        self.restored_state = dict(state)
+
 
 class _SequencedCameraController(_FakeCameraController):
     frame_ready_sequenced = Signal(QImage, int)
@@ -1257,6 +1261,12 @@ class _SequencedCameraController(_FakeCameraController):
     def __init__(self) -> None:
         super().__init__()
         self.frame_sequence = 10
+
+
+class _RoundedCameraController(_FakeCameraController):
+    def set_manual_exposure(self, exposure_us: int, gain: int) -> None:
+        self.configure_calls += 1
+        self.requested = (exposure_us - 3, gain + 1)
 
 
 class CameraCaptureBridgeTests(unittest.TestCase):
@@ -1317,6 +1327,62 @@ class CameraCaptureBridgeTests(unittest.TestCase):
             self.app.processEvents(); time.sleep(0.005)
         thread.join(timeout=0.1)
         self.assertEqual((3, 2), (result[0].image.width(), result[0].image.height()))
+
+    def test_bridge_restores_camera_state_on_owner_thread(self) -> None:
+        controller = _FakeCameraController()
+        bridge = CameraCaptureBridge(controller)
+        failure: list[Exception] = []
+        state = {"ExposureReadbackUs": 2500, "GainReadback": 150}
+
+        def worker() -> None:
+            try:
+                bridge.restore_state(state, timeout_s=1.0)
+            except Exception as exc:
+                failure.append(exc)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        deadline = time.monotonic() + 1
+        while thread.is_alive() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.005)
+        thread.join(timeout=0.1)
+        self.assertFalse(failure)
+        self.assertEqual(state, controller.restored_state)
+
+    def test_bridge_can_preserve_actual_calibration_readback(self) -> None:
+        controller = _RoundedCameraController()
+        bridge = CameraCaptureBridge(controller)
+        result: list[CapturedFrame] = []
+        failure: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                result.append(bridge.capture(
+                    50,
+                    200,
+                    2,
+                    lambda: None,
+                    accept_actual_readback=True,
+                ))
+            except Exception as exc:
+                failure.append(exc)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        deadline = time.monotonic() + 1
+        while controller.configure_calls == 0 and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.005)
+        image = QImage(3, 2, QImage.Format.Format_RGB888)
+        controller.frame_ready.emit(image)
+        while thread.is_alive() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.005)
+        thread.join(timeout=0.1)
+        self.assertFalse(failure)
+        self.assertEqual(49_997, result[0].camera_metadata["ExposureReadbackUs"])
+        self.assertEqual(201, result[0].camera_metadata["GainReadback"])
 
     def test_progress_window_is_modeless_and_close_does_not_request_stop(self) -> None:
         dialog = MeasurementProgressDialog("EL_Matrix_Standard")

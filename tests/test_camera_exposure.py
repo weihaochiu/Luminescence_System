@@ -382,6 +382,12 @@ class CameraExposureTests(unittest.TestCase):
         self.assertEqual(0, metadata["SDKOverexposurePolicy"])
         self.assertEqual(40, metadata["AutoExposureMinExposure"])
         self.assertEqual(400_000, metadata["AutoExposureMaxExposure"])
+        self.assertEqual(100, metadata["ExposureMinUs"])
+        self.assertEqual(1_000_000, metadata["ExposureMaxUs"])
+        self.assertEqual(10_000, metadata["ExposureDefaultUs"])
+        self.assertEqual(100, metadata["GainMin"])
+        self.assertEqual(800, metadata["GainMax"])
+        self.assertEqual(100, metadata["GainDefault"])
         self.assertEqual(1875.3, metadata["MeanEffectiveDN"])
         self.assertFalse(metadata["AutoExposureCalibrationApplied"])
         self.assertIsNone(metadata["AutoExposureCalibrationProfileId"])
@@ -389,6 +395,27 @@ class CameraExposureTests(unittest.TestCase):
         self.assertIsNone(metadata["AutoExposureCalibrationResolution"])
         self.assertTrue(metadata["SDKAutoExposureEnabled"])
         self.assertNotIn("AutoExposureTarget", metadata)
+
+    def test_restore_exposure_state_restores_readbacks_then_continuous_ae(self) -> None:
+        camera = FakeModeCamera(exposure_us=9000, gain=450)
+        controller = configured_controller(camera)
+        controller._sdk_auto_exposure_mode = SDKAutoExposureMode.MANUAL
+        controller.restore_exposure_state({
+            "ExposureReadbackUs": 2500,
+            "GainReadback": 150,
+            "AutoExposureMode": SDKAutoExposureMode.CONTINUOUS.value,
+        })
+        self.assertEqual(2500, camera.exposure_us)
+        self.assertEqual(150, camera.gain)
+        self.assertEqual(1, camera.auto_exposure_enable)
+        self.assertEqual(SDKAutoExposureMode.CONTINUOUS, controller._sdk_auto_exposure_mode)
+        off_index = camera.calls.index(("sdk_auto", 0))
+        exposure_index = camera.calls.index(("exposure", 2500))
+        gain_index = camera.calls.index(("gain", 150))
+        on_index = len(camera.calls) - 1 - camera.calls[::-1].index(("sdk_auto", 1))
+        self.assertLess(off_index, exposure_index)
+        self.assertLess(exposure_index, gain_index)
+        self.assertLess(gain_index, on_index)
 
     def test_ui_uses_dn_terms_and_settings_submenu(self) -> None:
         root = Path(__file__).parents[1]

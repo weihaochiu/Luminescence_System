@@ -23,7 +23,8 @@ from .source import AnalysisSource
 LOG = logging.getLogger(__name__)
 
 CAPTURE_SCHEMA_VERSION = 1
-DEFAULT_HISTORY_ROOT = Path("local") / "ruler_capture_history"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_HISTORY_ROOT = PROJECT_ROOT / "local" / "ruler_capture_history"
 DEBUG_IMAGE_NAMES = (
     "final_overlay",
     "ticks_overlay",
@@ -122,6 +123,7 @@ class CaptureHistoryStore:
                 "algorithm_version": None,
                 "camera_identity": source.source_identity,
                 "camera_display_name": source.display_name,
+                "camera_acquisition": _camera_acquisition_payload(source),
                 "frame_sequence": source.frame_sequence,
                 "input_dtype": pending.raw_dtype,
                 "input_resolution": [pending.raw_shape[1], pending.raw_shape[0]],
@@ -225,6 +227,7 @@ class CaptureHistoryStore:
             "algorithm_version": result.algorithm_version,
             "camera_identity": pending.source.source_identity,
             "camera_display_name": pending.source.display_name,
+            "camera_acquisition": _camera_acquisition_payload(pending.source),
             "frame_sequence": pending.source.frame_sequence,
             "input_dtype": pending.raw_dtype,
             "input_resolution": [pending.raw_shape[1], pending.raw_shape[0]],
@@ -265,6 +268,12 @@ class CaptureHistoryStore:
             "warnings": list(result.warnings),
             "failure_reasons": list(result.failure_reasons),
             "analysis_exception": analysis_exception,
+            "ruler_auto_exposure_attempt": result.diagnostics.get(
+                "ruler_auto_exposure_attempt"
+            ),
+            "ruler_auto_exposure_attempts": result.diagnostics.get(
+                "ruler_auto_exposure_attempts", []
+            ),
             "calibration_result": result.to_dict(),
         }
 
@@ -359,3 +368,34 @@ def _parse_timestamp(value: str) -> datetime:
 
 def _scalar(value: np.generic[Any] | float | int) -> float | int:
     return value.item() if isinstance(value, np.generic) else value
+
+
+def _camera_acquisition_payload(source: AnalysisSource) -> dict[str, Any]:
+    metadata = dict(source.acquisition_metadata or {})
+    exposure = metadata.get("ExposureReadbackUs")
+    gain = metadata.get("GainReadback")
+    auto_mode = metadata.get("AutoExposureMode")
+    auto_enabled = metadata.get("SDKAutoExposureEnabled")
+    auto_target = metadata.get(
+        "SDKAutoExposureTargetReadback", metadata.get("SDKAutoExposureTarget")
+    )
+    values = {
+        "camera_exposure_us": exposure,
+        "camera_gain": gain,
+        "auto_exposure_enabled": auto_enabled,
+        "auto_exposure_mode": auto_mode,
+        "auto_exposure_target": auto_target,
+        "sensor_bit_depth": metadata.get("SensorBitDepth"),
+        "raw_value_alignment": metadata.get("RawValueAlignment"),
+        "effective_dn_max": metadata.get("EffectiveDNMax"),
+        "camera_temperature_c": metadata.get("CameraTemperatureC"),
+        "timestamp": source.capture_timestamp or None,
+    }
+    values["availability"] = {
+        key: value is not None and value not in ("", "unknown")
+        for key, value in values.items()
+        if key != "timestamp"
+    }
+    values["source"] = "CameraController.capture_metadata"
+    values["controller_metadata"] = metadata
+    return values

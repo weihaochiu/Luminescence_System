@@ -1459,6 +1459,32 @@ class CameraController(QObject):
         current = self._read_current_exposure(self._camera)
         return current if current is not None else (0, 0)
 
+    def restore_exposure_state(self, state: dict[str, Any]) -> None:
+        """Restore a previously captured exposure/gain/SDK-AE state in owner thread."""
+
+        if self._camera is None:
+            return
+        exposure = state.get("ExposureReadbackUs")
+        gain = state.get("GainReadback")
+        mode = str(state.get("AutoExposureMode") or SDKAutoExposureMode.MANUAL.value)
+        self._disable_sdk_auto_exposure(require_readback=True)
+        if exposure is not None:
+            self._camera.put_ExpoTime(int(exposure))
+        if gain is not None:
+            self._camera.put_ExpoAGain(int(gain))
+        if mode == SDKAutoExposureMode.CONTINUOUS.value:
+            self._continuous_auto_exposure_requested = True
+            self._configure_sdk_auto_exposure_parameters(self._camera)
+            self._enable_sdk_auto_exposure(SDKAutoExposureMode.CONTINUOUS)
+        elif mode == SDKAutoExposureMode.ONCE.value:
+            self._continuous_auto_exposure_requested = False
+            self._configure_sdk_auto_exposure_parameters(self._camera)
+            self._enable_sdk_auto_exposure(SDKAutoExposureMode.ONCE)
+        else:
+            self._continuous_auto_exposure_requested = False
+            self._disable_sdk_auto_exposure(require_readback=True)
+        self._emit_exposure()
+
     def capture_metadata(self) -> dict[str, Any]:
         """Stable identity/format fields for a frame already pulled by this controller."""
 
@@ -1603,6 +1629,12 @@ class CameraController(QObject):
             "AutoExposureMaxGain": (
                 self._auto_exposure_range[3] if self._auto_exposure_range else None
             ),
+            "ExposureMinUs": self._exposure_range[0] if self._exposure_range else None,
+            "ExposureMaxUs": self._exposure_range[1] if self._exposure_range else None,
+            "ExposureDefaultUs": self._exposure_range[2] if self._exposure_range else None,
+            "GainMin": self._gain_range[0] if self._gain_range else None,
+            "GainMax": self._gain_range[1] if self._gain_range else None,
+            "GainDefault": self._gain_range[2] if self._gain_range else None,
             "ExposureReadbackUs": current[0] if current is not None else None,
             "GainReadback": current[1] if current is not None else None,
         }

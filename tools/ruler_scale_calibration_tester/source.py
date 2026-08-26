@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +17,7 @@ class AnalysisSource:
     filename: str = ""
     display_name: str = ""
     capture_timestamp: str = ""
+    acquisition_metadata: dict[str, object] = field(default_factory=dict)
 
 
 class FrameCaptureState:
@@ -40,6 +41,7 @@ class FrameCaptureState:
         device_name: str,
         *,
         captured_at: str | None = None,
+        acquisition_metadata: dict[str, object] | None = None,
     ) -> tuple[np.ndarray, AnalysisSource]:
         if self.latest_frame is None or self.latest_sequence is None:
             raise ValueError("No camera frame is available")
@@ -56,6 +58,7 @@ class FrameCaptureState:
                 sequence=sequence,
             ),
             capture_timestamp=timestamp,
+            acquisition_metadata=dict(acquisition_metadata or {}),
         )
         self.captured_frame = self.latest_frame.copy()
         self.captured_source = source

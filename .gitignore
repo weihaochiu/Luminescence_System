@@ -4,8 +4,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
-/local/generated/
-/local/datasets/
-/local/ocr_cache/
-/local/ruler_capture_history/
+/local/
 /ruler/

@@ -25,12 +25,14 @@ class _PendingCapture:
     minimum_sequence: int = 0
     actual_exposure_us: int = 0
     actual_gain_percent: int = 0
+    accept_actual_readback: bool = False
 
 
 class CameraCaptureBridge(QObject):
     """Use the next formal pull-mode frame; never starts a second camera stream."""
 
     configure_requested = Signal(int, int, int)
+    restore_requested = Signal(object, object, object)
 
     def __init__(self, controller: CameraController, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -40,6 +42,7 @@ class CameraCaptureBridge(QObject):
         self._token = 0
         self._fallback_sequence = 0
         self.configure_requested.connect(self._configure)
+        self.restore_requested.connect(self._restore_state)
         scientific = getattr(controller, "scientific_frame_ready", None)
         if scientific is not None:
             scientific.connect(self._on_scientific_frame)
@@ -59,13 +62,20 @@ class CameraCaptureBridge(QObject):
         gain_percent: int,
         timeout_s: float,
         check_cancel: Callable[[], None],
+        *,
+        accept_actual_readback: bool = False,
     ) -> CapturedFrame:
         with self._lock:
             if self._pending is not None:
                 raise RuntimeError("A camera capture request is already pending")
             self._token += 1
             baseline = int(getattr(self.controller, "frame_sequence", self._fallback_sequence))
-            pending = _PendingCapture(self._token, Event(), minimum_sequence=baseline + 1)
+            pending = _PendingCapture(
+                self._token,
+                Event(),
+                minimum_sequence=baseline + 1,
+                accept_actual_readback=bool(accept_actual_readback),
+            )
             self._pending = pending
         self.configure_requested.emit(
             round(float(exposure_ms) * 1000.0), int(gain_percent), pending.token
@@ -88,6 +98,34 @@ class CameraCaptureBridge(QObject):
                 if self._pending is pending:
                     self._pending = None
 
+    def restore_state(self, state: dict[str, object], timeout_s: float = 5.0) -> None:
+        """Synchronously request state restoration on the CameraController owner thread."""
+
+        completed = Event()
+        response: dict[str, str] = {}
+        self.restore_requested.emit(dict(state), completed, response)
+        if not completed.wait(max(0.1, float(timeout_s))):
+            raise TimeoutError("Camera state restoration timed out")
+        if response.get("error"):
+            raise RuntimeError(response["error"])
+
+    @Slot(object, object, object)
+    def _restore_state(
+        self,
+        state: object,
+        completed: object,
+        response: object,
+    ) -> None:
+        try:
+            if isinstance(state, dict):
+                self.controller.restore_exposure_state(state)
+        except Exception as exc:
+            if isinstance(response, dict):
+                response["error"] = str(exc)
+        finally:
+            if isinstance(completed, Event):
+                completed.set()
+
     @Slot(int, int, int)
     def _configure(self, exposure_us: int, gain_percent: int, token: int) -> None:
         with self._lock:
@@ -101,7 +139,10 @@ class CameraCaptureBridge(QObject):
         try:
             self.controller.set_manual_exposure(exposure_us, gain_percent)
             actual_exposure, actual_gain = self.controller.current_exposure()
-            if actual_exposure != exposure_us or actual_gain != gain_percent:
+            if (
+                not pending.accept_actual_readback
+                and (actual_exposure != exposure_us or actual_gain != gain_percent)
+            ):
                 raise RuntimeError(
                     "Camera Exposure/Gain readback mismatch: "
                     f"requested={exposure_us} us/{gain_percent}%, "

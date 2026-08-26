@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import numpy as np
@@ -9,6 +10,7 @@ from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
+    QCheckBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -29,14 +31,22 @@ from core.calibration import CalibrationResult, CalibrationService, Verification
 from core.calibration.image_utils import normalize_to_uint8
 from core.i18n import tr
 from gui.camera_controller import CameraController
+from gui.camera_capture_bridge import CameraCaptureBridge
 
 from .capture_history import (
     AnalysisOutcome,
     CaptureHistoryStore,
+    PROJECT_ROOT,
     analyze_camera_capture,
 )
 from .image_loader import load_image
 from .repeatability import DuplicateSourceError, RepeatabilitySession
+from .ruler_auto_exposure import (
+    CameraCaptureBridgeRulerAdapter,
+    RulerAEAttemptRecord,
+    RulerAutoExposureOutcome,
+    RulerAutoExposureRunner,
+)
 from .source import AnalysisSource, FrameCaptureState
 
 
@@ -150,6 +160,33 @@ class AnalysisWorker(QObject):
         )))
 
 
+class RulerAutoExposureWorker(QObject):
+    finished = Signal(object)
+    progress = Signal(object)
+
+    def __init__(
+        self,
+        runner: RulerAutoExposureRunner,
+        adapter: CameraCaptureBridgeRulerAdapter,
+        device_name: str,
+        cancel_event: Event,
+    ) -> None:
+        super().__init__()
+        self.runner = runner
+        self.adapter = adapter
+        self.device_name = device_name
+        self.cancel_event = cancel_event
+
+    @Slot()
+    def run(self) -> None:
+        self.finished.emit(self.runner.run(
+            self.adapter,
+            self.device_name,
+            self.cancel_event,
+            self.progress.emit,
+        ))
+
+
 class RulerScaleTesterWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -158,6 +195,7 @@ class RulerScaleTesterWindow(QMainWindow):
         self.setMinimumSize(960, 650)
         self.service = CalibrationService()
         self.controller = CameraController(self)
+        self._camera_bridge = CameraCaptureBridge(self.controller, self)
         self.devices: list[Any] = []
         self._frame_state = FrameCaptureState()
         self._current_input: np.ndarray | None = None
@@ -165,6 +203,10 @@ class RulerScaleTesterWindow(QMainWindow):
         self._current_result: CalibrationResult | None = None
         self._analysis_thread: QThread | None = None
         self._analysis_worker: AnalysisWorker | None = None
+        self._ruler_ae_thread: QThread | None = None
+        self._ruler_ae_worker: RulerAutoExposureWorker | None = None
+        self._ruler_ae_cancel = Event()
+        self._ruler_ae_original_state: dict[str, object] | None = None
         self._repeatability_session = RepeatabilitySession()
         self._capture_history = CaptureHistoryStore()
         self._image_labels: dict[str, ImageLabel] = {}
@@ -189,11 +231,15 @@ class RulerScaleTesterWindow(QMainWindow):
         self.connect_button = QPushButton(tr("calibration.tester.connect_camera"))
         self.disconnect_button = QPushButton(tr("common.disconnect"))
         self.capture_button = QPushButton(tr("calibration.tester.capture_analyze"))
+        self.ruler_ae_enabled = QCheckBox(tr("calibration.tester.ruler_ae_enabled"))
+        self.ruler_ae_cancel_button = QPushButton(tr("calibration.tester.ruler_ae_cancel"))
         self.load_button = QPushButton(tr("calibration.tester.load_image"))
         self.analyze_button = QPushButton(tr("calibration.tester.analyze_again"))
         self.save_debug_button = QPushButton(tr("calibration.tester.save_debug"))
         controls.addWidget(self.input_mode, 0, 0, 1, 2)
         controls.addWidget(self.camera_combo, 0, 2, 1, 2)
+        controls.addWidget(self.ruler_ae_enabled, 0, 4, 1, 2)
+        controls.addWidget(self.ruler_ae_cancel_button, 0, 6)
         for column, button in enumerate(
             (
                 self.refresh_button,
@@ -250,6 +296,23 @@ class RulerScaleTesterWindow(QMainWindow):
             form.addRow(tr(title), label)
             self._result_labels[key] = label
         diagnostics_layout.addWidget(result_group)
+        ae_group = QGroupBox(tr("calibration.tester.ruler_ae_group"))
+        ae_form = QFormLayout(ae_group)
+        self.ruler_ae_status_labels: dict[str, QLabel] = {}
+        for key, title in (
+            ("exposure", "calibration.tester.ruler_ae_exposure"),
+            ("gain", "calibration.tester.ruler_ae_gain"),
+            ("attempt", "calibration.tester.ruler_ae_attempt"),
+            ("ruler_sat", "calibration.tester.ruler_ae_ruler_sat"),
+            ("tick_sat", "calibration.tester.ruler_ae_tick_sat"),
+            ("michelson", "calibration.tester.ruler_ae_michelson"),
+            ("decision", "calibration.tester.ruler_ae_decision"),
+        ):
+            label = QLabel("—")
+            label.setWordWrap(True)
+            ae_form.addRow(tr(title), label)
+            self.ruler_ae_status_labels[key] = label
+        diagnostics_layout.addWidget(ae_group)
         self.ocr_status = QLabel()
         self.ocr_status.setWordWrap(True)
         diagnostics_layout.addWidget(self.ocr_status)
@@ -288,6 +351,7 @@ class RulerScaleTesterWindow(QMainWindow):
         self.connect_button.clicked.connect(self.connect_camera)
         self.disconnect_button.clicked.connect(self.disconnect_camera)
         self.capture_button.clicked.connect(self.capture_and_analyze)
+        self.ruler_ae_cancel_button.clicked.connect(self.cancel_ruler_auto_exposure)
         self.load_button.clicked.connect(self.load_image_file)
         self.analyze_button.clicked.connect(self.analyze_again)
         self.save_debug_button.clicked.connect(self.save_debug_package)
@@ -297,6 +361,7 @@ class RulerScaleTesterWindow(QMainWindow):
         self.open_history_button.clicked.connect(self.open_capture_history_folder)
         self.disconnect_button.setEnabled(False)
         self.capture_button.setEnabled(False)
+        self.ruler_ae_cancel_button.setEnabled(False)
         self.analyze_button.setEnabled(False)
         self.save_debug_button.setEnabled(False)
         self.add_repeatability_button.setEnabled(False)
@@ -370,7 +435,9 @@ class RulerScaleTesterWindow(QMainWindow):
             self.status.setText(tr("calibration.tester.frame_shape_rejected", shape=array.shape))
             return
         self._frame_state.update_live(array, sequence)
-        self.capture_button.setEnabled(self._analysis_thread is None)
+        self.capture_button.setEnabled(
+            self._analysis_thread is None and self._ruler_ae_thread is None
+        )
         self.input_mode.setText(tr("calibration.tester.input_live_frame", sequence=sequence))
         self._image_labels["live_view"].set_qimage(preview)
 
@@ -384,9 +451,14 @@ class RulerScaleTesterWindow(QMainWindow):
         if self._frame_state.latest_frame is None:
             self.status.setText(tr("calibration.tester.no_camera_frame"))
             return
+        if self.ruler_ae_enabled.isChecked():
+            self._start_ruler_auto_exposure()
+            return
         try:
+            metadata = self._camera_acquisition_metadata()
             self._current_input, self._current_source = self._frame_state.capture_camera(
-                self.controller.device_name
+                self.controller.device_name,
+                acquisition_metadata=metadata,
             )
         except ValueError as exc:
             self.status.setText(str(exc))
@@ -397,6 +469,133 @@ class RulerScaleTesterWindow(QMainWindow):
             source=self._current_source.display_name,
         ))
         self._start_analysis()
+
+    def _camera_acquisition_metadata(self) -> dict[str, object]:
+        metadata = dict(self.controller.capture_metadata())
+        temperature = None
+        try:
+            temperature = self.controller.read_temperature_c()
+        except Exception:
+            pass
+        metadata["CameraTemperatureC"] = temperature
+        return metadata
+
+    def _start_ruler_auto_exposure(self) -> None:
+        if self._ruler_ae_thread is not None or not self.controller.is_open:
+            return
+        try:
+            original_state = self._camera_acquisition_metadata()
+        except Exception as exc:
+            self.status.setText(str(exc))
+            return
+        self._ruler_ae_original_state = original_state
+        self._ruler_ae_cancel.clear()
+        runner = RulerAutoExposureRunner(self.service, self._capture_history)
+        adapter = CameraCaptureBridgeRulerAdapter(
+            self._camera_bridge,
+            original_state,
+        )
+        thread = QThread(self)
+        worker = RulerAutoExposureWorker(
+            runner,
+            adapter,
+            self.controller.device_name,
+            self._ruler_ae_cancel,
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_ruler_ae_finished)
+        worker.progress.connect(self._on_ruler_ae_progress)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._ruler_ae_thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._ruler_ae_thread = thread
+        self._ruler_ae_worker = worker
+        self._set_analysis_controls(False)
+        self.ruler_ae_cancel_button.setEnabled(True)
+        self.status.setText(tr("calibration.tester.ruler_ae_running"))
+        thread.start()
+
+    @Slot()
+    def cancel_ruler_auto_exposure(self) -> None:
+        if self._ruler_ae_thread is None:
+            return
+        self._ruler_ae_cancel.set()
+        self.ruler_ae_cancel_button.setEnabled(False)
+        self.status.setText(tr("calibration.tester.ruler_ae_cancelling"))
+
+    @Slot(object)
+    def _on_ruler_ae_progress(self, payload: object) -> None:
+        if isinstance(payload, RulerAEAttemptRecord):
+            self._show_ruler_ae_attempt(payload)
+
+    def _show_ruler_ae_attempt(self, attempt: RulerAEAttemptRecord) -> None:
+        self.ruler_ae_status_labels["exposure"].setText(
+            "—" if attempt.actual_exposure_us is None else tr(
+                "calibration.tester.ruler_ae_exposure_value",
+                value=attempt.actual_exposure_us,
+            )
+        )
+        self.ruler_ae_status_labels["gain"].setText(
+            "—" if attempt.actual_gain is None else str(attempt.actual_gain)
+        )
+        self.ruler_ae_status_labels["attempt"].setText(str(attempt.attempt_index))
+        self.ruler_ae_status_labels["ruler_sat"].setText(
+            _format_percent(attempt.ruler_roi_saturation_fraction)
+        )
+        self.ruler_ae_status_labels["tick_sat"].setText(
+            _format_percent(attempt.tick_band_saturation_fraction)
+        )
+        self.ruler_ae_status_labels["michelson"].setText(
+            "—" if attempt.michelson_tick_contrast is None else f"{attempt.michelson_tick_contrast:.3f}"
+        )
+        self.ruler_ae_status_labels["decision"].setText(
+            tr(
+                "calibration.tester.ruler_ae_decision_value",
+                decision=attempt.decision,
+                reason=attempt.decision_reason,
+            )
+        )
+
+    @Slot(object)
+    def _on_ruler_ae_finished(self, payload: object) -> None:
+        if not isinstance(payload, RulerAutoExposureOutcome):
+            self.status.setText(tr("calibration.tester.invalid_result"))
+            return
+        self._current_result = payload.result
+        if payload.result.raw_input is not None:
+            self._current_input = np.asarray(payload.result.raw_input).copy()
+            self._image_labels["captured"].set_array(self._current_input)
+        for name, image in payload.result.debug_images.items():
+            label = self._image_labels.get(name)
+            if label is not None:
+                label.set_array(image)
+        self._show_result(payload.result)
+        self.save_debug_button.setEnabled(bool(payload.result.debug_images))
+        self.add_repeatability_button.setEnabled(
+            payload.result.success
+            and payload.result.verification_mode
+            in {
+                VerificationMode.TICK_HIERARCHY_VERIFIED.value,
+                VerificationMode.OCR_VERIFIED.value,
+            }
+        )
+        if payload.attempts:
+            self._show_ruler_ae_attempt(payload.attempts[-1])
+        if payload.history_stats is not None:
+            self._update_capture_history(payload.history_stats)
+        self.status.setText(
+            tr("calibration.tester.ruler_ae_completed", result="PASS" if payload.success else "FAIL", reason=payload.reason)
+        )
+
+    @Slot()
+    def _ruler_ae_thread_finished(self) -> None:
+        self._ruler_ae_thread = None
+        self._ruler_ae_worker = None
+        self._ruler_ae_original_state = None
+        self.ruler_ae_cancel_button.setEnabled(False)
+        self._set_analysis_controls(True)
 
     @Slot()
     def load_image_file(self) -> None:
@@ -508,6 +707,7 @@ class RulerScaleTesterWindow(QMainWindow):
         self.capture_button.setEnabled(
             enabled and self.controller.is_open and self._frame_state.latest_frame is not None
         )
+        self.ruler_ae_enabled.setEnabled(enabled)
 
     def _show_result(self, result: CalibrationResult) -> None:
         numbers = []
@@ -584,7 +784,7 @@ class RulerScaleTesterWindow(QMainWindow):
     def save_debug_package(self) -> None:
         if self._current_result is None:
             return
-        default_root = str((Path.cwd() / "local" / "generated" / "debug").resolve())
+        default_root = str((PROJECT_ROOT / "local" / "generated" / "debug").resolve())
         root = QFileDialog.getExistingDirectory(self, "Select debug package parent directory", default_root)
         if not root:
             return
@@ -689,7 +889,19 @@ class RulerScaleTesterWindow(QMainWindow):
             )
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._ruler_ae_thread is not None and self._ruler_ae_thread.isRunning():
+            self._ruler_ae_cancel.set()
+            if self._ruler_ae_original_state is not None and self.controller.is_open:
+                try:
+                    self.controller.restore_exposure_state(self._ruler_ae_original_state)
+                except Exception:
+                    LOG.exception("Failed to restore ruler AE state during close")
         self.controller.close_camera()
+        if self._ruler_ae_thread is not None and self._ruler_ae_thread.isRunning():
+            if not self._ruler_ae_thread.wait(5000):
+                self.status.setText(tr("calibration.tester.waiting_close"))
+                event.ignore()
+                return
         if self._analysis_thread is not None and self._analysis_thread.isRunning():
             if not self._analysis_thread.wait(5000):
                 self.status.setText(tr("calibration.tester.waiting_close"))
@@ -709,3 +921,7 @@ def _format_bytes(value: int) -> str:
             return f"{amount:.1f} {unit}"
         amount /= 1024.0
     return f"{amount:.1f} TiB"
+
+
+def _format_percent(value: float | None) -> str:
+    return "—" if value is None else f"{value * 100.0:.2f}%"

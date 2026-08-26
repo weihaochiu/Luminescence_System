@@ -74,6 +74,17 @@ class CaptureHistoryTests(unittest.TestCase):
             frame_sequence=4821,
             display_name="RisingCam frame 4821",
             capture_timestamp="2026-08-26T13:00:00.123+08:00",
+            acquisition_metadata={
+                "ExposureReadbackUs": 2500,
+                "GainReadback": 100,
+                "SDKAutoExposureEnabled": False,
+                "AutoExposureMode": "manual",
+                "SDKAutoExposureTargetReadback": None,
+                "SensorBitDepth": 12,
+                "RawValueAlignment": "right",
+                "EffectiveDNMax": 4095,
+                "CameraTemperatureC": None,
+            },
         )
 
     def test_pass_fail_exception_exact_uint16_manifest_and_collision(self) -> None:
@@ -108,6 +119,17 @@ class CaptureHistoryTests(unittest.TestCase):
             self.assertEqual(65535, passed_json["input_max"])
             self.assertEqual("capture-history-test", passed_json["algorithm_version"])
             self.assertTrue((passed.capture_directory / "final_overlay.png").is_file())
+            acquisition = passed_json["camera_acquisition"]
+            self.assertEqual(2500, acquisition["camera_exposure_us"])
+            self.assertEqual(100, acquisition["camera_gain"])
+            self.assertFalse(acquisition["auto_exposure_enabled"])
+            self.assertEqual("manual", acquisition["auto_exposure_mode"])
+            self.assertIsNone(acquisition["auto_exposure_target"])
+            self.assertEqual(12, acquisition["sensor_bit_depth"])
+            self.assertEqual("right", acquisition["raw_value_alignment"])
+            self.assertEqual(4095, acquisition["effective_dn_max"])
+            self.assertIsNone(acquisition["camera_temperature_c"])
+            self.assertFalse(acquisition["availability"]["camera_temperature_c"])
 
             failed_json = json.loads(
                 (failed.capture_directory / "result.json").read_text(encoding="utf-8")
@@ -128,7 +150,45 @@ class CaptureHistoryTests(unittest.TestCase):
                 rows = list(csv.DictReader(stream))
             self.assertEqual(3, len(rows))
             self.assertEqual(["PASS", "FAIL", "FAIL"], [row["result"] for row in rows])
+            self.assertEqual(
+                str(passed.capture_directory.resolve()), rows[0]["directory"]
+            )
             self.assertEqual(3, store.statistics().count)
+
+    def test_default_history_root_is_project_anchored(self) -> None:
+        root = CaptureHistoryStore().root
+        self.assertTrue(root.is_absolute())
+        self.assertEqual("ruler_capture_history", root.name)
+        self.assertEqual("local", root.parent.name)
+
+    def test_unavailable_camera_metadata_is_explicit_null(self) -> None:
+        source = AnalysisSource(
+            source_type="camera",
+            source_identity="camera|unknown",
+            frame_sequence=1,
+            display_name="Unknown camera",
+            capture_timestamp="2026-08-26T13:00:00.123+08:00",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            store = CaptureHistoryStore(Path(directory) / "history")
+            pending = store.begin_capture(np.zeros((2, 3), dtype=np.uint16), source)
+            payload = json.loads(
+                (pending.directory / "result.json").read_text(encoding="utf-8")
+            )["camera_acquisition"]
+        for key in (
+            "camera_exposure_us",
+            "camera_gain",
+            "auto_exposure_enabled",
+            "auto_exposure_mode",
+            "auto_exposure_target",
+            "sensor_bit_depth",
+            "raw_value_alignment",
+            "effective_dn_max",
+            "camera_temperature_c",
+        ):
+            self.assertIn(key, payload)
+            self.assertIsNone(payload[key])
+            self.assertFalse(payload["availability"][key])
 
 
 if __name__ == "__main__":
