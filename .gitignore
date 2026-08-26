@@ -7,3 +7,4 @@ venv/
 /local/generated/
 /local/datasets/
 /local/ocr_cache/
+/ruler/

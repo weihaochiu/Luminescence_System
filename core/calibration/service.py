@@ -96,8 +96,18 @@ class CalibrationService:
                 "original_preview": to_bgr(raw_input),
                 "normalized": detection_artifacts.normalized,
                 "edges": detection_artifacts.edges,
+                "bright_component_mask": detection_artifacts.bright_component_mask,
                 "ruler_candidates": detection_artifacts.candidates_overlay,
             })
+            detection_diagnostics = {
+                "ruler_candidate_count": detection_artifacts.candidate_count,
+                "ruler_selected_method": detection_artifacts.selected_method,
+                "ruler_selected_score": detection_artifacts.selected_score,
+                "tick_comb_axis_angle_deg": detection_artifacts.tick_comb_axis_angle_deg,
+                "tick_comb_support": detection_artifacts.tick_comb_support,
+                "orientation_disagreement_deg": detection_artifacts.orientation_disagreement_deg,
+            }
+            result.diagnostics.update(detection_diagnostics)
             if not detection.success:
                 result.failure_reasons.append("ruler_not_found")
                 result.debug_images["final_overlay"] = draw_final_overlay(raw_input, result, None)
@@ -112,6 +122,32 @@ class CalibrationService:
                 return result
             result.debug_images["rectified"] = rectification.image
             result.debug_images["ruler_roi"] = self._ruler_roi(gray, detection.polygon)
+            rectified_quality = self._image_quality(rectification.image)
+            result.diagnostics.update({
+                **rectified_quality,
+                "input_source": input_source,
+                "rectified_resolution": list(rectification.output_size),
+            })
+            if (
+                rectified_quality["rectified_saturated_fraction"]
+                > self.config.max_rectified_saturated_fraction
+            ):
+                result.failure_reasons.append("ruler_glare_or_saturation")
+                result.debug_images["final_overlay"] = draw_final_overlay(
+                    raw_input, result, rectification
+                )
+                self._finish_log(result, started, input_source)
+                return result
+            if (
+                rectified_quality["rectified_blur_laplacian_variance"]
+                < self.config.min_rectified_blur_laplacian_variance
+            ):
+                result.failure_reasons.append("image_too_blurry_for_scale_calibration")
+                result.debug_images["final_overlay"] = draw_final_overlay(
+                    raw_input, result, rectification
+                )
+                self._finish_log(result, started, input_source)
+                return result
 
             tick_result = self.tick_detector.detect(rectification)
             result.debug_images["threshold"] = tick_result.threshold
@@ -139,6 +175,8 @@ class CalibrationService:
             solved.raw_input = raw_input
             solved.debug_images = result.debug_images
             solved.diagnostics.update({
+                **detection_diagnostics,
+                **rectified_quality,
                 "input_source": input_source,
                 "tick_candidate_count": tick_result.candidate_count,
                 "rectified_resolution": list(rectification.output_size),
@@ -221,15 +259,41 @@ class CalibrationService:
         return gray[y : min(gray.shape[0], y + height), x : min(gray.shape[1], x + width)].copy()
 
     @staticmethod
+    def _image_quality(gray: np.ndarray) -> dict[str, float]:
+        array = np.asarray(gray)
+        normalized = (
+            np.ascontiguousarray(array)
+            if array.dtype == np.uint8
+            else normalize_to_uint8(array)
+        )
+        return {
+            "rectified_blur_laplacian_variance": float(
+                cv2.Laplacian(normalized, cv2.CV_32F).var()
+            ),
+            "rectified_saturated_fraction": float(np.mean(normalized >= 253)),
+        }
+
+    @staticmethod
     def _finish_log(result: CalibrationResult, started: float, input_source: str) -> None:
         LOG.info(
             "Ruler calibration analysis end source=%s elapsed_ms=%.1f angle=%s "
+            "candidate_count=%s selected_method=%s selected_score=%s "
+            "tick_comb_angle=%s orientation_disagreement=%s rectified_resolution=%s "
+            "tick_candidates=%s accepted_ticks=%s "
             "ocr_raw=%s ocr_accepted=%s major_ticks=%s minor_ticks=%s rejected_ticks=%s "
             "pixels_per_mm=%s um_per_pixel=%s fit_rmse_px=%s fit_error_percent=%s "
             "quality=%s failure_reasons=%s",
             input_source,
             (monotonic() - started) * 1000.0,
             result.ruler_angle_deg,
+            result.diagnostics.get("ruler_candidate_count"),
+            result.diagnostics.get("ruler_selected_method"),
+            result.diagnostics.get("ruler_selected_score"),
+            result.diagnostics.get("tick_comb_axis_angle_deg"),
+            result.diagnostics.get("orientation_disagreement_deg"),
+            result.diagnostics.get("rectified_resolution"),
+            result.diagnostics.get("tick_candidate_count"),
+            len(result.detected_major_ticks) + len(result.detected_minor_ticks),
             [item.raw_text for item in result.detected_numbers],
             [item.corrected_value if item.corrected_value is not None else item.value for item in result.detected_numbers if item.accepted],
             len(result.detected_major_ticks),

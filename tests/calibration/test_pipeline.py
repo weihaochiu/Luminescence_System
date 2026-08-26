@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,7 @@ from core.calibration.image_utils import axis_angle_error
 from core.calibration.ruler_detector import RulerDetector
 from core.calibration.service import CalibrationService
 from tools.ruler_scale_calibration_tester.batch import run_batch
+from tools.ruler_scale_calibration_tester.image_loader import load_image
 
 from .helpers import synthetic_ruler
 
@@ -42,6 +44,23 @@ class CalibrationPipelineTests(unittest.TestCase):
         self.assertIn("ruler_not_found", result.failure_reasons)
         self.assertIn("final_overlay", result.debug_images)
 
+    def test_border_touching_partial_ruler_uses_full_bright_component(self) -> None:
+        image = np.full((500, 500), 35, dtype=np.uint8)
+        cv2.rectangle(image, (50, 130), (499, 370), 210, -1)
+        cv2.rectangle(image, (50, 130), (499, 370), 245, 3)
+        for index, x in enumerate(range(60, 500, 20)):
+            endpoint = 205 if index % 10 == 0 else (185 if index % 5 == 0 else 165)
+            cv2.line(image, (x, 130), (x, endpoint), 20, 3)
+        cv2.rectangle(image, (160, 260), (470, 310), 155, -1)
+        detector = RulerDetector()
+        for expected_angle, sample in ((0.0, image), (90.0, np.rot90(image))):
+            with self.subTest(angle=expected_angle):
+                detection, artifacts = detector.detect(sample)
+                self.assertTrue(detection.success, detection)
+                self.assertLessEqual(axis_angle_error(detection.angle_deg, expected_angle), 1.0)
+                self.assertEqual("bright_component", artifacts.selected_method)
+                self.assertGreaterEqual(artifacts.candidate_count, 1)
+
     def test_mild_perspective_is_rectified_and_fitted_in_original_plane(self) -> None:
         source = np.float32(((0, 0), (999, 0), (999, 699), (0, 699)))
         destination = np.float32(((8, 4), (991, 0), (999, 699), (0, 692)))
@@ -62,6 +81,19 @@ class CalibrationPipelineTests(unittest.TestCase):
         result = self.service.analyze(image)
         self.assertFalse(result.success)
         self.assertTrue(result.failure_reasons)
+
+    def test_severely_blurred_ruler_has_explicit_failure(self) -> None:
+        blurred = cv2.GaussianBlur(synthetic_ruler(), (81, 81), 20)
+        result = self.service.analyze(blurred)
+        self.assertFalse(result.success)
+        self.assertIn("image_too_blurry_for_scale_calibration", result.failure_reasons)
+
+    def test_saturated_ruler_roi_has_explicit_failure(self) -> None:
+        image = np.full((500, 800), 30, dtype=np.uint8)
+        image[150:350, 50:750] = 255
+        result = self.service.analyze(image)
+        self.assertFalse(result.success)
+        self.assertIn("ruler_glare_or_saturation", result.failure_reasons)
 
     def test_ocr_unavailable_is_explicit_but_geometry_can_pass(self) -> None:
         result = self.service.analyze(synthetic_ruler())
@@ -119,6 +151,24 @@ class CalibrationPipelineTests(unittest.TestCase):
             self.assertEqual(1, summary["images"])
             self.assertEqual(1, summary["ruler_detected"])
             self.assertEqual(1, summary["calibration_successful"])
+
+    def test_lzw_tiff_uses_pillow_when_tifffile_codec_is_unavailable(self) -> None:
+        from PIL import Image
+
+        rgb = np.zeros((18, 24, 3), dtype=np.uint8)
+        rgb[..., 0] = 11
+        rgb[..., 1] = 22
+        rgb[..., 2] = 33
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "compressed.tif"
+            Image.fromarray(rgb, mode="RGB").save(path, compression="tiff_lzw")
+            with mock.patch(
+                "tools.ruler_scale_calibration_tester.image_loader.tifffile.imread",
+                side_effect=ValueError("LZW requires the imagecodecs package"),
+            ):
+                loaded = load_image(path)
+        self.assertEqual((18, 24, 3), loaded.shape)
+        self.assertEqual([33, 22, 11], loaded[0, 0].tolist())
 
 
 if __name__ == "__main__":

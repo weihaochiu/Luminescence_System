@@ -56,7 +56,7 @@ class TickDetector:
         candidates.extend(
             self._band_candidates(vertical[height - band_height :], height - band_height, height, "bottom")
         )
-        merged = self._merge_candidates(candidates)
+        merged = self._merge_candidates(candidates, height)
         lengths = np.asarray([item[1] for item in merged], dtype=np.float64)
         major_cut = float(np.percentile(lengths, 82)) if lengths.size else float("inf")
         medium_cut = float(np.percentile(lengths, 58)) if lengths.size else float("inf")
@@ -105,14 +105,20 @@ class TickDetector:
         return candidates
 
     def _merge_candidates(
-        self, candidates: list[tuple[float, float, float]]
+        self,
+        candidates: list[tuple[float, float, float]],
+        full_height: int,
     ) -> list[tuple[float, float, float]]:
         if not candidates:
             return []
         ordered = sorted(candidates, key=lambda item: item[0])
         groups: list[list[tuple[float, float, float]]] = [[ordered[0]]]
+        merge_distance = max(
+            self.config.tick_merge_distance_px,
+            full_height * self.config.tick_merge_distance_height_fraction,
+        )
         for candidate in ordered[1:]:
-            if candidate[0] - groups[-1][-1][0] <= self.config.tick_merge_distance_px:
+            if candidate[0] - groups[-1][-1][0] <= merge_distance:
                 groups[-1].append(candidate)
             else:
                 groups.append([candidate])

@@ -17,7 +17,13 @@ def load_image(path: str | Path) -> np.ndarray:
     if suffix not in SUPPORTED_SUFFIXES:
         raise ValueError(f"Unsupported image format: {source.suffix}")
     if suffix in {".tif", ".tiff"}:
-        array = np.asarray(tifffile.imread(source))
+        try:
+            array = np.asarray(tifffile.imread(source))
+        except ValueError as exc:
+            if "imagecodecs" not in str(exc).casefold():
+                raise
+            with Image.open(source) as image:
+                array = np.asarray(image.copy())
     else:
         with Image.open(source) as image:
             array = np.asarray(image.copy())

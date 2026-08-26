@@ -72,6 +72,10 @@ the installed Pillow/tifffile versions. One image is required; unsupported
 stacks or dimensions are rejected explicitly. **Analyze Again** repeats the
 current input without reloading it.
 
+TIFF normally uses `tifffile`. If an LZW-compressed single image needs the
+optional `imagecodecs` package and that package is absent, Image File mode falls
+back to Pillow's decoder. It does not install a codec or change system Python.
+
 ## 5. Ruler placement
 
 - Use a metal ruler with visible 1 mm ticks and cm numbers.
@@ -114,9 +118,13 @@ changes, recompute the scale and bar length for that image plane.
 
 ## 7. Algorithm and overlay
 
-Ruler detection combines elongated contour geometry, rectangularity, long-edge
-support, occupied area, contrast, and a local tick-periodicity cue. A single
-Hough line is never treated as sufficient evidence.
+Ruler detection combines elongated contour geometry with a bright connected-body
+candidate, rectangularity, long-edge support, occupied area, contrast, and a
+local tick-periodicity cue. A border-touching partial ruler may use a lower visible
+aspect ratio only when its area, rectangularity, and tick evidence all pass. A
+single Hough line is never treated as sufficient evidence. The independently
+estimated tick-comb axis and its disagreement with the selected long axis are
+recorded in diagnostics.
 
 The polygon is perspective-warped into a horizontal ROI. Tick detection examines
 both edge bands, removes the long ruler border, collects many perpendicular marks,
@@ -227,6 +235,22 @@ The command recursively finds PNG/JPEG/TIFF images and reports image count,
 ruler detections, usable OCR, successful calibration, mean pixels/mm, sample SD,
 CV, and categorized failure reasons. It returns nonzero when any image fails,
 making it suitable for regression automation.
+
+For a detailed local-only dataset audit, use:
+
+```powershell
+.\.venv\Scripts\python.exe -m tools.ruler_scale_calibration_tester.analyze_real_dataset dataset --output local\generated\ruler_real_dataset
+```
+
+This writes `results.csv`, `results.json`, `summary.txt`, a contact sheet, and
+per-image debug artifacts. An optional `ground_truth.csv` beside the images may
+contain `filename,roi_correct,notes`; its ROI review prevents a numerically
+successful but visibly wrong candidate from being counted as correct.
+
+The repository-local `/ruler/` directory is explicitly ignored. Real images,
+sidecars, manual ground truth, generated overlays, crops, and reports must remain
+under ignored `ruler/` or `local/generated/` paths and must never be staged,
+committed, copied into tests, or embedded in source/documentation.
 
 ## 12. Repeatability mode
 
