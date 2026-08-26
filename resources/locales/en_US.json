@@ -930,5 +930,11 @@
   "calibration.tester.repeat_min": "Min: {value} px/mm",
   "calibration.tester.repeat_max": "Max: {value} px/mm",
   "calibration.tester.repeat_deviation": "Max deviation: {value} %",
-  "calibration.tester.repeat_no_threshold": "No acceptance threshold is asserted in this engineering phase."
+  "calibration.tester.repeat_no_threshold": "No acceptance threshold is asserted in this engineering phase.",
+  "calibration.tester.capture_history": "Camera Capture History",
+  "calibration.tester.open_history_folder": "Open Capture History Folder",
+  "calibration.tester.capture_history_summary": "{count} capture(s), {size}\n{path}",
+  "calibration.tester.capture_saved_status": "Capture saved: {capture_id} — {result}",
+  "calibration.tester.capture_persistence_warning": "{result} — persistence warning: {error}",
+  "calibration.tester.open_history_failed": "Could not open capture history folder: {path}"
 }

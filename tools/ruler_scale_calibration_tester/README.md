@@ -65,6 +65,29 @@ Camera enumeration/open/read errors are shown as diagnostics and do not terminat
 Image File mode. The tester uses the latest independent `uint16 H×W` scientific
 frame for analysis. The grayscale QImage is only the preview.
 
+Every camera **Capture & Analyze** is persisted automatically before calibration
+starts. The worker freezes an independent scientific frame, writes its exact TIFF
+and a visualization-only PNG, then runs calibration and saves PASS, FAIL, or
+exception evidence. Image File mode is not duplicated into this history.
+
+```text
+local/ruler_capture_history/
+├─ manifest.csv
+└─ YYYYMMDD/
+   └─ YYYYMMDD_HHMMSS_mmm_frame_004821[_counter]/
+      ├─ raw_input.tiff
+      ├─ preview.png
+      ├─ result.json
+      └─ available detector/tick/OCR overlays
+```
+
+`raw_input.tiff` is written before the algorithm is called and round-trips camera
+`uint16 H×W` values exactly. `result.json` initially records `analysis_pending`,
+then is atomically replaced with the complete result. Unexpected exceptions are
+recorded as `analysis_exception`; raw and preview remain available. The UI reports
+the capture ID, history count, disk use, and folder. History is local-only and is
+never deleted automatically.
+
 ## 4. Image File mode
 
 Press **Load Image…** and select PNG, JPEG, TIFF, or TIFF variants supported by
@@ -118,13 +141,16 @@ changes, recompute the scale and bar length for that image plane.
 
 ## 7. Algorithm and overlay
 
-Ruler detection combines elongated contour geometry with a bright connected-body
-candidate, rectangularity, long-edge support, occupied area, contrast, and a
-local tick-periodicity cue. A border-touching partial ruler may use a lower visible
+Ruler detection combines contour, bright-body, long parallel edge-pair, and
+tick-comb candidates with rectangularity, long-edge support, occupied area,
+contrast, and a local tick-periodicity cue. A border-touching partial ruler may use a lower visible
 aspect ratio only when its area, rectangularity, and tick evidence all pass. A
 single Hough line is never treated as sufficient evidence. The independently
 estimated tick-comb axis and its disagreement with the selected long axis are
-recorded in diagnostics.
+recorded in diagnostics. The candidate overlay labels Top-3 hypotheses and the
+selected item; JSON keeps Top-N method, score, aspect, area, rectangularity,
+periodicity, contrast, border, edge, and tick-comb evidence. Otsu and percentile
+threshold levels/fractions are recorded for multi-scale threshold audit.
 
 The polygon is perspective-warped into a horizontal ROI. Tick detection examines
 both edge bands, removes the long ruler border, collects many perpendicular marks,
@@ -244,8 +270,11 @@ For a detailed local-only dataset audit, use:
 
 This writes `results.csv`, `results.json`, `summary.txt`, a contact sheet, and
 per-image debug artifacts. An optional `ground_truth.csv` beside the images may
-contain `filename,roi_correct,notes`; its ROI review prevents a numerically
-successful but visibly wrong candidate from being counted as correct.
+contain `filename,roi_correct,roi_status,failure_category,false_pass,wrong_scale,notes`;
+`roi_status` supports `correct`, `incorrect`, and `uncertain`. Its review prevents
+a numerically successful but visibly wrong candidate from being counted as
+correct. Reports also flag scale outliers and possible 0.5×/2×/5×/10× aliases,
+but never auto-correct them.
 
 The repository-local `/ruler/` directory is explicitly ignored. Real images,
 sidecars, manual ground truth, generated overlays, crops, and reports must remain

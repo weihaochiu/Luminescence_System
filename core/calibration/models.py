@@ -115,7 +115,7 @@ class CalibrationResult:
     captured_frame_sequence: int | None = None
     source_filename: str = ""
     coordinate_system: str = "original_image_pixels"
-    algorithm_version: str = "ruler-calibration-v3"
+    algorithm_version: str = "ruler-calibration-v4"
     scale_bar: ScaleBarSelection | None = None
     timestamp: str = ""
     debug_images: dict[str, np.ndarray] = field(

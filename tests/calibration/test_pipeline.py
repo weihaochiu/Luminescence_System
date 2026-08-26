@@ -58,7 +58,7 @@ class CalibrationPipelineTests(unittest.TestCase):
                 detection, artifacts = detector.detect(sample)
                 self.assertTrue(detection.success, detection)
                 self.assertLessEqual(axis_angle_error(detection.angle_deg, expected_angle), 1.0)
-                self.assertEqual("bright_component", artifacts.selected_method)
+                self.assertIn(artifacts.selected_method, {"bright_body", "edge_pair", "tick_comb"})
                 self.assertGreaterEqual(artifacts.candidate_count, 1)
 
     def test_mild_perspective_is_rectified_and_fitted_in_original_plane(self) -> None:

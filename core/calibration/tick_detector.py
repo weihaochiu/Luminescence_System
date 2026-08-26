@@ -56,6 +56,19 @@ class TickDetector:
         candidates.extend(
             self._band_candidates(vertical[height - band_height :], height - band_height, height, "bottom")
         )
+        candidates.extend(
+            self._slanted_band_candidates(
+                without_border[:band_height], 0, height, "top"
+            )
+        )
+        candidates.extend(
+            self._slanted_band_candidates(
+                without_border[height - band_height :],
+                height - band_height,
+                height,
+                "bottom",
+            )
+        )
         merged = self._merge_candidates(candidates, height)
         lengths = np.asarray([item[1] for item in merged], dtype=np.float64)
         major_cut = float(np.percentile(lengths, 82)) if lengths.size else float("inf")
@@ -129,3 +142,47 @@ class TickDetector:
             longest = max(group, key=lambda item: item[1])
             merged.append((x, float(longest[1]), float(longest[2])))
         return merged
+
+    def _slanted_band_candidates(
+        self,
+        band: np.ndarray,
+        y_offset: int,
+        full_height: int,
+        edge: str,
+    ) -> list[tuple[float, float, float]]:
+        """Retain ticks with residual perspective/slant after rectification."""
+        contours, _ = cv2.findContours(band, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        candidates: list[tuple[float, float, float]] = []
+        minimum_length = max(
+            3, int(round(full_height * self.config.tick_min_length_fraction))
+        )
+        maximum_width = max(
+            3, int(round(full_height * self.config.tick_max_width_fraction))
+        )
+        allowance = max(4, band.shape[0] // 4)
+        for contour in contours:
+            (center_x, center_y), (rect_width, rect_height), angle = cv2.minAreaRect(contour)
+            long_side = max(rect_width, rect_height)
+            short_side = min(rect_width, rect_height)
+            if (
+                long_side < minimum_length
+                or short_side > maximum_width
+                or long_side < short_side * 1.8
+            ):
+                continue
+            long_angle = angle if rect_width >= rect_height else angle + 90.0
+            vertical_error = abs((long_angle - 90.0 + 90.0) % 180.0 - 90.0)
+            if vertical_error > 25.0:
+                continue
+            _, y, _, contour_height = cv2.boundingRect(contour)
+            near_edge = (
+                y <= allowance
+                if edge == "top"
+                else y + contour_height >= band.shape[0] - allowance
+            )
+            if not near_edge:
+                continue
+            candidates.append(
+                (float(center_x), float(long_side), float(y_offset + center_y))
+            )
+        return candidates

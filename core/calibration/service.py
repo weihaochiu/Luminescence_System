@@ -106,6 +106,8 @@ class CalibrationService:
                 "tick_comb_axis_angle_deg": detection_artifacts.tick_comb_axis_angle_deg,
                 "tick_comb_support": detection_artifacts.tick_comb_support,
                 "orientation_disagreement_deg": detection_artifacts.orientation_disagreement_deg,
+                "ruler_candidates": detection_artifacts.candidate_diagnostics or [],
+                "threshold_audit": detection_artifacts.threshold_audit or {},
             }
             result.diagnostics.update(detection_diagnostics)
             if not detection.success:

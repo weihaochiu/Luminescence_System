@@ -930,5 +930,11 @@
   "calibration.tester.repeat_min": "最小：{value} px/mm",
   "calibration.tester.repeat_max": "最大：{value} px/mm",
   "calibration.tester.repeat_deviation": "最大偏差：{value} %",
-  "calibration.tester.repeat_no_threshold": "本工程驗證階段不宣稱合格門檻。"
+  "calibration.tester.repeat_no_threshold": "本工程驗證階段不宣稱合格門檻。",
+  "calibration.tester.capture_history": "相機擷取歷史",
+  "calibration.tester.open_history_folder": "開啟擷取歷史資料夾",
+  "calibration.tester.capture_history_summary": "{count} 筆擷取、{size}\n{path}",
+  "calibration.tester.capture_saved_status": "擷取已儲存：{capture_id} — {result}",
+  "calibration.tester.capture_persistence_warning": "{result} — 保存警告：{error}",
+  "calibration.tester.open_history_failed": "無法開啟擷取歷史資料夾：{path}"
 }

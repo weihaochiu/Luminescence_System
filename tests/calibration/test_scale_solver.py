@@ -130,6 +130,15 @@ class RobustScaleSolverTests(unittest.TestCase):
             item.physical_pitch_mm for item in result.pitch_hypotheses
         })
 
+    def test_every_tenth_tick_does_not_create_2000_px_per_mm_alias(self) -> None:
+        _, ticks = synthetic_ticks(missing={index for index in range(31) if index % 10})
+        result = self.solve(ticks)
+        self.assertFalse(result.success)
+        self.assertAlmostEqual(2000.0, result.periodic_pitch_px, places=5)
+        self.assertIsNone(result.pixels_per_mm)
+        self.assertEqual("geometry_periodic_only", result.verification_mode)
+        self.assertIn("ambiguous_physical_pitch", result.failure_reasons)
+
     def test_only_ten_mm_major_ticks_need_ocr_to_resolve_pitch(self) -> None:
         _, all_ticks = synthetic_ticks()
         ticks = [tick for index, tick in enumerate(all_ticks) if index % 10 == 0]

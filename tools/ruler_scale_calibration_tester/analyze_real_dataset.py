@@ -62,6 +62,7 @@ def analyze_dataset(
             _save_debug_images(failure_dir, result.debug_images)
         contact_rows.append(_contact_row(image, result.debug_images, record))
 
+    _annotate_scale_outliers(records)
     summary = _summarize(records)
     payload = {"summary": summary, "records": records}
     _write_json(output / "results.json", payload)
@@ -93,6 +94,7 @@ def _load_failure_record(
         "dtype": "",
         "ruler_detected": False,
         "roi_correct": _optional_bool(annotation.get("roi_correct")),
+        "roi_status": annotation.get("roi_status", "unreviewed"),
         "angle_deg": None,
         "rectification_success": False,
         "tick_candidates": 0,
@@ -111,6 +113,10 @@ def _load_failure_record(
         "failure_reasons": ["image_load_failed"],
         "error": error,
         "review_notes": annotation.get("notes", ""),
+        "false_pass": False,
+        "wrong_scale": _optional_bool(annotation.get("wrong_scale")) or False,
+        "possible_alias_factor": None,
+        "scale_outlier": False,
     }
 
 
@@ -122,6 +128,11 @@ def _result_record(
 ) -> dict[str, Any]:
     detection = result.ruler_detection
     roi_correct = _optional_bool(annotation.get("roi_correct"))
+    roi_status = annotation.get("roi_status", "").strip().lower()
+    if not roi_status:
+        roi_status = (
+            "correct" if roi_correct is True else "incorrect" if roi_correct is False else "unreviewed"
+        )
     accepted_ticks = len(result.detected_major_ticks) + len(result.detected_minor_ticks)
     ocr_text = ",".join(
         item.raw_text for item in result.detected_numbers if item.raw_text
@@ -132,9 +143,12 @@ def _result_record(
         "dtype": result.input_dtype,
         "ruler_detected": bool(detection and detection.success),
         "roi_correct": roi_correct,
+        "roi_status": roi_status,
         "candidate_count": result.diagnostics.get("ruler_candidate_count"),
         "selected_score": detection.confidence if detection else None,
         "selected_method": result.diagnostics.get("ruler_selected_method"),
+        "candidate_top_n": result.diagnostics.get("ruler_candidates", []),
+        "threshold_audit": result.diagnostics.get("threshold_audit", {}),
         "tick_comb_axis_angle_deg": result.diagnostics.get("tick_comb_axis_angle_deg"),
         "orientation_disagreement_deg": result.diagnostics.get("orientation_disagreement_deg"),
         "angle_deg": result.ruler_angle_deg,
@@ -161,26 +175,72 @@ def _result_record(
         "failure_reasons": list(result.failure_reasons),
         "error": "",
         "review_notes": annotation.get("notes", ""),
+        "manual_failure_category": annotation.get("failure_category", ""),
+        "wrong_scale": _optional_bool(annotation.get("wrong_scale")) or False,
+        "possible_alias_factor": None,
+        "scale_outlier": False,
         **metrics,
     }
     record["failure_category"] = _failure_category(record)
+    annotated_false_pass = _optional_bool(annotation.get("false_pass"))
+    record["false_pass"] = bool(
+        annotated_false_pass
+        if annotated_false_pass is not None
+        else result.success and (roi_status == "incorrect" or record["wrong_scale"])
+    )
     return record
 
 
 def _failure_category(record: dict[str, Any]) -> str:
+    manual = str(record.get("manual_failure_category") or "").strip()
+    if manual:
+        return manual
     if record.get("roi_correct") is False:
         return "wrong_ruler_candidate"
     if not record.get("ruler_detected"):
-        return "ruler_detection_failed"
+        return "ruler_not_found"
     if not record.get("rectification_success"):
-        return "rectification_failed"
+        return "rectification_error"
+    reasons = set(record.get("failure_reasons") or [])
+    if "analysis_exception" in reasons:
+        return "analysis_exception"
+    if "image_too_blurry_for_scale_calibration" in reasons:
+        return "blur"
+    if "ruler_glare_or_saturation" in reasons:
+        return "glare"
     if record.get("periodic_pitch_px") is None:
-        return "tick_detection_failed"
+        return "ticks_not_detected"
     if record.get("physical_pitch_mm") is None:
         return "physical_pitch_ambiguous"
     if not record.get("final_pass"):
-        return "quality_gate_failed"
+        return "quality_gate"
     return "pass"
+
+
+def _annotate_scale_outliers(records: list[dict[str, Any]]) -> None:
+    values = [
+        float(record["pixels_per_mm"])
+        for record in records
+        if record.get("final_pass") and record.get("pixels_per_mm") is not None
+    ]
+    if len(values) < 3:
+        return
+    median = statistics.median(values)
+    mad = statistics.median(abs(value - median) for value in values)
+    relative_limit = max(0.05, (3.0 * mad / median) if median else 0.05)
+    alias_factors = (0.5, 2.0, 5.0, 10.0)
+    for record in records:
+        value = record.get("pixels_per_mm")
+        if value is None or median <= 0:
+            continue
+        ratio = float(value) / median
+        record["scale_outlier"] = abs(ratio - 1.0) > relative_limit
+        nearest = min(alias_factors, key=lambda factor: abs(ratio - factor) / factor)
+        if abs(ratio - nearest) / nearest <= 0.12:
+            record["possible_alias_factor"] = nearest
+            if record.get("final_pass"):
+                record["wrong_scale"] = True
+                record["false_pass"] = True
 
 
 def _image_metrics(image: np.ndarray) -> dict[str, float]:
@@ -211,11 +271,16 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "ruler_detected": sum(bool(item.get("ruler_detected")) for item in records),
         "correct_roi": sum(item.get("roi_correct") is True for item in records),
         "roi_reviewed": sum(item.get("roi_correct") is not None for item in records),
+        "roi_uncertain": sum(item.get("roi_status") == "uncertain" for item in records),
         "rectified": sum(bool(item.get("rectification_success")) for item in records),
         "periodic_ticks_usable": sum(item.get("periodic_pitch_px") is not None for item in records),
         "physical_pitch_verified": sum(item.get("physical_pitch_mm") is not None for item in records),
         "ocr_usable": sum(bool(item.get("ocr_usable")) for item in records),
         "final_pass": sum(bool(item.get("final_pass")) for item in records),
+        "false_pass": sum(bool(item.get("false_pass")) for item in records),
+        "wrong_scale": sum(bool(item.get("wrong_scale")) for item in records),
+        "scale_outliers": sum(bool(item.get("scale_outlier")) for item in records),
+        "possible_aliases": sum(item.get("possible_alias_factor") is not None for item in records),
         "failure_categories": dict(sorted(categories.items())),
         "scale_statistics": stats,
     }
@@ -285,6 +350,10 @@ def _summary_text(summary: dict[str, Any]) -> str:
         f"Physical pitch verified: {summary['physical_pitch_verified']}",
         f"OCR usable: {summary['ocr_usable']}",
         f"Final PASS: {summary['final_pass']}",
+        f"False PASS: {summary['false_pass']}",
+        f"Wrong scale: {summary['wrong_scale']}",
+        f"Scale outliers: {summary['scale_outliers']}",
+        f"Possible aliases: {summary['possible_aliases']}",
         "Failure categories:",
     ]
     for reason, count in summary["failure_categories"].items():

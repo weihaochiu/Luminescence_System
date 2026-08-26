@@ -7,4 +7,5 @@ venv/
 /local/generated/
 /local/datasets/
 /local/ocr_cache/
+/local/ruler_capture_history/
 /ruler/

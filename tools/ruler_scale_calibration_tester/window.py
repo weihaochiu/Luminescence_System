@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QImage, QPixmap
+from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal, Slot
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -30,6 +30,11 @@ from core.calibration.image_utils import normalize_to_uint8
 from core.i18n import tr
 from gui.camera_controller import CameraController
 
+from .capture_history import (
+    AnalysisOutcome,
+    CaptureHistoryStore,
+    analyze_camera_capture,
+)
 from .image_loader import load_image
 from .repeatability import DuplicateSourceError, RepeatabilitySession
 from .source import AnalysisSource, FrameCaptureState
@@ -98,15 +103,43 @@ class AnalysisWorker(QObject):
         service: CalibrationService,
         image: np.ndarray,
         source: AnalysisSource,
+        capture_history: CaptureHistoryStore,
     ) -> None:
         super().__init__()
         self.service = service
         self.image = np.asarray(image).copy()
         self.source = source
+        self.capture_history = capture_history
 
     @Slot()
     def run(self) -> None:
-        self.finished.emit(self.service.analyze(
+        if self.source.source_type == "camera":
+            try:
+                outcome = analyze_camera_capture(
+                    self.service,
+                    self.capture_history,
+                    self.image,
+                    self.source,
+                )
+            except Exception as exc:
+                LOG.exception("Camera capture could not be persisted")
+                result = CalibrationResult(
+                    success=False,
+                    source_type="camera",
+                    source_identity=self.source.source_identity,
+                    source_display_name=self.source.display_name,
+                    captured_frame_sequence=self.source.frame_sequence,
+                    input_dtype=str(self.image.dtype),
+                    input_resolution=(self.image.shape[1], self.image.shape[0]),
+                    input_min=self.image.min().item(),
+                    input_max=self.image.max().item(),
+                    failure_reasons=["analysis_exception"],
+                    warnings=[f"Capture persistence failed: {type(exc).__name__}: {exc}"],
+                )
+                outcome = AnalysisOutcome(result=result, persistence_error=str(exc))
+            self.finished.emit(outcome)
+            return
+        self.finished.emit(AnalysisOutcome(result=self.service.analyze(
             self.image,
             input_source=self.source.display_name or self.source.filename or self.source.source_type,
             source_type=self.source.source_type,
@@ -114,7 +147,7 @@ class AnalysisWorker(QObject):
             source_display_name=self.source.display_name,
             captured_frame_sequence=self.source.frame_sequence,
             source_filename=self.source.filename,
-        ))
+        )))
 
 
 class RulerScaleTesterWindow(QMainWindow):
@@ -133,6 +166,7 @@ class RulerScaleTesterWindow(QMainWindow):
         self._analysis_thread: QThread | None = None
         self._analysis_worker: AnalysisWorker | None = None
         self._repeatability_session = RepeatabilitySession()
+        self._capture_history = CaptureHistoryStore()
         self._image_labels: dict[str, ImageLabel] = {}
         self._result_labels: dict[str, QLabel] = {}
         self._build_ui()
@@ -220,6 +254,15 @@ class RulerScaleTesterWindow(QMainWindow):
         self.ocr_status.setWordWrap(True)
         diagnostics_layout.addWidget(self.ocr_status)
 
+        history_group = QGroupBox(tr("calibration.tester.capture_history"))
+        history_layout = QVBoxLayout(history_group)
+        self.capture_history_text = QLabel()
+        self.capture_history_text.setWordWrap(True)
+        self.open_history_button = QPushButton(tr("calibration.tester.open_history_folder"))
+        history_layout.addWidget(self.capture_history_text)
+        history_layout.addWidget(self.open_history_button)
+        diagnostics_layout.addWidget(history_group)
+
         repeat_group = QGroupBox(tr("calibration.tester.repeatability"))
         repeat_layout = QVBoxLayout(repeat_group)
         self.repeatability_text = QPlainTextEdit()
@@ -251,6 +294,7 @@ class RulerScaleTesterWindow(QMainWindow):
         self.clear_repeatability_button.clicked.connect(self.clear_repeatability)
         self.add_repeatability_button.clicked.connect(self.add_repeatability_run)
         self.export_repeatability_button.clicked.connect(self.export_repeatability_csv)
+        self.open_history_button.clicked.connect(self.open_capture_history_folder)
         self.disconnect_button.setEnabled(False)
         self.capture_button.setEnabled(False)
         self.analyze_button.setEnabled(False)
@@ -258,6 +302,7 @@ class RulerScaleTesterWindow(QMainWindow):
         self.add_repeatability_button.setEnabled(False)
         self.export_repeatability_button.setEnabled(False)
         self._update_repeatability()
+        self._update_capture_history(self._capture_history.statistics())
 
     def _connect_camera_signals(self) -> None:
         self.controller.frame_ready.connect(self._on_preview_frame)
@@ -386,7 +431,12 @@ class RulerScaleTesterWindow(QMainWindow):
         self._set_analysis_controls(False)
         self.add_repeatability_button.setEnabled(False)
         thread = QThread(self)
-        worker = AnalysisWorker(self.service, self._current_input, self._current_source)
+        worker = AnalysisWorker(
+            self.service,
+            self._current_input,
+            self._current_source,
+            self._capture_history,
+        )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_analysis_finished)
@@ -400,29 +450,51 @@ class RulerScaleTesterWindow(QMainWindow):
 
     @Slot(object)
     def _on_analysis_finished(self, payload: object) -> None:
-        if not isinstance(payload, CalibrationResult):
+        if not isinstance(payload, AnalysisOutcome):
             self.status.setText(tr("calibration.tester.invalid_result"))
             return
-        self._current_result = payload
-        for name, image in payload.debug_images.items():
+        result = payload.result
+        if not isinstance(result, CalibrationResult):
+            self.status.setText(tr("calibration.tester.invalid_result"))
+            return
+        self._current_result = result
+        for name, image in result.debug_images.items():
             label = self._image_labels.get(name)
             if label is not None:
                 label.set_array(image)
-        self._show_result(payload)
+        self._show_result(result)
         self.add_repeatability_button.setEnabled(
-            payload.success
-            and payload.verification_mode
+            result.success
+            and result.verification_mode
             in {
                 VerificationMode.TICK_HIERARCHY_VERIFIED.value,
                 VerificationMode.OCR_VERIFIED.value,
             }
         )
-        self.save_debug_button.setEnabled(bool(payload.debug_images))
-        self.status.setText(
+        self.save_debug_button.setEnabled(bool(result.debug_images))
+        result_text = (
             tr("calibration.tester.calibration_pass")
-            if payload.success
-            else tr("calibration.tester.calibration_fail", reasons=", ".join(payload.failure_reasons))
+            if result.success
+            else tr(
+                "calibration.tester.calibration_fail",
+                reasons=", ".join(result.failure_reasons),
+            )
         )
+        if payload.capture_id:
+            result_text = tr(
+                "calibration.tester.capture_saved_status",
+                capture_id=payload.capture_id,
+                result=result_text,
+            )
+        if payload.persistence_error:
+            result_text = tr(
+                "calibration.tester.capture_persistence_warning",
+                result=result_text,
+                error=payload.persistence_error,
+            )
+        self.status.setText(result_text)
+        if payload.history_stats is not None:
+            self._update_capture_history(payload.history_stats)
 
     @Slot()
     def _analysis_thread_finished(self) -> None:
@@ -594,6 +666,28 @@ class RulerScaleTesterWindow(QMainWindow):
         self.repeatability_text.setPlainText("\n".join(lines))
         self.export_repeatability_button.setEnabled(bool(self._repeatability_session.runs))
 
+    def _update_capture_history(self, stats: object) -> None:
+        count = int(getattr(stats, "count", 0))
+        disk_bytes = int(getattr(stats, "disk_bytes", 0))
+        root = str(getattr(stats, "root", self._capture_history.root.resolve()))
+        self.capture_history_text.setText(tr(
+            "calibration.tester.capture_history_summary",
+            count=count,
+            size=_format_bytes(disk_bytes),
+            path=root,
+        ))
+
+    @Slot()
+    def open_capture_history_folder(self) -> None:
+        root = self._capture_history.root.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(root))):
+            QMessageBox.warning(
+                self,
+                tr("calibration.tester.capture_history"),
+                tr("calibration.tester.open_history_failed", path=str(root)),
+            )
+
     def closeEvent(self, event: QCloseEvent) -> None:
         self.controller.close_camera()
         if self._analysis_thread is not None and self._analysis_thread.isRunning():
@@ -606,3 +700,12 @@ class RulerScaleTesterWindow(QMainWindow):
 
 def _format_stat(value: object) -> str:
     return "—" if value is None else f"{float(value):.6f}"
+
+
+def _format_bytes(value: int) -> str:
+    amount = float(max(0, value))
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if amount < 1024.0 or unit == "TiB":
+            return f"{amount:.1f} {unit}"
+        amount /= 1024.0
+    return f"{amount:.1f} TiB"
