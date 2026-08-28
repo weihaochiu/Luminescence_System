@@ -26,6 +26,7 @@ class _PendingCapture:
     actual_exposure_us: int = 0
     actual_gain_percent: int = 0
     accept_actual_readback: bool = False
+    discard_remaining: int = 0
 
 
 class CameraCaptureBridge(QObject):
@@ -64,6 +65,7 @@ class CameraCaptureBridge(QObject):
         check_cancel: Callable[[], None],
         *,
         accept_actual_readback: bool = False,
+        settling_frames: int = 0,
     ) -> CapturedFrame:
         with self._lock:
             if self._pending is not None:
@@ -75,6 +77,7 @@ class CameraCaptureBridge(QObject):
                 Event(),
                 minimum_sequence=baseline + 1,
                 accept_actual_readback=bool(accept_actual_readback),
+                discard_remaining=max(0, int(settling_frames)),
             )
             self._pending = pending
         self.configure_requested.emit(
@@ -185,6 +188,10 @@ class CameraCaptureBridge(QObject):
             pending is None or not pending.armed or pending.event.is_set()
             or sequence < pending.minimum_sequence
         ):
+            return
+        if pending.discard_remaining > 0:
+            pending.discard_remaining -= 1
+            pending.minimum_sequence = sequence + 1
             return
         temperature = None
         try:

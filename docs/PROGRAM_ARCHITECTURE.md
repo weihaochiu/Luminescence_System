@@ -165,6 +165,19 @@ ruler detector → rectifier → tick detector + digit recognizer → scale solv
 | `relay_settings.py` | Device identity、Channel／Group schema、JSON persistence、Group channel conflict validation |
 | `relay_settings_dialog.py` | `設定 → Relay 設定…`，提供 Channel／Group 編輯與維修用手動控制 |
 
+### 4.6 Standalone Camera Linearity Qualification
+
+`tools/camera_linearity_qualification/` 是獨立 GUI 與分析邊界。Camera mode 只透過既有
+`CameraController`、`CameraCaptureBridge` 接收 MONO16 scientific frame；不得直接存取 private
+SDK handle，也不得建立第二條 stream。`capture_plan`/`capture_runner` 負責 ordered Gain × Exposure、
+setting readback、settling、frame-sequence barrier、guided LIGHT/DARK、safe cancellation/state restore 與
+atomic TIFF/JSON/manifest。`image_loader`/`analysis`/`regression` 是離線數值層，`report`/`profile` 負責
+CSV/PNG/Markdown 與 production-gated versioned profile。
+
+此工具不得匯入或改寫 Recipe、SMU、Relay、EL Matrix runner、production output pipeline。
+Pilot、Quick、synthetic/fake、缺 Dark/repeats 或非完整 PASS 的 profile 均維持
+`profile_usable_for_production=false`；真實 RisingCam/平場光源驗證屬硬體 acceptance，不能由 CI 宣稱完成。
+
 HID path 僅供當次連線使用，設定檔不保存 USB port、Windows location 或 path。主畫面白光控制只能呼叫 `RelayService.group_on/off("white_light")`；CH1／CH2 的單獨控制僅位於設定視窗。Group ON 部分失敗會對全部 member 嘗試 OFF rollback，Group OFF 則累積失敗但繼續操作後續 member。
 
 ## 5. Recipe 與 EL Matrix 邊界

@@ -1328,6 +1328,30 @@ class CameraCaptureBridgeTests(unittest.TestCase):
         thread.join(timeout=0.1)
         self.assertEqual((3, 2), (result[0].image.width(), result[0].image.height()))
 
+    def test_bridge_discards_settling_frames_without_reconfiguring_camera(self) -> None:
+        controller = _SequencedCameraController()
+        bridge = CameraCaptureBridge(controller)
+        result: list[CapturedFrame] = []
+        thread = threading.Thread(
+            target=lambda: result.append(bridge.capture(
+                50, 200, 2, lambda: None, settling_frames=2
+            ))
+        )
+        thread.start()
+        deadline = time.monotonic() + 1
+        while controller.configure_calls == 0 and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        for sequence, width in ((11, 2), (12, 3), (13, 4)):
+            controller.frame_sequence = sequence
+            image = QImage(width, 2, QImage.Format.Format_RGB888)
+            controller.frame_ready_sequenced.emit(image, sequence)
+            self.app.processEvents()
+        while thread.is_alive() and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        thread.join(timeout=0.1)
+        self.assertEqual(1, controller.configure_calls)
+        self.assertEqual((4, 2), (result[0].image.width(), result[0].image.height()))
+
     def test_bridge_restores_camera_state_on_owner_thread(self) -> None:
         controller = _FakeCameraController()
         bridge = CameraCaptureBridge(controller)

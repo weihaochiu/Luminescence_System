@@ -5,9 +5,9 @@
 
 ## Scope and method
 
-The scan covers every repository `*.py` file (including tests and the bundled SDK) and classifies visible Qt constructor/setter text, tooltips, status messages, QMessageBox calls, user-facing signal payloads, logger calls, `print`, and raised exception literals. It follows common local list/tuple → `append()` → `join()` → tooltip flows, but it is not a complete Python data-flow engine. The requested keyword audit (`錯誤`, `失敗`, `警告`, `無法`, `逾時`, `未連接`, `timeout`, `failed`, `error`, `warning`) is also represented where those literals occur in these call sites.
+The scan covers repository source `*.py` files (including tests and the bundled SDK), excluding local-only `local/`, `ruler/`, and `backup/` data, and classifies visible Qt constructor/setter text, tooltips, status messages, QMessageBox calls, user-facing signal payloads, logger calls, `print`, and raised exception literals. It follows common local list/tuple → `append()` → `join()` → tooltip flows, but it is not a complete Python data-flow engine. The requested keyword audit (`錯誤`, `失敗`, `警告`, `無法`, `逾時`, `未連接`, `timeout`, `failed`, `error`, `warning`) is also represented where those literals occur in these call sites.
 
-Inventory rows: **592**; user-facing rows: **131**; translation candidates: **0**.
+Inventory rows: **689**; user-facing rows: **146**; translation candidates: **0**.
 Static scanner counts and the supplemental manual indirect-UI audit are reported separately in `I18N_ERROR_SYSTEM_MIGRATION.md`; a zero static count alone is not proof that every dynamic UI path is translated.
 
 Error-code values below are migration candidates, not registry definitions. Final codes are curated by failure condition so multiple call sites can share one stable code.
@@ -16,23 +16,29 @@ Error-code values below are migration candidates, not registry definitions. Fina
 
 | File | Line / function | Current message | Type | User-facing? | Needs translation? | Needs Error Code? | Proposed translation key | Proposed error code | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| core/calibration/acquisition_quality.py | 83 / `evaluate` | Ruler acquisition quality requires a uint16 HxW frame | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/acquisition_quality.py | 139 / `_effective_dn_frame` | EffectiveDNMax is invalid | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/acquisition_quality.py | 143 / `_effective_dn_frame` | Right-aligned frame exceeds EffectiveDNMax | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/acquisition_quality.py | 148 / `_effective_dn_frame` | Left alignment requires a 2^N-1 EffectiveDNMax | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/acquisition_quality.py | 153 / `_effective_dn_frame` | RawValueAlignment must be verified as right or left | I. Exception / traceback | No | No | No | `—` | — | raise |
 | core/calibration/image_utils.py | 17 / `normalize_to_uint8` | Unsupported channel count: {source.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | core/calibration/image_utils.py | 19 / `normalize_to_uint8` | Expected a non-empty HxW or HxWxC image, got {source.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | core/calibration/image_utils.py | 22 / `normalize_to_uint8` | Input image has no finite pixels | I. Exception / traceback | No | No | No | `—` | — | raise |
-| core/calibration/models.py | 71 / `<module>` | FAIL | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment quality_label; canonical technical/value display |
-| core/calibration/scale_solver.py | 36 / `pixels_per_mm_to_um_per_pixel` | pixels_per_mm must be positive and finite | I. Exception / traceback | No | No | No | `—` | — | raise |
-| core/calibration/scale_solver.py | 44 / `scale_bar_pixels` | Scale bar length and um_per_pixel must be positive and finite | I. Exception / traceback | No | No | No | `—` | — | raise |
-| core/calibration/scale_solver.py | 57 / `select_scale_bar` | Image width and scale must define a positive physical width | I. Exception / traceback | No | No | No | `—` | — | raise |
-| core/calibration/scale_solver.py | 69 / `select_scale_bar` | {selected / 10000} cm | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment label; canonical technical/value display |
-| core/calibration/scale_solver.py | 71 / `select_scale_bar` | {selected / 1000} mm | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment label; canonical technical/value display |
-| core/calibration/scale_solver.py | 73 / `select_scale_bar` | {selected} µm | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment label; canonical technical/value display |
-| core/calibration/scale_solver.py | 164 / `solve` | FAIL | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment quality_label; canonical technical/value display |
-| core/calibration/scale_solver.py | 164 / `solve` | PASS | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment quality_label; canonical technical/value display |
-| core/calibration/service.py | 46 / `analyze` | Ruler calibration analysis start source=%s resolution=%sx%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| core/calibration/service.py | 110 / `analyze` | Ruler calibration analysis failed source=%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| core/calibration/service.py | 135 / `save_debug_package` | Failed to write debug image: {path} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| core/calibration/service.py | 143 / `save_debug_package` | Ruler calibration debug package saved path=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| core/calibration/service.py | 156 / `_finish_log` | Ruler calibration analysis end source=%s elapsed_ms=%.1f angle=%s ocr_raw=%s ocr_accepted=%s major_ticks=%s minor_ticks=%s rejected_ticks=%s pixels_per_mm=%s um_per_pixel=%s fit_rmse_px=%s fit_error_percent=%s quality=%s failure_reasons=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| core/calibration/models.py | 101 / `<module>` | FAIL | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment quality_label; canonical technical/value display |
+| core/calibration/scale_solver.py | 48 / `pixels_per_mm_to_um_per_pixel` | pixels_per_mm must be positive and finite | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/scale_solver.py | 56 / `scale_bar_pixels` | Scale bar length and um_per_pixel must be positive and finite | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/scale_solver.py | 69 / `select_scale_bar` | Image width and scale must define a positive physical width | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/scale_solver.py | 80 / `select_scale_bar` | {selected / 10000} cm | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment label; canonical technical/value display |
+| core/calibration/scale_solver.py | 82 / `select_scale_bar` | {selected / 1000} mm | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment label; canonical technical/value display |
+| core/calibration/scale_solver.py | 84 / `select_scale_bar` | {selected} µm | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment label; canonical technical/value display |
+| core/calibration/scale_solver.py | 207 / `solve` | FAIL | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment quality_label; canonical technical/value display |
+| core/calibration/scale_solver.py | 207 / `solve` | PASS | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment quality_label; canonical technical/value display |
+| core/calibration/service.py | 71 / `analyze` | Ruler calibration analysis start source=%s resolution=%sx%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| core/calibration/service.py | 193 / `analyze` | Ruler calibration analysis failed source=%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| core/calibration/service.py | 215 / `save_debug_package` | Calibration result does not contain an exact raw input frame | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/service.py | 221 / `save_debug_package` | Failed to write debug image: {path} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/calibration/service.py | 229 / `save_debug_package` | Ruler calibration debug package saved path=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| core/calibration/service.py | 280 / `_finish_log` | Ruler calibration analysis end source=%s elapsed_ms=%.1f angle=%s candidate_count=%s selected_method=%s selected_score=%s tick_comb_angle=%s orientation_disagreement=%s rectified_resolution=%s tick_candidates=%s accepted_ticks=%s ocr_raw=%s ocr_accepted=%s major_ticks=%s minor_ticks=%s rejected_ticks=%s pixels_per_mm=%s um_per_pixel=%s fit_rmse_px=%s fit_error_percent=%s quality=%s failure_reasons=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | core/error_registry.py | 46 / `__init__` | Duplicate error code: {definition.code} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | core/error_registry.py | 48 / `__init__` | Invalid error code: {definition.code} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | core/error_registry.py | 50 / `__init__` | Invalid subsystem for {definition.code}: {definition.subsystem} | I. Exception / traceback | No | No | No | `—` | — | raise |
@@ -72,10 +78,11 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/camera_auto_exposure_settings_dialog.py | 163 / `__init__` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/camera_auto_exposure_settings_dialog.py | 164 / `__init__` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/camera_auto_exposure_settings_dialog.py | 219 / `refresh_calibration_status` | {camera} ({serial}) | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/camera_capture_bridge.py | 65 / `capture` | A camera capture request is already pending | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 78 / `capture` | Camera capture timeout at {exposure_ms} ms / Gain {gain_percent}% | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 84 / `capture` | Camera capture completed without a frame | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 105 / `_configure` | Camera Exposure/Gain readback mismatch: requested={exposure_us} us/{gain_percent}%, actual={actual_exposure} us/{actual_gain}% | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 72 / `capture` | A camera capture request is already pending | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 91 / `capture` | Camera capture timeout at {exposure_ms} ms / Gain {gain_percent}% | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 97 / `capture` | Camera capture completed without a frame | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 111 / `restore_state` | Camera state restoration timed out | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 149 / `_configure` | Camera Exposure/Gain readback mismatch: requested={exposure_us} us/{gain_percent}%, actual={actual_exposure} us/{actual_gain}% | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/camera_controller.py | 245 / `open_device` | Nncam.Open | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/camera_controller.py | 258 / `open_device` | MONO capability check | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/camera_controller.py | 496 / `close_camera` | Failed to disable SDK AE while closing calibration | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
@@ -102,39 +109,39 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/camera_controller.py | 1369 / `_enable_sdk_auto_exposure` | SDK AutoExpoEnable requested {enable_value}, read back {readback} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/camera_controller.py | 1389 / `_disable_sdk_auto_exposure` | SDK AutoExpoEnable requested 0, read back {readback} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/camera_controller.py | 1414 / `_log_sdk_ae_calibration` | SDK_AE_CALIBRATION timestamp=%s reason=%s UserTargetPercent=%s%% EffectiveDNTarget=%s/%s SDKAutoExposureTarget=%s SDKAutoExposureTargetReadback=%s SDKAutoExposureMode=%s AutoExposureCalibrationApplied=%s CalibrationProfileId=%s ExposureReadbackUs=%s GainReadback=%s MeanEffectiveDN=%s MeanEffectiveDNPercent=%s MeteringMeanEffectiveDN=%s MeteringMeanEffectiveDNPercent=%s AEROI=%s AEROIVerified=%s Alignment=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1621 / `read_temperature_c` | Camera temperature query must run in the camera owner thread | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1623 / `read_temperature_c` | NNCAM_FLAG_GETTEMPERATURE is not present for this camera | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1648 / `_query_optional` | RisingCam SDK query failed for %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1722 / `_log_camera_capabilities` | Camera Model: %s Camera Serial: %s Camera flags: 0x%X Mono: %s RAW10/11/12/14/16 flags: %s/%s/%s/%s/%s Resolution: %sx%s SDK version: %s MaxBitDepth: %s Sensor bit depth: %s BitDepthSource: %s ScientificPixelFormat: %s ScientificFormatNegotiation: %s BITDEPTH requested/readback: 1/%s RGB requested/readback/fallback: 4/%s/%s RGB option 4 supported: %s BYTEORDER diagnostic: readback=%s, IgnoredForMono=True LINEAR/CURVE/Gamma requested: 0/0/100 LINEAR/CURVE/Gamma readback: %s/%s/%s ScientificISPBypassed: %s RAW mode: %s ISP mode: %s Pull bits: %s StartPullMode status: %s ScientificContainer: %s ScientificChannels: %s ContainerBitDepth: 16 ScientificFrameValidated: %s ScientificMeasurementReady: %s PixelFormat diagnostic: %s (%s) RawValueAlignment/source: %s/%s EffectiveDNMax: %s Camera Exposure Hardware Range: min = %s us, max = %s us, default = %s us Camera Gain Hardware Range: min = %s %%, max = %s %%, default = %s %% Auto Exposure Range: min exposure = %s us, max exposure = %s us, min gain = %s %%, max gain = %s %% Auto Exposure Controller/mode/user target: RisingCamSDK/%s/%s %% SDK Auto Exposure target requested/readback: %s/%s SDK Auto Exposure policy/full-active-AE-ROI percent: %s/%s SDK Auto Exposure exposure/gain damping: %s/%s SDK Overexposure policy: %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1857 / `_read_sensor_bit_depth` | unexpected MaxBitDepth value: {bit_depth} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1858 / `_read_sensor_bit_depth` | Camera startup OK: MaxBitDepth() -> %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1863 / `_read_sensor_bit_depth` | RisingCam MaxBitDepth() failed (%s); using capability-flag fallback: %s bits | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1870 / `_read_sensor_bit_depth` | RisingCam MaxBitDepth() failed (%s) and no RAW10/11/12/14/16 capability flag is available; SensorBitDepth=Unknown | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1884 / `_apply_camera_startup_setting` | Camera startup OK: %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1886 / `_apply_camera_startup_setting` | Camera startup OK: %s -> %r | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1889 / `_apply_camera_startup_setting` | Camera startup FAILED at %s: %s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/camera_controller.py | 1908 / `_configure_mono16_bitdepth` | Camera startup FAILED at NNCAM_OPTION_BITDEPTH readback: %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
-| gui/camera_controller.py | 1912 / `_configure_mono16_bitdepth` | NNCAM_OPTION_BITDEPTH readback | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1927 / `_negotiate_mono16_rgb_option` | RGB=4 negotiation failed at %s; using PullImageV4(bits=16): %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1943 / `_negotiate_mono16_rgb_option` | RGB=4 negotiation readback mismatch (requested=4, readback=%r); using PullImageV4(bits=16) | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1966 / `_configure_nonblocking_option` | Camera startup NON-BLOCKING setting failed at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1979 / `_configure_nonblocking_option` | Camera startup NON-BLOCKING readback mismatch at %s: requested=%s, readback=%r | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1998 / `_configure_nonblocking_gamma` | Camera startup NON-BLOCKING setting failed at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2008 / `_configure_nonblocking_gamma` | Camera startup NON-BLOCKING readback mismatch at Gamma: requested=%s, readback=%r | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2023 / `_read_nonblocking_setting` | Camera startup diagnostic: %s -> %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 2026 / `_read_nonblocking_setting` | Camera startup diagnostic unavailable at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2041 / `_start_stream` | Scientific format validation | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2080 / `_handle_sdk_event` | SDK AE convergence Exposure/Gain readback failed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2122 / `_handle_sdk_event` | Failed to disable SDK AE after convergence failure | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/camera_controller.py | 2127 / `_handle_sdk_event` | RisingCam SDK reported auto exposure convergence failure | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2143 / `_update_alignment_verification` | DN alignment runtime evidence: state=%s frames=%s sampled=%s nonzero=%s above_right_max=%s (%.6f) low_bits_zero_ratio=%.6f nonzero_low_bits=%s patterns=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 2171 / `_update_alignment_verification` | DN alignment runtime verified: alignment=%s source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 2213 / `_pull_live_frame` | MONO16 buffer validation | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2225 / `_pull_live_frame` | PullImageV4(bits=16) | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2236 / `_pull_live_frame` | PullImageV4(bits=16) output validation | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2247 / `_pull_live_frame` | Camera scientific frame validation: PullBits=16 PixelFormat=%s ContainerBitDepth=16 Scientific frame dtype=%s Scientific frame ndim=%s Scientific frame shape=%s Pitch=%s BufferSize=%s ScientificFormatNegotiation=%s ScientificFrameValidated=True ScientificMeasurementReady=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 2373 / `_pull_live_frame` | Camera scientific frame validation failed: %s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/camera_controller.py | 2470 / `_poll_camera_status` | RisingCam SDK failed to refresh current Exposure/Gain | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 1653 / `read_temperature_c` | Camera temperature query must run in the camera owner thread | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1655 / `read_temperature_c` | NNCAM_FLAG_GETTEMPERATURE is not present for this camera | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1680 / `_query_optional` | RisingCam SDK query failed for %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 1754 / `_log_camera_capabilities` | Camera Model: %s Camera Serial: %s Camera flags: 0x%X Mono: %s RAW10/11/12/14/16 flags: %s/%s/%s/%s/%s Resolution: %sx%s SDK version: %s MaxBitDepth: %s Sensor bit depth: %s BitDepthSource: %s ScientificPixelFormat: %s ScientificFormatNegotiation: %s BITDEPTH requested/readback: 1/%s RGB requested/readback/fallback: 4/%s/%s RGB option 4 supported: %s BYTEORDER diagnostic: readback=%s, IgnoredForMono=True LINEAR/CURVE/Gamma requested: 0/0/100 LINEAR/CURVE/Gamma readback: %s/%s/%s ScientificISPBypassed: %s RAW mode: %s ISP mode: %s Pull bits: %s StartPullMode status: %s ScientificContainer: %s ScientificChannels: %s ContainerBitDepth: 16 ScientificFrameValidated: %s ScientificMeasurementReady: %s PixelFormat diagnostic: %s (%s) RawValueAlignment/source: %s/%s EffectiveDNMax: %s Camera Exposure Hardware Range: min = %s us, max = %s us, default = %s us Camera Gain Hardware Range: min = %s %%, max = %s %%, default = %s %% Auto Exposure Range: min exposure = %s us, max exposure = %s us, min gain = %s %%, max gain = %s %% Auto Exposure Controller/mode/user target: RisingCamSDK/%s/%s %% SDK Auto Exposure target requested/readback: %s/%s SDK Auto Exposure policy/full-active-AE-ROI percent: %s/%s SDK Auto Exposure exposure/gain damping: %s/%s SDK Overexposure policy: %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 1889 / `_read_sensor_bit_depth` | unexpected MaxBitDepth value: {bit_depth} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1890 / `_read_sensor_bit_depth` | Camera startup OK: MaxBitDepth() -> %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 1895 / `_read_sensor_bit_depth` | RisingCam MaxBitDepth() failed (%s); using capability-flag fallback: %s bits | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 1902 / `_read_sensor_bit_depth` | RisingCam MaxBitDepth() failed (%s) and no RAW10/11/12/14/16 capability flag is available; SensorBitDepth=Unknown | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 1916 / `_apply_camera_startup_setting` | Camera startup OK: %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 1918 / `_apply_camera_startup_setting` | Camera startup OK: %s -> %r | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 1921 / `_apply_camera_startup_setting` | Camera startup FAILED at %s: %s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/camera_controller.py | 1940 / `_configure_mono16_bitdepth` | Camera startup FAILED at NNCAM_OPTION_BITDEPTH readback: %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/camera_controller.py | 1944 / `_configure_mono16_bitdepth` | NNCAM_OPTION_BITDEPTH readback | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1959 / `_negotiate_mono16_rgb_option` | RGB=4 negotiation failed at %s; using PullImageV4(bits=16): %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 1975 / `_negotiate_mono16_rgb_option` | RGB=4 negotiation readback mismatch (requested=4, readback=%r); using PullImageV4(bits=16) | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 1998 / `_configure_nonblocking_option` | Camera startup NON-BLOCKING setting failed at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2011 / `_configure_nonblocking_option` | Camera startup NON-BLOCKING readback mismatch at %s: requested=%s, readback=%r | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2030 / `_configure_nonblocking_gamma` | Camera startup NON-BLOCKING setting failed at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2040 / `_configure_nonblocking_gamma` | Camera startup NON-BLOCKING readback mismatch at Gamma: requested=%s, readback=%r | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2055 / `_read_nonblocking_setting` | Camera startup diagnostic: %s -> %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2058 / `_read_nonblocking_setting` | Camera startup diagnostic unavailable at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2073 / `_start_stream` | Scientific format validation | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2112 / `_handle_sdk_event` | SDK AE convergence Exposure/Gain readback failed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2154 / `_handle_sdk_event` | Failed to disable SDK AE after convergence failure | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/camera_controller.py | 2159 / `_handle_sdk_event` | RisingCam SDK reported auto exposure convergence failure | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2175 / `_update_alignment_verification` | DN alignment runtime evidence: state=%s frames=%s sampled=%s nonzero=%s above_right_max=%s (%.6f) low_bits_zero_ratio=%.6f nonzero_low_bits=%s patterns=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2203 / `_update_alignment_verification` | DN alignment runtime verified: alignment=%s source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2245 / `_pull_live_frame` | MONO16 buffer validation | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2257 / `_pull_live_frame` | PullImageV4(bits=16) | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2268 / `_pull_live_frame` | PullImageV4(bits=16) output validation | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2279 / `_pull_live_frame` | Camera scientific frame validation: PullBits=16 PixelFormat=%s ContainerBitDepth=16 Scientific frame dtype=%s Scientific frame ndim=%s Scientific frame shape=%s Pitch=%s BufferSize=%s ScientificFormatNegotiation=%s ScientificFrameValidated=True ScientificMeasurementReady=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2405 / `_pull_live_frame` | Camera scientific frame validation failed: %s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/camera_controller.py | 2502 / `_poll_camera_status` | RisingCam SDK failed to refresh current Exposure/Gain | H. Developer-only log | No | No | No | `—` | — | logger.warning |
 | gui/camera_temperature_monitor.py | 133 / `start` | Camera temperature monitor started path=%s model=%s identifier=%s interval_ms=%d | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | gui/camera_temperature_monitor.py | 157 / `stop` | Camera temperature monitor stopped path=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | gui/camera_temperature_monitor.py | 169 / `poll_now` | camera temperature is unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
@@ -533,10 +540,19 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | relay_hardware_diagnostic.py | 27 / `main` | Diagnostic completed: USBRelay8 controller logical state verified. | H. Developer-only log | No | No | No | `—` | — | print |
 | relay_hardware_diagnostic.py | 28 / `main` | Confirm external 5 V Relay power separately; software cannot verify coil or COM-NO contacts. | H. Developer-only log | No | No | No | `—` | — | print |
 | scripts/generate_error_code_reference.py | 66 / `main` | Wrote {OUTPUT_PATH} | H. Developer-only log | No | No | No | `—` | — | print |
-| scripts/generate_user_message_inventory.py | 541 / `main` | Wrote {OUTPUT} with {len(entries)} rows | H. Developer-only log | No | No | No | `—` | — | print |
+| scripts/generate_user_message_inventory.py | 546 / `main` | Wrote {OUTPUT} with {len(entries)} rows | H. Developer-only log | No | No | No | `—` | — | print |
+| tests/calibration/test_capture_history.py | 48 / `analyze` | FAIL | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field quality_label; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/calibration/test_capture_history.py | 48 / `analyze` | PASS | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field quality_label; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/calibration/test_capture_history.py | 65 / `analyze` | intentional analysis failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/calibration/test_capture_history.py | 75 / `source` | RisingCam frame 4821 | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field display_name; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/calibration/test_capture_history.py | 169 / `test_unavailable_camera_metadata_is_explicit_null` | Unknown camera | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field display_name; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/calibration/test_ruler_auto_exposure.py | 186 / `analyze` | analysis failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/calibration/test_ruler_auto_exposure.py | 226 / `capture` | capture failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/calibration/test_tester_state.py | 98 / `blocked` | intentionally absent | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/qt_test_utils.py | 23 / `ensure_qapplication` | Qt tests require QApplication, but a non-GUI application already exists | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_camera_ae_roi.py | 38 / `put_AEAuxRect` | AEAuxRect write after Close | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_camera_ae_roi.py | 46 / `get_AEAuxRect` | AEAuxRect read after Close | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_camera_linearity_qualification.py | 46 / `capture` | cancelled | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_camera_temperature.py | 218 / `test_temperature_formatting_and_unavailable_gui` | old | A. UI label / button / menu | No | No | No | `—` | — | QLabel; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_camera_temperature.py | 219 / `test_temperature_formatting_and_unavailable_gui` | old | A. UI label / button / menu | No | No | No | `—` | — | QLabel; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_close_safety.py | 149 / `fail_flush` | settings backend unavailable | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
@@ -582,6 +598,53 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | tests/test_smu_ui_structure.py | 289 / `test_output_unknown_is_explicit_and_locks_every_manual_field` | ⚠ 無法確認 SMU 輸出狀態 請確認 SMU 前面板 OUTPUT 已關閉 | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field manual_lock_reason; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_ui_structure.py | 319 / `ready_state` | B2901BL | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field device_label; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_ui_structure.py | 328 / `ready_state` | B2901BL｜手動控制可用｜OUTPUT：OFF | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field status_text; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tools/camera_linearity_qualification/analysis.py | 96 / `analyze_frames` | Resolution inconsistency | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_plan.py | 38 / `build_capture_plan` | Capture plan requires at least one Gain and Exposure | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_plan.py | 40 / `build_capture_plan` | Gain values must be positive | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_plan.py | 42 / `build_capture_plan` | Exposure values must be positive | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_plan.py | 44 / `build_capture_plan` | Repeat and settling-frame counts are invalid | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 78 / `snapshot_state` | Camera state snapshot must be captured on the CameraController owner thread | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 88 / `capture` | Scientific MONO16 frame is unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 92 / `capture` | FrameSequence metadata is unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 162 / `check_cancel` | Safe stop requested | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 166 / `run` | Light phase was not confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 218 / `run` | No Light conditions were captured | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 220 / `run` | Dark phase was not confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 227 / `run` | Dark preview rejected | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 271 / `_capture_verified` | Stale/non-monotonic scientific frame rejected: sequence={acquired.sequence}, previous={self._last_sequence} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 277 / `_capture_verified` | Camera is not Scientific MONO16 measurement-ready | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 281 / `_capture_verified` | Critical EffectiveDNMax/bit-depth/alignment metadata is not verified | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 285 / `_capture_verified` | Camera setting/readback mismatch requested={condition.exposure_ms} ms/G{condition.gain_percent}, actual={actual_us / 1000} ms/G{actual_gain} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 291 / `_effective_roi` | Capture must be uint16 HxW MONO16 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/capture_runner.py | 296 / `_effective_roi` | Capture contains invalid effective DN | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/image_loader.py | 80 / `effective_array` | Scientific input must be a uint16 HxW TIFF | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/image_loader.py | 82 / `effective_array` | SensorBitDepth and EffectiveDNMax are required | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/image_loader.py | 85 / `effective_array` | EffectiveDNMax is inconsistent with SensorBitDepth | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/image_loader.py | 91 / `effective_array` | RawValueAlignment must be verified as right or left | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/image_loader.py | 93 / `effective_array` | Invalid DN above EffectiveDNMax | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/models.py | 35 / `validate` | ROI must have non-negative origin and positive dimensions | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/models.py | 37 / `validate` | ROI extends beyond image bounds | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/profile.py | 83 / `load_profile` | Unsupported camera linearity profile schema | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/regression.py | 29 / `linear_regression` | Regression inputs must be equal-length one-dimensional arrays | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/regression.py | 31 / `linear_regression` | Regression requires at least two distinct x values | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/window.py | 146 / `run` | Camera qualification run failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| tools/camera_linearity_qualification/window.py | 184 / `_build_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| tools/camera_linearity_qualification/window.py | 199 / `_build_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| tools/camera_linearity_qualification/window.py | 214 / `_wire` | Camera: %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| tools/camera_linearity_qualification/window.py | 228 / `refresh_cameras` | Found %d camera(s) | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| tools/camera_linearity_qualification/window.py | 246 / `_camera_closed` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/camera_linearity_qualification/window.py | 254 / `_refresh_temperature` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/camera_linearity_qualification/window.py | 255 / `_refresh_temperature` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/camera_linearity_qualification/window.py | 290 / `_on_progress` | {payload.completed_frames} / {payload.total_frames} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/camera_linearity_qualification/window.py | 290 / `_on_progress` | {payload.median_dn} / {payload.p99_dn} / {payload.saturation_fraction} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/camera_linearity_qualification/window.py | 290 / `_on_progress` | {payload.phase} — {payload.condition} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/camera_linearity_qualification/window.py | 290 / `_on_progress` | {percent}% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/camera_linearity_qualification/window.py | 290 / `_on_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/camera_linearity_qualification/window.py | 386 / `_numbers` | List cannot be empty | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/camera_linearity_qualification/window.py | 393 / `_parse_roi` | ROI must be x,y,width,height | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/analyze_real_dataset.py | 45 / `analyze_dataset` | Real dataset image=%s index=%s total=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| tools/ruler_scale_calibration_tester/analyze_real_dataset.py | 372 / `_save_debug_images` | Failed to write debug image: {target} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/analyze_real_dataset.py | 432 / `_write_contact_sheet` | Failed to write contact sheet: {path} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | tools/ruler_scale_calibration_tester/batch.py | 35 / `run_batch` | Batch ruler calibration image=%s index=%s total=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | tools/ruler_scale_calibration_tester/batch.py | 70 / `_print_summary` | Images {summary['images']} | H. Developer-only log | No | No | No | `—` | — | print |
 | tools/ruler_scale_calibration_tester/batch.py | 71 / `_print_summary` | Ruler detected {summary['ruler_detected']} | H. Developer-only log | No | No | No | `—` | — | print |
@@ -593,21 +656,55 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | tools/ruler_scale_calibration_tester/batch.py | 79 / `_print_summary` | Failure reasons: | H. Developer-only log | No | No | No | `—` | — | print |
 | tools/ruler_scale_calibration_tester/batch.py | 83 / `_print_summary` | - {reason}: {count} | H. Developer-only log | No | No | No | `—` | — | print |
 | tools/ruler_scale_calibration_tester/batch.py | 85 / `_print_summary` | - none | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/capture_history.py | 92 / `begin_capture` | Camera capture must be an HxW scientific frame, got {raw.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/capture_history.py | 115 / `begin_capture` | Failed to write capture preview: {directory / 'preview.png'} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/capture_history.py | 153 / `finalize` | Failed to write debug image: {target} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/capture_history.py | 155 / `finalize` | Capture debug image persistence failed name=%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| tools/ruler_scale_calibration_tester/capture_history.py | 161 / `finalize` | Capture result JSON persistence failed capture_id=%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| tools/ruler_scale_calibration_tester/capture_history.py | 166 / `finalize` | Capture manifest append failed capture_id=%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| tools/ruler_scale_calibration_tester/capture_history.py | 210 / `_create_session_directory` | Could not allocate a unique capture directory below {day_root} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/capture_history.py | 336 / `analyze_camera_capture` | Calibration service returned an invalid result | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/capture_history.py | 338 / `analyze_camera_capture` | Camera capture analysis raised capture_id=%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| tools/ruler_scale_calibration_tester/exposure_sweep.py | 70 / `check_cancel` | controlled_exposure_sweep_cancelled | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/exposure_sweep_main.py | 56 / `main` | ERROR: requested RisingCam camera is unavailable | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/exposure_sweep_main.py | 84 / `done` | Controlled exposure sweep completed: {output} | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/exposure_sweep_main.py | 87 / `done` | ERROR: controlled exposure sweep failed: {error} | H. Developer-only log | No | No | No | `—` | — | print |
+| tools/ruler_scale_calibration_tester/exposure_sweep_main.py | 95 / `main` | Camera error: {message} | H. Developer-only log | No | No | No | `—` | — | print |
 | tools/ruler_scale_calibration_tester/image_loader.py | 18 / `load_image` | Unsupported image format: {source.suffix} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| tools/ruler_scale_calibration_tester/image_loader.py | 29 / `load_image` | Expected one image, got shape {array.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| tools/ruler_scale_calibration_tester/window.py | 69 / `set_array` | Unsupported display image shape: {array.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| tools/ruler_scale_calibration_tester/window.py | 202 / `_build_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| tools/ruler_scale_calibration_tester/window.py | 286 / `_on_camera_opened` | Ruler tester camera connected model=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| tools/ruler_scale_calibration_tester/window.py | 294 / `_on_camera_closed` | Ruler tester camera disconnected | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| tools/ruler_scale_calibration_tester/window.py | 314 / `_on_camera_error` | Ruler tester camera error: %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
-| tools/ruler_scale_calibration_tester/window.py | 416 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| tools/ruler_scale_calibration_tester/window.py | 430 / `_show_result` | {result.pixels_per_mm} px/mm | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| tools/ruler_scale_calibration_tester/window.py | 430 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| tools/ruler_scale_calibration_tester/window.py | 431 / `_show_result` | {result.um_per_pixel} µm/px | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| tools/ruler_scale_calibration_tester/window.py | 431 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| tools/ruler_scale_calibration_tester/window.py | 432 / `_show_result` | {result.calibration_span_mm} mm | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| tools/ruler_scale_calibration_tester/window.py | 433 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| tools/ruler_scale_calibration_tester/window.py | 446 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/image_loader.py | 35 / `load_image` | Expected one image, got shape {array.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/repeatability.py | 44 / `from_result` | Only a successful physically verified calibration can be added | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/repeatability.py | 46 / `from_result` | Calibration result has no source identity | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/repeatability.py | 88 / `add_result` | This captured frame has already been added to this repeatability session. | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/ruler_auto_exposure.py | 300 / `check_cancel` | ruler_auto_exposure_cancelled | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/ruler_auto_exposure.py | 345 / `run` | Calibration service returned an invalid result | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/ruler_auto_exposure.py | 347 / `run` | [RULER_AE] calibration analysis failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| tools/ruler_scale_calibration_tester/ruler_auto_exposure.py | 385 / `run` | [RULER_AE] acquisition quality evaluation failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| tools/ruler_scale_calibration_tester/ruler_auto_exposure.py | 470 / `run` | [RULER_AE] attempt=%s exposure=%s gain=%s candidate_confidence=%.3f global_sat=%s ruler_sat=%s tick_sat=%s michelson=%s decision=%s reason=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| tools/ruler_scale_calibration_tester/ruler_auto_exposure.py | 495 / `run` | [RULER_AE] acquisition failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| tools/ruler_scale_calibration_tester/ruler_auto_exposure.py | 504 / `run` | [RULER_AE] failed to restore original camera state | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| tools/ruler_scale_calibration_tester/ruler_auto_exposure.py | 552 / `capture` | Ruler AE capture did not return a scientific frame | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/source.py | 35 / `update_live` | Expected a scientific HxW frame, got {array.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/source.py | 47 / `capture_camera` | No camera frame is available | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/window.py | 85 / `set_array` | Unsupported display image shape: {array.shape} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/ruler_scale_calibration_tester/window.py | 135 / `run` | Camera capture could not be persisted | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| tools/ruler_scale_calibration_tester/window.py | 294 / `_build_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 311 / `_build_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 416 / `_on_camera_opened` | Ruler tester camera connected model=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| tools/ruler_scale_calibration_tester/window.py | 425 / `_on_camera_closed` | Ruler tester camera disconnected | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| tools/ruler_scale_calibration_tester/window.py | 446 / `_on_camera_error` | Ruler tester camera error: %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| tools/ruler_scale_calibration_tester/window.py | 534 / `_show_ruler_ae_attempt` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 540 / `_show_ruler_ae_attempt` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 550 / `_show_ruler_ae_attempt` | {attempt.michelson_tick_contrast} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 550 / `_show_ruler_ae_attempt` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 739 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 753 / `_show_result` | {result.pixels_per_mm} px/mm | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 753 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 754 / `_show_result` | {result.um_per_pixel} µm/px | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 754 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 755 / `_show_result` | {result.calibration_span_mm} mm | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 756 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 770 / `_show_result` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| tools/ruler_scale_calibration_tester/window.py | 898 / `closeEvent` | Failed to restore ruler AE state during close | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
 
 ## Canonical-value audit
 

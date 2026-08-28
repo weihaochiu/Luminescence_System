@@ -1,5 +1,15 @@
 # EL 量測設備控制程式
 
+## Standalone Camera Linearity Qualification
+
+- `run_camera_linearity_qualification.bat` launches an independent PySide6 tool for guided
+  Gain × Exposure MONO16 Light/Dark capture, existing-folder analysis, qualification reporting,
+  and production-gated `camera_linearity_profile.json` generation.
+- It reuses the existing `CameraController` + `CameraCaptureBridge` stream and does not alter
+  Recipe, SMU, Relay, EL Matrix, or production image-output behavior.
+- See `tools/camera_linearity_qualification/README.md` for the Windows hardware procedure and
+  evidence limitations. Synthetic tests never count as RisingCam hardware qualification.
+
 ## zh-TW / en-US and centralized error handling
 
 - The application supports persistent `zh-TW` and `en-US` UI language selection with runtime MainWindow retranslation; Recipe, Settings, and measurement data retain canonical machine values.
