@@ -141,6 +141,16 @@ class SMUDriver:
     def set_current(self, amps: float) -> None:
         raise NotImplementedError("This SMU driver does not support current-source control")
 
+    def update_voltage_source_level(self, volts: float) -> None:
+        """Update an already-configured voltage source without changing OUTPUT."""
+
+        self.set_voltage(volts)
+
+    def update_current_source_level(self, amps: float) -> None:
+        """Update an already-configured current source without changing OUTPUT."""
+
+        self.set_current(amps)
+
     def set_output_enabled(self, enabled: bool) -> None:
         raise NotImplementedError("This SMU driver does not support output control")
 

@@ -21,6 +21,7 @@
 
 - Recipe schema v10 不含 HDR；舊 Recipe 的 legacy `hdr` key 只在載入時忽略，重新儲存後即消失。
 - 正式量測順序固定為：初始化／Preflight → 選配極性確認 → 選配 Shared Dark → 各 Channel 的選配 Dark IV → Current Density → Gain → Exposure → Repeat → 輸出 → Safe Shutdown。
+- Dark I–V 在 OUTPUT OFF 時只設定一次 CV mode、Compliance 與 NPLC，掃描期間保持 OUTPUT ON 並只更新 source level；完成、取消、Compliance 或異常都會統一回零並驗證 OUTPUT OFF。
 - Gain、Exposure 與 Repeat 完全由 `recipe.el_matrix` 控制；主畫面、Recipe UI、Settings、snapshot、preflight、runner 與輸出均無 HDR 分支。
 - Scientific TIFF 使用 NumPy 與 tifffile；PNG/JPEG 視覺化使用 Pillow。正式量測路徑不依賴 OpenCV；獨立式鐵尺校正 tester 使用 headless OpenCV 執行 detection/rectification。
 

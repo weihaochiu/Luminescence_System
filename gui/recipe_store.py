@@ -413,6 +413,17 @@ class Recipe:
                 errors.append(tr("recipe.validation.dark_iv_voltage"))
             if not 0 < self.dark_iv.current_compliance_ma <= maximum_current_compliance_ma:
                 errors.append(tr("recipe.validation.dark_iv_compliance"))
+            if self.dark_iv.direction not in {"forward", "reverse", "bidirectional"}:
+                errors.append(tr("recipe.validation.dark_iv_direction"))
+            if not math.isfinite(self.dark_iv.nplc) or not 0.001 <= self.dark_iv.nplc <= 100:
+                errors.append(tr("recipe.validation.dark_iv_nplc"))
+            if (
+                self.dark_iv.dark_stabilization_s < 0
+                or self.dark_iv.dwell_s < 0
+                or self.dark_iv.inter_scan_delay_s < 0
+                or self.dark_iv.repeat_count < 1
+            ):
+                errors.append(tr("recipe.validation.dark_iv_timing"))
 
         if not self.output.selected_formats():
             errors.append(tr("recipe.validation.output_format"))

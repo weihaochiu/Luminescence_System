@@ -220,6 +220,8 @@ Manual 與 Recipe 在 `SMUControlManager` 互鎖。所有高階 output transitio
 
 `PolarityService` 預設為 `UNKNOWN`（factor `None`）。Manual setpoint 是 SMU 實體座標，直接送至儀器且不依賴 Polarity；Recipe setpoint 才是 Device 座標。EL Matrix 會先對每個 Channel 完成 Jsc／Voc determination 並保存結果，之後 Channel 重入時只在 verified OUTPUT OFF 狀態重套該 Channel 的明確 `+1` 或 `-1`。`set_confirmed_factor()` 為 idempotent assignment 而非 toggle；不得略過或沿用上一 Channel factor。
 
+Dark I–V 使用專用的連續 Recipe sweep：必須在 confirmed OUTPUT OFF 時套用 NPLC 並完成一次 CV mode／Compliance 設定，然後只透過 verified source-level update 改變每點電壓，不得在掃描點之間重新 configure source mode 或 cycle OUTPUT。NPLC 在掃描後復原，所有完成與異常路徑均會驗證 OUTPUT OFF，且整段 Dark I–V 受連續輸出 watchdog 約束。
+
 Emergency request 先設定 threading Event latch，再排入相同 single-worker queue 做 `safe_shutdown()`。Normal operation 會在 configure 前及真正送出 `OUTPUT ON` 前檢查 latch；最後一段 check／OUTPUT ON 與 Emergency latch transition 有明確同步邊界，因此 Emergency 之後尚未送出的 normal output 不會開啟。已在執行中的 blocking PyVISA call 不宣稱可被 preempt。Emergency shutdown 完整成功且 OUTPUT OFF 後才回到 IDLE 並清除 latch；failure 則保留 latch/錯誤並進入 FAULT。
 
 Manual → Recipe 交接必須先完成 verified shutdown，釋放至 IDLE 後才允許 Recipe acquire。Recipe → Manual 交接先設 cancel latch 封鎖新 Recipe output、通知 worker cancel、關閉白光，再等待目前 I/O safe point 執行 verified shutdown；只有 `OUTPUT OFF` 明確確認後才回到可手動狀態。EL Matrix 的 Channel transition 使用 `recipe_output_off()` 保留 Recipe ownership，但仍要求 OUTPUT OFF readback 後才允許 routing break-before-make。

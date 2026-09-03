@@ -3,6 +3,7 @@ from __future__ import annotations
 """Central SMU ownership, coordinate mapping, safety, and serialized I/O."""
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -1257,6 +1258,76 @@ class SMUControlManager(QObject):
             physical,
         )
         return physical
+
+    def recipe_update_output_level(
+        self, mode: str, requested: float, compliance: float
+    ) -> float:
+        """Update one Recipe sweep point without reconfiguring or cycling OUTPUT."""
+
+        self.safety.validate(mode, requested, compliance)
+        with self._lock:
+            if self._ownership is not SMUOwnership.RECIPE:
+                raise SMUInterlockError("Recipe does not own the SMU")
+            self._ensure_normal_output_allowed_locked()
+            if self._recipe_cancel_latch.is_set():
+                raise SMUInterlockError("Recipe output is blocked by a handover request")
+            if (
+                not self._output_enabled
+                or self._output_state is not SMUOutputState.ON
+                or self._mode != mode
+            ):
+                raise SMUInterlockError(
+                    "Recipe source-level update requires the matching source mode "
+                    "with OUTPUT ON"
+                )
+            physical = self.polarity.to_physical(requested)
+        with self._io_lock:
+            driver = self._required_driver()
+            with self._output_enable_lock:
+                self._raise_if_output_blocked(SMUOwnership.RECIPE)
+                if mode == "CV":
+                    driver.update_voltage_source_level(physical)
+                else:
+                    driver.update_current_source_level(physical)
+        LOG.info(
+            "RECIPE_SMU LEVEL_UPDATE DEVICE_REQUEST=%+.9g "
+            "POLARITY_FACTOR=%+d PHYSICAL=%+.9g",
+            requested,
+            self.polarity.factor,
+            physical,
+        )
+        return physical
+
+    @contextmanager
+    def recipe_measurement_nplc(self, mode: str, nplc: float):
+        """Temporarily apply Recipe measurement integration without holding I/O."""
+
+        with self._lock:
+            if self._ownership is not SMUOwnership.RECIPE:
+                raise SMUInterlockError("Recipe does not own the SMU")
+            self._ensure_normal_output_allowed_locked()
+            if self._output_enabled or not self._output_confirmed_off:
+                raise SMUInterlockError(
+                    "Recipe NPLC must be configured while OUTPUT is confirmed OFF"
+                )
+        integration = None
+        applied = False
+        with self._io_lock:
+            driver = self._required_driver()
+            self._raise_if_output_blocked(SMUOwnership.RECIPE)
+            integration = driver.temporary_measurement_nplc(mode, float(nplc))
+            applied = bool(integration.__enter__())
+            if not applied:
+                integration.__exit__(None, None, None)
+                raise SMUInterlockError(
+                    f"Connected SMU does not support Recipe {mode} NPLC control"
+                )
+        try:
+            yield
+        finally:
+            if integration is not None and applied:
+                with self._io_lock:
+                    integration.__exit__(None, None, None)
 
     def set_recipe_polarity_factor(self, factor: int | None) -> None:
         """Replace the per-channel mapping while Recipe owns a confirmed-OFF SMU."""

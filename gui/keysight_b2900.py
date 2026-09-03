@@ -133,6 +133,16 @@ class KeysightB2900Driver(SMUDriver):
     def set_current(self, amps: float) -> None:
         self.resource.write(f":SOUR:CURR {format_scpi_number(amps)}")
 
+    def update_voltage_source_level(self, volts: float) -> None:
+        """Change a CV sweep point while preserving the current OUTPUT state."""
+
+        self._set_and_verify_source_level("VOLT", volts)
+
+    def update_current_source_level(self, amps: float) -> None:
+        """Change a CC sweep point while preserving the current OUTPUT state."""
+
+        self._set_and_verify_source_level("CURR", amps)
+
     def set_output_enabled(self, enabled: bool) -> None:
         self.resource.write(":OUTP ON" if enabled else ":OUTP OFF")
 

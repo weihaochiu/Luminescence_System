@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import tempfile
 import csv
 import json
@@ -40,6 +41,7 @@ from gui.measurement_output import (
 from gui.measurement_execution_plan import build_measurement_execution_plan
 from gui.measurement_progress_dialog import MeasurementProgressDialog
 from gui.main_window_devices import MainWindowDeviceMixin
+from gui.keysight_b2900 import KeysightB2900Driver
 from gui.smu_base import SMUDevice
 from gui.recipe_store import Recipe
 from gui.recipe_dialog import RecipeManagerDialog
@@ -167,10 +169,12 @@ class _RecordingSMUDriver:
         self.voltage_v = 0.0
         self.current_a = 0.0
         self.compliance_tripped = False
+        self.configure_voltage_calls = 0
 
     def configure_voltage_source(
         self, voltage_v: float, current_compliance_a: float
     ) -> None:
+        self.configure_voltage_calls += 1
         self.voltage_v = voltage_v
         self.current_a = 0.0008 if voltage_v >= 0 else -0.0008
         self.commands.append(("CV", voltage_v, current_compliance_a))
@@ -185,6 +189,20 @@ class _RecordingSMUDriver:
     def set_output_enabled(self, enabled: bool) -> None:
         self.output = enabled
         self.commands.append(("OUTPUT", enabled))
+
+    def update_voltage_source_level(self, voltage_v: float) -> None:
+        self.voltage_v = voltage_v
+        self.current_a = 0.0008 if voltage_v >= 0 else -0.0008
+        self.commands.append(("CV", voltage_v, 0.020))
+
+    def update_current_source_level(self, current_a: float) -> None:
+        self.current_a = current_a
+        self.voltage_v = 1.2 if current_a >= 0 else -1.2
+        self.commands.append(("CC", current_a, 3.0))
+
+    @contextmanager
+    def temporary_measurement_nplc(self, _mode: str, _nplc: float):
+        yield True
 
     def safe_stop(self) -> list[str]:
         self.output = False
@@ -202,6 +220,49 @@ class _RecordingSMUDriver:
 
     def query_compliance_tripped(self, _mode: str) -> bool:
         return self.compliance_tripped
+
+
+class _KeysightSweepResource:
+    def __init__(self) -> None:
+        self.writes: list[str] = []
+        self.transactions: list[str] = []
+        self.output = False
+        self.source_mode = "VOLT"
+        self.voltage_v = 0.0
+        self.current_nplc = 0.2
+        self.current_nplc_auto = True
+
+    def write(self, command: str) -> None:
+        self.writes.append(command)
+        self.transactions.append(command)
+        if command == ":OUTP ON":
+            self.output = True
+        elif command == ":OUTP OFF":
+            self.output = False
+        elif command.startswith(":SOUR:FUNC:MODE "):
+            self.source_mode = command.rsplit(" ", 1)[-1]
+        elif command.startswith(":SOUR:VOLT "):
+            self.voltage_v = float(command.rsplit(" ", 1)[-1])
+        elif command.startswith(":SENS:CURR:NPLC "):
+            self.current_nplc = float(command.rsplit(" ", 1)[-1])
+        elif command == ":SENS:CURR:NPLC:AUTO ON":
+            self.current_nplc_auto = True
+        elif command == ":SENS:CURR:NPLC:AUTO OFF":
+            self.current_nplc_auto = False
+
+    def query(self, command: str) -> str:
+        self.transactions.append(command)
+        responses = {
+            ":OUTP?": "1" if self.output else "0",
+            ":SOUR:FUNC:MODE?": self.source_mode,
+            ":SOUR:VOLT?": str(self.voltage_v),
+            ":SENS:CURR:NPLC?": str(self.current_nplc),
+            ":SENS:CURR:NPLC:AUTO?": "1" if self.current_nplc_auto else "0",
+            ":MEAS:VOLT?": str(self.voltage_v),
+            ":MEAS:CURR?": str(self.voltage_v / 1000.0),
+            ":SENS:CURR:PROT:TRIP?": "0",
+        }
+        return responses[command]
 
 
 class _ControlBackedHardware(_FakeHardware):
@@ -286,7 +347,7 @@ def _small_recipe(channel_count: int = 2) -> Recipe:
     recipe.dark_iv.stop_v = 0.1
     recipe.dark_iv.step_v = 0.1
     recipe.dark_iv.dwell_s = 0
-    recipe.dark_iv.nplc = 0
+    recipe.dark_iv.nplc = 0.001
     return recipe
 
 
@@ -732,6 +793,8 @@ class ELMatrixRunnerTests(unittest.TestCase):
         cases = (
             (0.0, 1.0, "forward", [0.0, 1.0]),
             (1.0, 0.0, "forward", [1.0, 0.0]),
+            (0.0, 1.0, "reverse", [1.0, 0.0]),
+            (1.0, 0.0, "reverse", [0.0, 1.0]),
             (0.0, 1.0, "bidirectional", [0.0, 1.0, 0.0]),
         )
         for factor in (-1, 1):
@@ -757,6 +820,7 @@ class ELMatrixRunnerTests(unittest.TestCase):
                         direction=direction,
                         repeat_count=1,
                         current_compliance_ma=20.0,
+                        nplc=1.0,
                         dwell_s=0.0,
                         inter_scan_delay_s=0.0,
                     )
@@ -785,6 +849,58 @@ class ELMatrixRunnerTests(unittest.TestCase):
                         self.assertFalse(driver.output)
                     finally:
                         control.safe_shutdown(SMUOwnership.RECIPE)
+
+    def test_keysight_dark_iv_keeps_output_on_between_sweep_points(self) -> None:
+        resource = _KeysightSweepResource()
+        driver = KeysightB2900Driver(
+            resource,
+            SMUDevice(
+                "USB0::KEYSIGHT-SWEEP::INSTR",
+                manufacturer="Keysight Technologies",
+                model="B2901B",
+                serial_number="SWEEP-SERIAL",
+                supported=True,
+            ),
+        )
+        control = SMUControlManager()
+        control.bind_driver(driver, output_confirmed_off=True)
+        control.acquire_recipe()
+        control.set_recipe_polarity_factor(1)
+        adapter = ELMatrixHardwareAdapter(
+            control,
+            SimpleNamespace(),
+            SimpleNamespace(),
+            SimpleNamespace(),
+        )
+        settings = SimpleNamespace(
+            start_v=0.0,
+            stop_v=1.0,
+            step_v=0.5,
+            direction="forward",
+            repeat_count=1,
+            current_compliance_ma=20.0,
+            nplc=1.0,
+            dwell_s=0.0,
+            inter_scan_delay_s=0.0,
+        )
+        try:
+            rows = adapter.run_dark_iv(settings, lambda: None)
+            self.assertEqual([0.0, 0.5, 1.0], [row["SetVoltageV"] for row in rows])
+            self.assertEqual(1, resource.writes.count(":OUTP ON"))
+            self.assertEqual(2, resource.writes.count(":OUTP OFF"))
+            output_on = resource.writes.index(":OUTP ON")
+            final_output_off = len(resource.writes) - 1 - resource.writes[::-1].index(
+                ":OUTP OFF"
+            )
+            self.assertNotIn(":OUTP OFF", resource.writes[output_on + 1:final_output_off])
+            self.assertEqual(1, resource.writes.count(":SOUR:FUNC:MODE VOLT"))
+            self.assertIn(":SENS:CURR:NPLC 1", resource.writes)
+            self.assertIn(":SENS:CURR:NPLC 0.2", resource.writes)
+            self.assertFalse(resource.output)
+            self.assertTrue(control.output_confirmed_off)
+        finally:
+            control.safe_shutdown(SMUOwnership.RECIPE)
+            control.shutdown(safety_confirmed=True)
 
     def test_dark_iv_compliance_and_cancel_paths_still_safe_shutdown(self) -> None:
         for stage in ("compliance", "cancel"):
@@ -1010,6 +1126,29 @@ class ELMatrixRunnerTests(unittest.TestCase):
         repeat.el_matrix.current_density_ma_cm2 = [2]
         repeat.el_matrix.repeat = 10
         self.assertAlmostEqual(1806.925, repeat.matrix_output_on_time_s(), places=3)
+
+    def test_dark_iv_is_covered_by_continuous_output_watchdog(self) -> None:
+        class SlowDarkHardware(_FakeHardware):
+            def run_dark_iv(self, _settings, check_cancel):
+                self.events.append("dark_iv")
+                time.sleep(0.02)
+                check_cancel()
+                return []
+
+        recipe = _small_recipe(1)
+        recipe.el_matrix.dark_frame_enabled = False
+        hardware = SlowDarkHardware()
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "max_output_time_s"):
+                ELMatrixRunner(
+                    recipe,
+                    hardware,
+                    directory,
+                    report_progress=lambda _item: None,
+                    is_cancel_requested=lambda: False,
+                    max_output_time_s=0.001,
+                ).run()
+        self.assertTrue(hardware.safe)
 
     def test_runtime_error_always_reaches_shared_safe_shutdown(self) -> None:
         recipe = _small_recipe(1)

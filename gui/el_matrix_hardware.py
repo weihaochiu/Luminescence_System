@@ -97,34 +97,49 @@ class ELMatrixHardwareAdapter:
             ascending.append(value)
             value += direction * float(settings.step_v)
         points = ascending
-        if settings.direction == "bidirectional":
+        if settings.direction == "reverse":
+            points = list(reversed(ascending))
+        elif settings.direction == "bidirectional":
             points = ascending + list(reversed(ascending[:-1]))
         rows: list[dict[str, Any]] = []
         polarity_factor = self.control.polarity.factor
         if polarity_factor not in (-1, 1):
             raise RuntimeError("Dark I-V requires a confirmed polarity factor")
-        for repeat in range(1, max(1, int(settings.repeat_count)) + 1):
-            for point_index, voltage in enumerate(points, start=1):
-                check_cancel()
-                physical_voltage_v = self.control.recipe_output(
-                    "CV", float(voltage), float(settings.current_compliance_ma) / 1000.0
-                )
-                interruptible_wait(float(settings.dwell_s), check_cancel)
-                reading = self.control.recipe_readback()
-                rows.append({
-                    "Repeat": repeat,
-                    "PointIndex": point_index,
-                    "SetVoltageV": float(voltage),
-                    "PolarityFactor": polarity_factor,
-                    "CommandedVoltageV": physical_voltage_v,
-                    "CommandedPhysicalVoltageV": physical_voltage_v,
-                    "MeasuredVoltageV": reading.voltage_v,
-                    "MeasuredCurrentA": reading.current_a,
-                    "MeasuredPowerW": reading.power_w,
-                    "ComplianceTripped": reading.compliance_tripped,
-                })
-            if repeat < max(1, int(settings.repeat_count)):
-                interruptible_wait(float(settings.inter_scan_delay_s), check_cancel)
+        compliance_a = float(settings.current_compliance_ma) / 1000.0
+        output_started = False
+        with self.control.recipe_measurement_nplc("CURR", float(settings.nplc)):
+            try:
+                for repeat in range(1, max(1, int(settings.repeat_count)) + 1):
+                    for point_index, voltage in enumerate(points, start=1):
+                        check_cancel()
+                        if output_started:
+                            physical_voltage_v = self.control.recipe_update_output_level(
+                                "CV", float(voltage), compliance_a
+                            )
+                        else:
+                            physical_voltage_v = self.control.recipe_output(
+                                "CV", float(voltage), compliance_a
+                            )
+                            output_started = True
+                        interruptible_wait(float(settings.dwell_s), check_cancel)
+                        reading = self.control.recipe_readback()
+                        rows.append({
+                            "Repeat": repeat,
+                            "PointIndex": point_index,
+                            "SetVoltageV": float(voltage),
+                            "PolarityFactor": polarity_factor,
+                            "CommandedVoltageV": physical_voltage_v,
+                            "CommandedPhysicalVoltageV": physical_voltage_v,
+                            "MeasuredVoltageV": reading.voltage_v,
+                            "MeasuredCurrentA": reading.current_a,
+                            "MeasuredPowerW": reading.power_w,
+                            "ComplianceTripped": reading.compliance_tripped,
+                        })
+                    if repeat < max(1, int(settings.repeat_count)):
+                        interruptible_wait(float(settings.inter_scan_delay_s), check_cancel)
+            finally:
+                if self.control.ownership is SMUOwnership.RECIPE and output_started:
+                    self.control.recipe_output_off("Dark I-V completion")
         return rows
 
     def set_current(self, current_a: float, voltage_compliance_v: float) -> float:
@@ -150,7 +165,13 @@ class ELMatrixHardwareAdapter:
         )
 
     def output_off(self) -> None:
-        if self.control.ownership is SMUOwnership.RECIPE:
+        if (
+            self.control.ownership is SMUOwnership.RECIPE
+            and (
+                self.control.output_enabled
+                or not self.control.output_confirmed_off
+            )
+        ):
             self.control.recipe_output_off("EL Matrix transition")
 
     def clear_routing(self) -> None:

@@ -346,7 +346,11 @@ class ELMatrixRunner:
             interruptible_wait(self.recipe.dark_iv.dark_stabilization_s, self.check_cancel)
             self._eta.consume_fixed(monotonic() - started)
             self._phase("Dark I-V", channel.channel, channel, channel_index)
-            rows = self.hardware.run_dark_iv(self.recipe.dark_iv, self.check_cancel)
+            self._output_started = monotonic()
+            try:
+                rows = self.hardware.run_dark_iv(self.recipe.dark_iv, self.check_cancel)
+            finally:
+                self._output_started = None
             self._save_dark_iv(channel, rows)
             self.hardware.output_off()
 
