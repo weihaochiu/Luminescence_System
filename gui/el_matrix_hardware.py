@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Adapters from the hardware-neutral EL Matrix runner to verified services."""
 
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from .camera_capture_bridge import CameraCaptureBridge
 from .el_matrix_runner import CapturedFrame, interruptible_wait
@@ -87,6 +87,7 @@ class ELMatrixHardwareAdapter:
         self,
         settings: Any,
         check_cancel: Callable[[], None],
+        report_point: Callable[[Mapping[str, Any]], None] = lambda _row: None,
     ) -> list[dict[str, Any]]:
         if settings.step_v <= 0:
             raise ValueError("Dark I-V step must be greater than zero")
@@ -96,11 +97,13 @@ class ELMatrixHardwareAdapter:
         while (value - settings.stop_v) * direction <= 1e-12:
             ascending.append(value)
             value += direction * float(settings.step_v)
-        points = ascending
+        point_plan = [(voltage, "forward") for voltage in ascending]
         if settings.direction == "reverse":
-            points = list(reversed(ascending))
+            point_plan = [(voltage, "reverse") for voltage in reversed(ascending)]
         elif settings.direction == "bidirectional":
-            points = ascending + list(reversed(ascending[:-1]))
+            point_plan += [
+                (voltage, "reverse") for voltage in reversed(ascending[:-1])
+            ]
         rows: list[dict[str, Any]] = []
         polarity_factor = self.control.polarity.factor
         if polarity_factor not in (-1, 1):
@@ -110,7 +113,9 @@ class ELMatrixHardwareAdapter:
         with self.control.recipe_measurement_nplc("CURR", float(settings.nplc)):
             try:
                 for repeat in range(1, max(1, int(settings.repeat_count)) + 1):
-                    for point_index, voltage in enumerate(points, start=1):
+                    for point_index, (voltage, sweep_direction) in enumerate(
+                        point_plan, start=1
+                    ):
                         check_cancel()
                         if output_started:
                             physical_voltage_v = self.control.recipe_update_output_level(
@@ -123,9 +128,10 @@ class ELMatrixHardwareAdapter:
                             output_started = True
                         interruptible_wait(float(settings.dwell_s), check_cancel)
                         reading = self.control.recipe_readback()
-                        rows.append({
+                        row = {
                             "Repeat": repeat,
                             "PointIndex": point_index,
+                            "SweepDirection": sweep_direction,
                             "SetVoltageV": float(voltage),
                             "PolarityFactor": polarity_factor,
                             "CommandedVoltageV": physical_voltage_v,
@@ -134,7 +140,9 @@ class ELMatrixHardwareAdapter:
                             "MeasuredCurrentA": reading.current_a,
                             "MeasuredPowerW": reading.power_w,
                             "ComplianceTripped": reading.compliance_tripped,
-                        })
+                        }
+                        rows.append(row)
+                        report_point(dict(row))
                     if repeat < max(1, int(settings.repeat_count)):
                         interruptible_wait(float(settings.inter_scan_delay_s), check_cancel)
             finally:

@@ -30,6 +30,7 @@ from .measurement_snapshot import (
 )
 from .recipe_store import ChannelRecipe, Recipe
 from .numeric import format_voltage_number
+from .dark_iv_chart import save_dark_iv_plot_png
 
 
 @dataclass(frozen=True)
@@ -65,13 +66,35 @@ class MatrixRuntimeProgress:
     estimated_finish: datetime | None = None
 
 
+@dataclass(frozen=True)
+class DarkIVPointProgress:
+    channel: str
+    sample_id: str
+    current: int
+    total: int
+    row: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class DarkIVScanCompleted:
+    channel: str
+    sample_id: str
+    total: int
+    png_path: str
+
+
 class ELMatrixHardware(Protocol):
     def prepare_shared_dark(self) -> None: ...
     def route_channel(self, logical_channel: str, check_cancel: Callable[[], None]) -> None: ...
     def run_polarity(self, channel: ChannelRecipe, check_cancel: Callable[[], None]) -> dict[str, Any]: ...
     def apply_polarity_factor(self, factor: int) -> None: ...
     def prepare_channel_dark(self) -> None: ...
-    def run_dark_iv(self, settings: Any, check_cancel: Callable[[], None]) -> list[dict[str, Any]]: ...
+    def run_dark_iv(
+        self,
+        settings: Any,
+        check_cancel: Callable[[], None],
+        report_point: Callable[[Mapping[str, Any]], None],
+    ) -> list[dict[str, Any]]: ...
     def set_current(self, current_a: float, voltage_compliance_v: float) -> float: ...
     def set_voltage(self, voltage_v: float, current_compliance_ma: float) -> float: ...
     def readback(self) -> Any: ...
@@ -347,11 +370,37 @@ class ELMatrixRunner:
             self._eta.consume_fixed(monotonic() - started)
             self._phase("Dark I-V", channel.channel, channel, channel_index)
             self._output_started = monotonic()
+            repeat_total = max(1, int(self.recipe.dark_iv.repeat_count))
+            point_total = self.recipe.dark_iv_point_count()
+            points_per_repeat = max(1, point_total // repeat_total)
+
+            def report_dark_iv_point(row: Mapping[str, Any]) -> None:
+                repeat_index = int(row.get("Repeat", 1))
+                point_index = int(row.get("PointIndex", 1))
+                current = (repeat_index - 1) * points_per_repeat + point_index
+                self.report_progress(DarkIVPointProgress(
+                    channel=channel.channel,
+                    sample_id=self.sample_ids[channel.channel],
+                    current=min(current, point_total),
+                    total=point_total,
+                    row=dict(row),
+                ))
+
             try:
-                rows = self.hardware.run_dark_iv(self.recipe.dark_iv, self.check_cancel)
+                rows = self.hardware.run_dark_iv(
+                    self.recipe.dark_iv,
+                    self.check_cancel,
+                    report_dark_iv_point,
+                )
             finally:
                 self._output_started = None
-            self._save_dark_iv(channel, rows)
+            png_path = self._save_dark_iv(channel, rows)
+            self.report_progress(DarkIVScanCompleted(
+                channel=channel.channel,
+                sample_id=self.sample_ids[channel.channel],
+                total=len(rows),
+                png_path=str(png_path),
+            ))
             self.hardware.output_off()
 
         channel_capture_total = self.plan.estimate().el_per_channel
@@ -420,7 +469,7 @@ class ELMatrixRunner:
             self.hardware.output_off()
             self.hardware.clear_routing()
 
-    def _save_dark_iv(self, channel: ChannelRecipe, rows: list[dict[str, Any]]) -> None:
+    def _save_dark_iv(self, channel: ChannelRecipe, rows: list[dict[str, Any]]) -> Path:
         sample_id = self.sample_ids[channel.channel]
         folder = self.run_directory / f"{channel.channel}_{sanitize_filename(sample_id)}" / "DARK_IV"
         folder.mkdir(parents=True, exist_ok=True)
@@ -434,6 +483,7 @@ class ELMatrixRunner:
         fields = list(rows[0]) if rows else [
             "Repeat",
             "PointIndex",
+            "SweepDirection",
             "SetVoltageV",
             "PolarityFactor",
             "CommandedVoltageV",
@@ -447,9 +497,32 @@ class ELMatrixRunner:
             writer = csv.DictWriter(stream, fieldnames=fields)
             writer.writeheader()
             writer.writerows(rows)
+        timestamp = self.now().isoformat(timespec="seconds")
+        settings = self.recipe.to_dict()["dark_iv"]
+        footer_lines = (
+            f"Timestamp: {timestamp} | Channel: {channel.channel} | "
+            f"Sample ID: {sample_id} | Points: {len(rows)}",
+            f"Sweep: {format_voltage_number(settings['start_v'])} to "
+            f"{format_voltage_number(settings['stop_v'])} V | "
+            f"Step: {format_voltage_number(settings['step_v'])} V | "
+            f"Direction: {settings['direction']} | Repeat: {settings['repeat_count']}",
+            f"Dwell: {settings['dwell_s']:g} s | NPLC: {settings['nplc']:g} | "
+            f"Current compliance: {settings['current_compliance_ma']:g} mA | "
+            f"Polarity factor: {polarity_factor:+d}",
+            "Axes: X=device-coordinate measured Voltage (V) | "
+            "Y=|Current| (A), log10; zero/invalid omitted | CSV: dark_iv.csv | "
+            f"Snapshot SHA-256: {self.snapshot['snapshot_sha256'][:12]}",
+        )
+        png_path = save_dark_iv_plot_png(
+            rows,
+            folder / "dark_iv.png",
+            channel=channel.channel,
+            sample_id=sample_id,
+            footer_lines=footer_lines,
+        )
         metadata = {
             "MeasurementType": "DARK_IV",
-            "Timestamp": self.now().isoformat(timespec="seconds"),
+            "Timestamp": timestamp,
             "Channel": channel.channel,
             "SampleID": sample_id,
             "DeviceAreaCm2": channel.area_cm2,
@@ -461,14 +534,22 @@ class ELMatrixRunner:
                 "CommandedPhysicalVoltageV": "physical_smu_command",
                 "MeasuredVoltageV": "smu_readback",
             },
-            "Settings": self.recipe.to_dict()["dark_iv"],
+            "Settings": settings,
             "CsvPath": str(csv_path),
             "CsvSha256": sha256_file(csv_path),
+            "PlotPngPath": str(png_path),
+            "PlotPngSha256": sha256_file(png_path),
+            "PlotAxes": {
+                "X": "device-coordinate measured voltage (V)",
+                "Y": "absolute measured current (A), logarithmic scale",
+            },
+            "PlotFooter": list(footer_lines),
             "SnapshotSha256": self.snapshot["snapshot_sha256"],
         }
         (folder / "dark_iv.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        return png_path
 
     def _capture_and_save(self, capture: MatrixCapture, channel: ChannelRecipe | None,
                           applicable_channels: list[str] | None) -> np.ndarray:

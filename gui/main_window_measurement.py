@@ -12,12 +12,18 @@ from PySide6.QtWidgets import QMessageBox
 from core.i18n import tr
 
 from .camera_capture_bridge import CameraCaptureBridge
+from .dark_iv_chart import DarkIVChartDialog
 from .error_reporting import report_error
 from .camera_exposure import ExposureMode
 from .el_matrix_hardware import ELMatrixHardwareAdapter
 from .el_matrix_plan import ELMatrixPlan, format_duration, format_finish_time
 from .el_matrix_preflight import collect_preflight_errors
-from .el_matrix_runner import ELMatrixRunner, MatrixRuntimeProgress
+from .el_matrix_runner import (
+    DarkIVPointProgress,
+    DarkIVScanCompleted,
+    ELMatrixRunner,
+    MatrixRuntimeProgress,
+)
 from .measurement_snapshot import build_el_matrix_snapshot, snapshot_payload
 from .measurement_progress_dialog import MeasurementProgressDialog
 from .measurement_execution_plan import (
@@ -172,9 +178,39 @@ def _stop_camera_for_emergency(self: Any) -> None:
 
 
 def _on_measurement_progress(
-    self: Any, progress: MeasurementProgress | MatrixRuntimeProgress | PixelCSVProgress
+    self: Any,
+    progress: (
+        MeasurementProgress
+        | MatrixRuntimeProgress
+        | DarkIVPointProgress
+        | DarkIVScanCompleted
+        | PixelCSVProgress
+    ),
 ) -> None:
     dialog = getattr(self, "_measurement_progress_dialog", None)
+    if isinstance(progress, DarkIVPointProgress):
+        dark_iv_dialog = getattr(self, "_dark_iv_progress_dialog", None)
+        if dark_iv_dialog is None:
+            dark_iv_dialog = DarkIVChartDialog(self)
+            self._dark_iv_progress_dialog = dark_iv_dialog
+        dark_iv_dialog.add_point(progress)
+        self.status_message.setText(tr(
+            "dark_iv.runtime_status",
+            channel=progress.channel,
+            current=progress.current,
+            total=progress.total,
+        ))
+        return
+    if isinstance(progress, DarkIVScanCompleted):
+        dark_iv_dialog = getattr(self, "_dark_iv_progress_dialog", None)
+        if dark_iv_dialog is not None:
+            dark_iv_dialog.mark_complete(progress.png_path)
+        self.status_message.setText(tr(
+            "dark_iv.saved_status",
+            channel=progress.channel,
+            path=progress.png_path,
+        ))
+        return
     if isinstance(progress, PixelCSVProgress):
         self._measurement_hardware_active = False
         self.stop_measurement_button.setEnabled(False)
@@ -202,6 +238,9 @@ def _on_measurement_finished(self: Any, result: object) -> None:
         dialog = getattr(self, "_measurement_progress_dialog", None)
         if dialog is not None:
             dialog.set_failed(message)
+        dark_iv_dialog = getattr(self, "_dark_iv_progress_dialog", None)
+        if dark_iv_dialog is not None:
+            dark_iv_dialog.mark_failed(message)
         report_error(
             self,
             "SMU-203",
@@ -260,6 +299,9 @@ def _on_measurement_cancelled(self: Any) -> None:
             dialog.set_aborted(tr("measurement.aborted_emergency"))
         else:
             dialog.set_stopped()
+    dark_iv_dialog = getattr(self, "_dark_iv_progress_dialog", None)
+    if dark_iv_dialog is not None:
+        dark_iv_dialog.mark_aborted()
 
 
 def _on_measurement_failed(self: Any, message: str) -> None:
@@ -282,6 +324,9 @@ def _on_measurement_failed(self: Any, message: str) -> None:
             dialog.set_aborted(tr("measurement.aborted_emergency"))
         else:
             dialog.set_failed(message)
+    dark_iv_dialog = getattr(self, "_dark_iv_progress_dialog", None)
+    if dark_iv_dialog is not None:
+        dark_iv_dialog.mark_failed(message)
 
 
 def _validate_camera_matrix(self: Any) -> list[str]:
@@ -493,6 +538,12 @@ def begin_el_matrix_measurement(self: Any) -> None:
     dialog.stop_requested.connect(self.stop_background_measurement)
     dialog.retry_pixel_csv_requested.connect(self.retry_pixel_csv_postprocess)
     self._measurement_progress_dialog = dialog
+    dark_iv_dialog = getattr(self, "_dark_iv_progress_dialog", None)
+    if dark_iv_dialog is not None:
+        dark_iv_dialog.reset()
+        dark_iv_dialog.hide()
+    elif recipe.dark_iv.enabled:
+        self._dark_iv_progress_dialog = DarkIVChartDialog(self)
     dialog.show()
     def run(progress: Any, cancelled: Any) -> object:
         runner = ELMatrixRunner(

@@ -23,7 +23,13 @@ from gui.el_matrix_plan import ELMatrixPlan
 from gui.el_matrix_hardware import ELMatrixHardwareAdapter
 from gui.el_matrix_preflight import collect_preflight_errors
 from gui.camera_capture_bridge import CameraCaptureBridge
-from gui.el_matrix_runner import CapturedFrame, ELMatrixRunner
+from gui.el_matrix_runner import (
+    CapturedFrame,
+    DarkIVPointProgress,
+    DarkIVScanCompleted,
+    ELMatrixRunner,
+    MatrixRuntimeProgress,
+)
 from gui.measurement_snapshot import (
     build_el_matrix_snapshot,
     snapshot_payload,
@@ -90,11 +96,12 @@ class _FakeHardware:
     def prepare_channel_dark(self):
         self.events.append("prepare_channel_dark")
 
-    def run_dark_iv(self, _settings, _check_cancel):
+    def run_dark_iv(self, _settings, _check_cancel, report_point=lambda _row: None):
         self.events.append("dark_iv")
-        return [{
+        row = {
             "Repeat": 1,
             "PointIndex": 1,
+            "SweepDirection": "forward",
             "SetVoltageV": 0.0,
             "PolarityFactor": 1,
             "CommandedVoltageV": 0.0,
@@ -103,7 +110,9 @@ class _FakeHardware:
             "MeasuredCurrentA": 0.0,
             "MeasuredPowerW": 0.0,
             "ComplianceTripped": False,
-        }]
+        }
+        report_point(dict(row))
+        return [row]
 
     def set_current(self, current_a, compliance):
         self.events.append(("set_current", current_a, compliance))
@@ -288,9 +297,11 @@ class _ControlBackedHardware(_FakeHardware):
         self.events.append(("apply_polarity", factor))
         self.control.set_recipe_polarity_factor(factor)
 
-    def run_dark_iv(self, settings, check_cancel):
+    def run_dark_iv(self, settings, check_cancel, report_point=lambda _row: None):
         self.events.append("dark_iv")
-        return ELMatrixHardwareAdapter.run_dark_iv(self, settings, check_cancel)
+        return ELMatrixHardwareAdapter.run_dark_iv(
+            self, settings, check_cancel, report_point
+        )
 
     def set_current(self, current_a, compliance):
         physical = self.control.recipe_output("CC", current_a, compliance)
@@ -671,6 +682,7 @@ class ELMatrixRunnerTests(unittest.TestCase):
         list[tuple[object, ...]],
         list[object],
         dict[str, object],
+        list[object],
     ]:
         recipe = _small_recipe(1)
         recipe.el_matrix.dark_frame_enabled = False
@@ -689,13 +701,14 @@ class ELMatrixRunnerTests(unittest.TestCase):
         control.bind_driver(driver, output_confirmed_off=True)
         control.acquire_recipe()
         hardware = _ControlBackedHardware(control, polarity_factor)
+        progress_items: list[object] = []
         try:
             with tempfile.TemporaryDirectory() as directory:
                 result = ELMatrixRunner(
                     recipe,
                     hardware,
                     directory,
-                    report_progress=lambda _item: None,
+                    report_progress=progress_items.append,
                     is_cancel_requested=lambda: False,
                 ).run()
                 run_directory = Path(result["output_directory"])
@@ -712,6 +725,24 @@ class ELMatrixRunnerTests(unittest.TestCase):
                     sha256_file(next(run_directory.rglob("dark_iv.csv"))),
                     dark_metadata["CsvSha256"],
                 )
+                png_path = next(run_directory.rglob("dark_iv.png"))
+                self.assertGreater(png_path.stat().st_size, 0)
+                self.assertEqual(
+                    sha256_file(png_path), dark_metadata["PlotPngSha256"]
+                )
+                self.assertEqual(str(png_path), dark_metadata["PlotPngPath"])
+                self.assertIn("Y=|Current| (A), log10", "\n".join(
+                    dark_metadata["PlotFooter"]
+                ))
+                with Image.open(png_path) as plot_image:
+                    self.assertEqual("PNG", plot_image.format)
+                    self.assertEqual((1400, 1040), plot_image.size)
+                self.assertIn(
+                    "dark_iv.png",
+                    (run_directory / "final_files_manifest.csv").read_text(
+                        encoding="utf-8-sig"
+                    ),
+                )
                 snapshot = json.loads(
                     (run_directory / "measurement_snapshot.json").read_text(
                         encoding="utf-8"
@@ -723,6 +754,7 @@ class ELMatrixRunnerTests(unittest.TestCase):
                     list(driver.commands),
                     list(hardware.events),
                     snapshot,
+                    progress_items,
                 )
         finally:
             control.shutdown(safety_confirmed=True)
@@ -730,7 +762,7 @@ class ELMatrixRunnerTests(unittest.TestCase):
     def test_dark_iv_metadata_uses_returned_physical_voltage_for_both_polarities(self) -> None:
         for factor in (-1, 1):
             with self.subTest(polarity_factor=factor):
-                rows, dark_metadata, commands, events, snapshot = (
+                rows, dark_metadata, commands, events, snapshot, progress_items = (
                     self._run_dark_iv_physical_command_case(factor)
                 )
                 setpoints = [0.0, 1.0, 0.0]
@@ -756,6 +788,23 @@ class ELMatrixRunnerTests(unittest.TestCase):
                     [float(row["MeasuredVoltageV"]) for row in rows],
                 )
                 self.assertEqual([factor] * 3, [int(row["PolarityFactor"]) for row in rows])
+                self.assertEqual(
+                    ["forward", "forward", "reverse"],
+                    [row["SweepDirection"] for row in rows],
+                )
+                point_progress = [
+                    item for item in progress_items
+                    if isinstance(item, DarkIVPointProgress)
+                ]
+                completed = [
+                    item for item in progress_items
+                    if isinstance(item, DarkIVScanCompleted)
+                ]
+                self.assertEqual([1, 2, 3], [item.current for item in point_progress])
+                self.assertEqual([3, 3, 3], [item.total for item in point_progress])
+                self.assertEqual(1, len(completed))
+                self.assertEqual(3, completed[0].total)
+                self.assertTrue(completed[0].png_path.endswith("dark_iv.png"))
                 for expected_voltage, row in zip(physical, rows):
                     expected_current = 0.0008 if expected_voltage >= 0 else -0.0008
                     self.assertEqual(expected_current, float(row["MeasuredCurrentA"]))
@@ -1017,11 +1066,14 @@ class ELMatrixRunnerTests(unittest.TestCase):
         self.assertEqual(2, hardware.events.count("dark_iv"))
         self.assertEqual(4, len([event for event in hardware.events if isinstance(event, tuple) and event[0] == "set_current"]))
         self.assertTrue(hardware.safe)
-        completed = [item.current for item in progress]
+        matrix_progress = [
+            item for item in progress if isinstance(item, MatrixRuntimeProgress)
+        ]
+        completed = [item.current for item in matrix_progress]
         self.assertEqual(sorted(completed), completed)
-        remaining = [item.remaining_time_s for item in progress]
+        remaining = [item.remaining_time_s for item in matrix_progress]
         self.assertEqual(sorted(remaining, reverse=True), remaining)
-        finishes = [item.estimated_finish for item in progress]
+        finishes = [item.estimated_finish for item in matrix_progress]
         self.assertEqual(sorted(finishes, reverse=True), finishes)
         self.assertEqual(recipe.matrix_capture_counts()["overall"], completed[-1])
         # Every route is preceded by both authoritative OUTPUT OFF and routing clear.
@@ -1077,7 +1129,11 @@ class ELMatrixRunnerTests(unittest.TestCase):
         self.assertEqual(0.0008, metadata["MeasuredCurrentA"])
         self.assertEqual(8.0, metadata["MeasuredCurrentDensityMaCm2"])
         self.assertIn("OutputMode", manifest)
-        capture_progress = [item for item in progress if item.commanded_voltage_v is not None]
+        capture_progress = [
+            item for item in progress
+            if isinstance(item, MatrixRuntimeProgress)
+            and item.commanded_voltage_v is not None
+        ]
         self.assertEqual(0.8, capture_progress[0].commanded_voltage_v)
         dialog = MeasurementProgressDialog("Voltage")
         try:
@@ -1129,7 +1185,9 @@ class ELMatrixRunnerTests(unittest.TestCase):
 
     def test_dark_iv_is_covered_by_continuous_output_watchdog(self) -> None:
         class SlowDarkHardware(_FakeHardware):
-            def run_dark_iv(self, _settings, check_cancel):
+            def run_dark_iv(
+                self, _settings, check_cancel, _report_point=lambda _row: None
+            ):
                 self.events.append("dark_iv")
                 time.sleep(0.02)
                 check_cancel()
