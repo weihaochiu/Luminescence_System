@@ -6,3 +6,6 @@ __pycache__/
 venv/
 /local/
 /ruler/
+
+# Local private Codex / project context
+/private/
