@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QStyle,
     QVBoxLayout,
@@ -123,11 +124,22 @@ class ErrorDialog(QDialog):
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
         layout.addWidget(separator)
-        layout.addWidget(self.message_label)
-        layout.addWidget(self.causes_heading)
-        layout.addWidget(self.causes_label)
-        layout.addWidget(self.solutions_heading)
-        layout.addWidget(self.solutions_label)
+        guidance = QWidget()
+        guidance_layout = QVBoxLayout(guidance)
+        guidance_layout.setContentsMargins(0, 0, 8, 0)
+        guidance_layout.addWidget(self.message_label)
+        guidance_layout.addWidget(self.causes_heading)
+        guidance_layout.addWidget(self.causes_label)
+        guidance_layout.addWidget(self.solutions_heading)
+        guidance_layout.addWidget(self.solutions_label)
+        guidance_layout.addStretch()
+        self.guidance_scroll = QScrollArea()
+        self.guidance_scroll.setObjectName("errorGuidanceScroll")
+        self.guidance_scroll.setWidgetResizable(True)
+        self.guidance_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.guidance_scroll.setMinimumHeight(180)
+        self.guidance_scroll.setWidget(guidance)
+        layout.addWidget(self.guidance_scroll, 1)
         layout.addWidget(self.details_edit, 1)
         layout.addWidget(self.action_status_label)
         layout.addLayout(button_row)

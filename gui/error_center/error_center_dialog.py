@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLineEdit,
+    QScrollArea,
     QSplitter,
     QTabWidget,
     QTableView,
@@ -61,9 +62,13 @@ class ErrorCenterDialog(QDialog):
         self.error_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self.error_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.detail_panel = ErrorDetailPanel()
+        self.detail_scroll = QScrollArea()
+        self.detail_scroll.setObjectName("errorDetailScroll")
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setWidget(self.detail_panel)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.error_table)
-        splitter.addWidget(self.detail_panel)
+        splitter.addWidget(self.detail_scroll)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 4)
         codes_layout = QVBoxLayout(self.codes_page)
