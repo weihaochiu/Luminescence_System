@@ -31,6 +31,7 @@ class ELMatrixHardwareAdapter:
         self.camera = camera_bridge
         self.polarity_settings = polarity_settings
         self.status = status
+        self._last_capture_settings: tuple[float, int] | None = None
 
     def prepare_shared_dark(self) -> None:
         self.output_off()
@@ -168,9 +169,17 @@ class ELMatrixHardwareAdapter:
         timeout_s: float,
         check_cancel: Callable[[], None],
     ) -> CapturedFrame:
-        return self.camera.capture(
-            exposure_ms, gain_percent, timeout_s, check_cancel
+        settings = (float(exposure_ms), int(gain_percent))
+        settling_frames = int(settings != self._last_capture_settings)
+        frame = self.camera.capture(
+            exposure_ms,
+            gain_percent,
+            timeout_s,
+            check_cancel,
+            settling_frames=settling_frames,
         )
+        self._last_capture_settings = settings
+        return frame
 
     def output_off(self) -> None:
         if (

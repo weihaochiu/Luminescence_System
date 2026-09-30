@@ -1156,6 +1156,25 @@ class ELMatrixRunnerTests(unittest.TestCase):
         self.assertEqual(1.1, adapter.set_voltage(1.1, 20.0))
         self.assertEqual([("CC", 0.001, 3.0), ("CV", 1.1, 0.02)], calls)
 
+    def test_hardware_adapter_discards_transition_frame_only_when_settings_change(self) -> None:
+        calls = []
+        camera = SimpleNamespace(
+            capture=lambda *args, **kwargs: calls.append((args, kwargs)) or object()
+        )
+        adapter = ELMatrixHardwareAdapter(
+            SimpleNamespace(), SimpleNamespace(), camera, SimpleNamespace()
+        )
+
+        adapter.capture(2_000, 500, 20, lambda: None)
+        adapter.capture(2_000, 500, 20, lambda: None)
+        adapter.capture(5_000, 500, 20, lambda: None)
+        adapter.capture(5_000, 600, 20, lambda: None)
+
+        self.assertEqual(
+            [1, 0, 1, 1],
+            [call[1]["settling_frames"] for call in calls],
+        )
+
     def test_all_polarities_precede_shared_dark_and_channel_dark_iv(self) -> None:
         recipe = _small_recipe(2)
         hardware = _FakeHardware()
@@ -1548,6 +1567,7 @@ class CameraCaptureBridgeTests(unittest.TestCase):
         thread.join(timeout=0.1)
         self.assertEqual(1, controller.configure_calls)
         self.assertEqual((4, 2), (result[0].image.width(), result[0].image.height()))
+        self.assertEqual(2, result[0].camera_metadata["SettlingFramesDiscarded"])
 
     def test_bridge_restores_camera_state_on_owner_thread(self) -> None:
         controller = _FakeCameraController()

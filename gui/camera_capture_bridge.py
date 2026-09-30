@@ -27,6 +27,7 @@ class _PendingCapture:
     actual_gain_percent: int = 0
     accept_actual_readback: bool = False
     discard_remaining: int = 0
+    discarded_frames: int = 0
 
 
 class CameraCaptureBridge(QObject):
@@ -67,6 +68,7 @@ class CameraCaptureBridge(QObject):
         accept_actual_readback: bool = False,
         settling_frames: int = 0,
     ) -> CapturedFrame:
+        settling_frame_count = max(0, int(settling_frames))
         with self._lock:
             if self._pending is not None:
                 raise RuntimeError("A camera capture request is already pending")
@@ -77,13 +79,17 @@ class CameraCaptureBridge(QObject):
                 Event(),
                 minimum_sequence=baseline + 1,
                 accept_actual_readback=bool(accept_actual_readback),
-                discard_remaining=max(0, int(settling_frames)),
+                discard_remaining=settling_frame_count,
             )
             self._pending = pending
         self.configure_requested.emit(
             round(float(exposure_ms) * 1000.0), int(gain_percent), pending.token
         )
-        deadline = monotonic() + max(float(timeout_s), float(exposure_ms) / 1000.0 + 2.0)
+        exposure_s = float(exposure_ms) / 1000.0
+        deadline = monotonic() + max(
+            float(timeout_s),
+            exposure_s * (settling_frame_count + 1) + 2.0,
+        )
         try:
             while not pending.event.wait(0.05):
                 check_cancel()
@@ -191,6 +197,7 @@ class CameraCaptureBridge(QObject):
             return
         if pending.discard_remaining > 0:
             pending.discard_remaining -= 1
+            pending.discarded_frames += 1
             pending.minimum_sequence = sequence + 1
             return
         temperature = None
@@ -217,6 +224,7 @@ class CameraCaptureBridge(QObject):
             "FrameSequence": sequence,
             "ExposureReadbackUs": pending.actual_exposure_us,
             "GainReadback": pending.actual_gain_percent,
+            "SettlingFramesDiscarded": pending.discarded_frames,
         }
         metadata.update(controller_metadata)
         pending.frame = CapturedFrame(
