@@ -624,6 +624,44 @@ class ELMatrixRecipeAndPlanTests(unittest.TestCase):
 
 
 class ELMatrixRunnerTests(unittest.TestCase):
+    def test_missing_frame_exposure_persists_readback_and_normalizes_by_it(self):
+        recipe = _small_recipe(1)
+        recipe.el_matrix.exposures_ms = [500]
+        hardware = _FakeHardware()
+        original_capture = hardware.capture
+
+        def capture(*args):
+            frame = original_capture(*args)
+            frame.camera_metadata.update({
+                "FrameExposureUs": None,
+                "FrameMetadataStatus": "UNAVAILABLE",
+                "ExposureVerificationSource": "RealExposureReadback+SoftwareTrigger",
+                "ExposureUsedUs": 501_000,
+                "RealExposureReadbackUs": 501_000,
+            })
+            return frame
+
+        hardware.capture = capture
+        with tempfile.TemporaryDirectory() as directory:
+            result = ELMatrixRunner(
+                recipe, hardware, directory,
+                report_progress=lambda _: None, is_cancel_requested=lambda: False,
+            ).run()
+            captures = []
+            for path in Path(result["output_directory"]).rglob("*.json"):
+                metadata = json.loads(path.read_text(encoding="utf-8"))
+                if "ExposureNormalizationMs" not in metadata:
+                    continue
+                captures.append(metadata)
+                self.assertIsNone(metadata["FrameExposureUs"])
+                self.assertEqual(501, metadata["ActualExposureMs"])
+                self.assertEqual(501, metadata["ExposureNormalizationMs"])
+                self.assertEqual(500, metadata["Exposure"])
+                footer = format_dark_footer(metadata) if metadata["SharedDark"] else format_el_footer(metadata)
+                self.assertIn("501", "\n".join(footer))
+            self.assertTrue(captures)
+            self.assertTrue(any(item["SharedDark"] for item in captures))
+
     def _run_physical_command_case(
         self, output_mode: str, polarity_factor: int
     ) -> tuple[dict[str, object], list[tuple[object, ...]], str, str, dict[str, str]]:
@@ -1491,6 +1529,16 @@ class _SequencedCameraController(_FakeCameraController):
             "GainReadback": gain,
             "TriggerModeReadback": 1,
             "CaptureQueueFlushMode": 3,
+            "CaptureStreamRestarted": True,
+        }
+
+    def triggered_capture_readback(self):
+        return {
+            "ExposureSettingAfterCaptureUs": self.requested[0],
+            "RealExposureAfterCaptureUs": self.requested[0] + self.real_exposure_offset_us,
+            "GainAfterCapture": self.requested[1],
+            "TriggerModeAfterCapture": 1,
+            "AutoExposureAfterCapture": 0,
         }
 
     def trigger_single_frame(self):
@@ -1510,6 +1558,106 @@ class CameraCaptureBridgeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = ensure_qapplication()
+
+    def _triggered_metadata_capture(self, frame_metadata, *, after_changes=None, cleanup_error=False):
+        controller = _SequencedCameraController()
+        controller.real_exposure_offset_us = 1_000
+        original_readback = controller.triggered_capture_readback
+        controller.triggered_capture_readback = lambda: {
+            **original_readback(), **(after_changes or {})
+        }
+        if cleanup_error:
+            def fail_cleanup():
+                raise RuntimeError("test cleanup failure")
+            controller.finish_software_triggered_capture = fail_cleanup
+        bridge = CameraCaptureBridge(controller)
+        result, failures = [], []
+
+        def worker():
+            try:
+                result.append(bridge.capture(
+                    500, 200, 2, lambda: None,
+                    require_frame_exposure_match=True, software_triggered=True,
+                ))
+            except Exception as exc:
+                failures.append(exc)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        deadline = time.monotonic() + 4
+        while not controller.trigger_calls and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        # A Qt frame from the prior stream must not satisfy this capture.
+        controller.frame_ready_sequenced.emit(QImage(1, 1, QImage.Format.Format_RGB888), 10)
+        self.assertFalse(result)
+        controller.frame_metadata[11] = frame_metadata
+        controller.frame_ready_sequenced.emit(QImage(3, 2, QImage.Format.Format_RGB888), 11)
+        while thread.is_alive() and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        thread.join(timeout=0.1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(1, controller.configure_calls)
+        self.assertEqual(1, controller.trigger_calls)
+        self.assertIsNone(bridge._pending)
+        return result, failures
+
+    def test_triggered_capture_saves_without_frame_metadata_and_keeps_provenance(self):
+        result, failures = self._triggered_metadata_capture({
+            "FrameInfoFlags": 3,
+            "FrameExposureRawUs": 123,
+            "FrameExposureUs": None,
+            "FrameGainPercent": None,
+            "FrameExposureGainMetadataValid": False,
+        })
+        self.assertFalse(failures)
+        metadata = result[0].camera_metadata
+        self.assertEqual("UNAVAILABLE", metadata["FrameMetadataStatus"])
+        self.assertEqual("RealExposureReadback+SoftwareTrigger", metadata["ExposureVerificationSource"])
+        self.assertIsNone(metadata["FrameExposureUs"])
+        self.assertEqual(501_000, metadata["ExposureUsedUs"])
+        self.assertEqual(3, metadata["FrameInfoFlags"])
+        self.assertEqual(501_000, metadata["RealExposureAfterCaptureUs"])
+        self.assertAlmostEqual(0.2, metadata["ExposureDifferencePercent"])
+
+    def test_triggered_capture_checks_each_available_field_independently(self):
+        for exposure_valid, gain_valid in ((True, False), (False, True)):
+            with self.subTest(exposure_valid=exposure_valid):
+                result, failures = self._triggered_metadata_capture({
+                    "FrameExposureUs": 501_000 if exposure_valid else None,
+                    "FrameGainPercent": 200 if gain_valid else None,
+                    "FrameExposureMetadataValid": exposure_valid,
+                    "FrameGainMetadataValid": gain_valid,
+                })
+                self.assertFalse(failures)
+                self.assertEqual("PARTIAL", result[0].camera_metadata["FrameMetadataStatus"])
+
+    def test_triggered_capture_does_not_accept_known_mismatch_as_missing_metadata(self):
+        for metadata in (
+            {"FrameExposureUs": 2_000, "FrameExposureMetadataValid": True},
+            {"FrameGainPercent": 100, "FrameGainMetadataValid": True},
+        ):
+            with self.subTest(metadata=metadata):
+                result, failures = self._triggered_metadata_capture(metadata)
+                self.assertFalse(result)
+                self.assertIsInstance(failures[0], TimeoutError)
+
+    def test_triggered_capture_rejects_state_change_after_trigger(self):
+        for key, value in (
+            ("ExposureSettingAfterCaptureUs", 600_000),
+            ("RealExposureAfterCaptureUs", 600_000),
+            ("GainAfterCapture", 100),
+            ("TriggerModeAfterCapture", 0),
+            ("AutoExposureAfterCapture", 1),
+        ):
+            with self.subTest(field=key):
+                result, failures = self._triggered_metadata_capture({}, after_changes={key: value})
+                self.assertFalse(result)
+                self.assertIn("state changed", str(failures[0]))
+
+    def test_triggered_cleanup_failure_does_not_leave_pending_request_locked(self):
+        result, failures = self._triggered_metadata_capture({}, cleanup_error=True)
+        self.assertFalse(result)
+        self.assertIn("cleanup failure", str(failures[0]))
 
     def test_bridge_reuses_one_existing_live_frame_without_second_capture(self) -> None:
         controller = _FakeCameraController()

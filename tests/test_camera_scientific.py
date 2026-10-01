@@ -67,6 +67,8 @@ class _FakeMonoCamera:
         self.exposure_writes: list[int] = []
         self.gain_writes: list[int] = []
         self.trigger_calls: list[int] = []
+        self.stream_events = []
+        self.frame_flags = nncam.NNCAM_FRAMEINFO_FLAG_EXPOTIME | nncam.NNCAM_FRAMEINFO_FLAG_EXPOGAIN
 
     def get_eSize(self) -> int:
         return 0
@@ -155,8 +157,13 @@ class _FakeMonoCamera:
         return self.gamma
 
     def StartPullModeWithCallback(self, _callback, _context) -> None:
+        self.stream_events.append(("start", self.exposure_us))
+        self.callback_context = _context
         if self.start_error is not None:
             raise self.start_error
+
+    def Stop(self) -> None:
+        self.stream_events.append(("stop", self.exposure_us))
 
     def Trigger(self, count: int) -> None:
         self.trigger_calls.append(int(count))
@@ -166,10 +173,7 @@ class _FakeMonoCamera:
         if self.pull_error is not None:
             raise self.pull_error
         if _info is not None:
-            _info.v3.flag = (
-                nncam.NNCAM_FRAMEINFO_FLAG_EXPOTIME
-                | nncam.NNCAM_FRAMEINFO_FLAG_EXPOGAIN
-            )
+            _info.v3.flag = self.frame_flags
             _info.v3.expotime = self.exposure_us
             _info.v3.expogain = self.gain_percent
 
@@ -309,6 +313,9 @@ class MonoScientificCameraTests(unittest.TestCase):
             self.assertEqual(500_000, diagnostics["ExposureSettingReadbackUs"])
             self.assertEqual(501_000, diagnostics["RealExposureReadbackUs"])
             self.assertEqual(200, diagnostics["GainReadback"])
+            self.assertTrue(diagnostics["CaptureStreamRestarted"])
+            self.assertEqual([("stop", 1000), ("start", 500_000)], camera.stream_events[-2:])
+            self.assertEqual(501_000, controller.triggered_capture_readback()["RealExposureAfterCaptureUs"])
             self.assertEqual(
                 [
                     (nncam.NNCAM_OPTION_FLUSH, 3),
@@ -326,6 +333,37 @@ class MonoScientificCameraTests(unittest.TestCase):
             controller.finish_software_triggered_capture()
             self.assertEqual([0, 1, 0], camera.trigger_calls)
             self.assertEqual(0, camera.get_Option(nncam.NNCAM_OPTION_TRIGGER))
+        finally:
+            controller.close_camera()
+
+    def test_restarted_capture_ignores_events_from_old_stream(self) -> None:
+        camera = _FakeMonoCamera()
+        controller, _ = _open(camera)
+        try:
+            old_context = camera.callback_context
+            controller.prepare_software_triggered_capture(500_000, 200)
+            with patch.object(controller, "_pull_live_frame") as pull:
+                controller._camera_callback(nncam.NNCAM_EVENT_IMAGE, old_context)
+                self.app.processEvents()
+                pull.assert_not_called()
+                controller._camera_callback(nncam.NNCAM_EVENT_IMAGE, camera.callback_context)
+                self.app.processEvents()
+                pull.assert_called_once()
+        finally:
+            controller.close_camera()
+
+    def test_frame_without_validity_flags_keeps_raw_diagnostics_not_fake_exposure(self) -> None:
+        camera = _FakeMonoCamera()
+        camera.frame_flags = nncam.NNCAM_FRAMEINFO_FLAG_SEQ
+        controller, _ = _open(camera)
+        try:
+            _install_frame(controller)
+            controller._pull_live_frame()
+            metadata = controller.frame_capture_metadata(controller.frame_sequence)
+            self.assertEqual(camera.exposure_us, metadata["FrameExposureRawUs"])
+            self.assertIsNone(metadata["FrameExposureUs"])
+            self.assertIsNone(metadata["FrameGainPercent"])
+            self.assertFalse(metadata["FrameExposureMetadataValid"])
         finally:
             controller.close_camera()
 

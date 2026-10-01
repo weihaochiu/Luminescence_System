@@ -608,7 +608,9 @@ class ELMatrixRunner:
             and capture.current_density_ma_cm2 is not None
             else None
         )
-        frame_exposure_us = frame.camera_metadata.get("FrameExposureUs")
+        frame_exposure_us = frame.camera_metadata.get(
+            "ExposureUsedUs", frame.camera_metadata.get("FrameExposureUs")
+        )
         actual_exposure_ms = (
             float(frame_exposure_us) / 1000.0
             if frame_exposure_us is not None

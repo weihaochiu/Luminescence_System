@@ -176,6 +176,7 @@
   "measurement.active_channels_placeholder": "選擇 Recipe 後顯示 active channels",
   "measurement.footer_exposure_actual": "曝光={requested} ms（實際 {actual} ms）",
   "measurement.footer_exposure_requested": "曝光={requested} ms",
+  "measurement.footer_exposure_readback": "曝光={requested} ms（硬體讀回 {actual} ms；無逐幀曝光資料）",
   "measurement.output_directory": "儲存目錄",
   "measurement.sample_id_for_channel": "{channel} 樣品 ID",
   "measurement.sample_information": "樣品資訊",

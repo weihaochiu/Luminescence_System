@@ -51,7 +51,11 @@ def format_el_footer(metadata: dict[str, Any]) -> tuple[str, str, str]:
     exposure_text = tr(
         "measurement.footer_exposure_requested", requested=requested_exposure
     )
-    if actual_exposure != "N/A" and actual_exposure != requested_exposure:
+    if metadata.get("ExposureVerificationSource") == "RealExposureReadback+SoftwareTrigger":
+        exposure_text = tr(
+            "measurement.footer_exposure_readback", requested=requested_exposure, actual=actual_exposure
+        )
+    elif actual_exposure != "N/A" and actual_exposure != requested_exposure:
         exposure_text = tr(
             "measurement.footer_exposure_actual",
             requested=requested_exposure,
@@ -75,7 +79,11 @@ def format_dark_footer(metadata: dict[str, Any]) -> tuple[str, str, str]:
     exposure_text = tr(
         "measurement.footer_exposure_requested", requested=requested_exposure
     )
-    if actual_exposure != "N/A" and actual_exposure != requested_exposure:
+    if metadata.get("ExposureVerificationSource") == "RealExposureReadback+SoftwareTrigger":
+        exposure_text = tr(
+            "measurement.footer_exposure_readback", requested=requested_exposure, actual=actual_exposure
+        )
+    elif actual_exposure != "N/A" and actual_exposure != requested_exposure:
         exposure_text = tr(
             "measurement.footer_exposure_actual",
             requested=requested_exposure,

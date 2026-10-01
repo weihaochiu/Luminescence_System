@@ -115,11 +115,17 @@ class CameraCaptureBridge(QObject):
                 raise RuntimeError("Camera capture completed without a frame")
             return pending.frame
         finally:
-            if pending.software_triggered:
-                self._request_trigger_cleanup()
-            with self._lock:
-                if self._pending is pending:
-                    self._pending = None
+            # Keep the request reserved until cleanup ends, but invalidate
+            # late configuration callbacks after cancellation or timeout.
+            pending.event.set()
+            pending.armed = False
+            try:
+                if pending.software_triggered:
+                    self._request_trigger_cleanup()
+            finally:
+                with self._lock:
+                    if self._pending is pending:
+                        self._pending = None
 
     def restore_state(self, state: dict[str, object], timeout_s: float = 5.0) -> None:
         """Synchronously request state restoration on the CameraController owner thread."""
@@ -177,7 +183,7 @@ class CameraCaptureBridge(QObject):
     def _configure(self, exposure_us: int, gain_percent: int, token: int) -> None:
         with self._lock:
             pending = self._pending
-        if pending is None or pending.token != token:
+        if pending is None or pending.token != token or pending.event.is_set():
             return
         if not self.controller.is_open:
             pending.error = "Camera is not connected"
@@ -223,6 +229,8 @@ class CameraCaptureBridge(QObject):
                 getattr(self.controller, "frame_sequence", self._fallback_sequence)
             )
             pending.minimum_sequence = current_sequence + 1
+            if pending.event.is_set():
+                return
             pending.armed = True
             if pending.software_triggered:
                 trigger()
@@ -271,26 +279,71 @@ class CameraCaptureBridge(QObject):
             if callable(frame_metadata_reader)
             else {}
         )
+        verification = {}
         if pending.require_frame_exposure_match:
             frame_exposure = frame_metadata.get("FrameExposureUs")
             frame_gain = frame_metadata.get("FrameGainPercent")
-            metadata_valid = bool(
-                frame_metadata.get("FrameExposureGainMetadataValid")
-            )
-            if not metadata_valid or frame_exposure is None or frame_gain is None:
+            combined_valid = bool(frame_metadata.get("FrameExposureGainMetadataValid"))
+            exposure_valid = bool(frame_metadata.get(
+                "FrameExposureMetadataValid", combined_valid
+            )) and frame_exposure is not None
+            gain_valid = bool(frame_metadata.get(
+                "FrameGainMetadataValid", combined_valid
+            )) and frame_gain is not None
+            # A missing Gain flag must not disable a valid Exposure check (or
+            # vice versa). Never interpret raw fields without their flags.
+            if (
+                (exposure_valid and int(frame_exposure) != pending.actual_exposure_us)
+                or (gain_valid and int(frame_gain) != pending.actual_gain_percent)
+            ):
+                pending.exposure_mismatch_frames += 1
+                pending.minimum_sequence = sequence + 1
+                return
+            if not (exposure_valid and gain_valid) and not pending.software_triggered:
                 pending.error = (
                     "Camera frame Exposure/Gain metadata is unavailable; "
                     "refusing to save an unverified frame"
                 )
                 pending.event.set()
                 return
-            if (
-                int(frame_exposure) != pending.actual_exposure_us
-                or int(frame_gain) != pending.actual_gain_percent
-            ):
-                pending.exposure_mismatch_frames += 1
-                pending.minimum_sequence = sequence + 1
-                return
+            if pending.software_triggered:
+                try:
+                    diagnostics = pending.capture_diagnostics or {}
+                    if not diagnostics.get("CaptureStreamRestarted"):
+                        raise RuntimeError("Triggered capture stream restart was not confirmed")
+                    after = self.controller.triggered_capture_readback()
+                    expected = {
+                        "ExposureSettingAfterCaptureUs": pending.setting_exposure_us,
+                        "RealExposureAfterCaptureUs": pending.actual_exposure_us,
+                        "GainAfterCapture": pending.actual_gain_percent,
+                        "TriggerModeAfterCapture": 1,
+                        "AutoExposureAfterCapture": 0,
+                    }
+                    if after != expected or pending.actual_exposure_us <= 0:
+                        raise RuntimeError(
+                            f"Camera state changed during triggered capture: expected={expected}, actual={after}"
+                        )
+                    verification.update(after)
+                except Exception as exc:
+                    pending.error = str(exc)
+                    pending.event.set()
+                    return
+            frame_metadata["FrameExposureUs"] = frame_exposure if exposure_valid else None
+            frame_metadata["FrameGainPercent"] = frame_gain if gain_valid else None
+            verification.update({
+                "FrameMetadataStatus": (
+                    "AVAILABLE" if exposure_valid and gain_valid else
+                    "PARTIAL" if exposure_valid or gain_valid else "UNAVAILABLE"
+                ),
+                "ExposureVerificationSource": (
+                    "FrameMetadata" if exposure_valid else
+                    "RealExposureReadback+SoftwareTrigger"
+                ),
+                "GainVerificationSource": (
+                    "FrameMetadata" if gain_valid else "GainReadback+SoftwareTrigger"
+                ),
+                "ExposureUsedUs": int(frame_exposure) if exposure_valid else pending.actual_exposure_us,
+            })
         if pending.discard_remaining > 0:
             pending.discard_remaining -= 1
             pending.discarded_frames += 1
@@ -330,7 +383,8 @@ class CameraCaptureBridge(QObject):
         if pending.capture_diagnostics:
             metadata.update(pending.capture_diagnostics)
         metadata.update(frame_metadata)
-        frame_exposure = metadata.get("FrameExposureUs")
+        metadata.update(verification)
+        frame_exposure = metadata.get("ExposureUsedUs", metadata.get("FrameExposureUs"))
         if frame_exposure is not None and pending.requested_exposure_us > 0:
             difference_us = int(frame_exposure) - pending.requested_exposure_us
             metadata["ExposureDifferenceUs"] = difference_us

@@ -176,6 +176,7 @@
   "measurement.active_channels_placeholder": "Active channels appear after selecting a Recipe",
   "measurement.footer_exposure_actual": "Exposure={requested} ms (actual {actual} ms)",
   "measurement.footer_exposure_requested": "Exposure={requested} ms",
+  "measurement.footer_exposure_readback": "Exposure={requested} ms (hardware readback {actual} ms; frame exposure unavailable)",
   "measurement.output_directory": "Output Directory",
   "measurement.sample_id_for_channel": "{channel} Sample ID",
   "measurement.sample_information": "Sample Information",

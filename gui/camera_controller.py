@@ -84,7 +84,7 @@ class CameraController(QObject):
     fps_changed = Signal(float, int)
     status_changed = Signal(str)
     error_occurred = Signal(str)
-    _sdk_event = Signal(int)
+    _sdk_event = Signal(int, int)
 
     def __init__(
         self,
@@ -139,6 +139,7 @@ class CameraController(QObject):
         self._frame_sequence = 0
         self._frame_capture_metadata: dict[int, dict[str, Any]] = {}
         self._software_trigger_capture_active = False
+        self._stream_generation = 0
         self._sensor_bit_depth: int | None = None
         self._bit_depth_source = "Unknown"
         self._camera_is_mono = False
@@ -833,19 +834,26 @@ class CameraController(QObject):
 
         self._continuous_auto_exposure_requested = False
         self._disable_sdk_auto_exposure(require_readback=True)
+        # Stop joins the previous acquisition before any new exposure is set.
+        # Ignore already queued Qt callbacks from that acquisition as well.
+        self._stream_generation += 1
+        self._camera.Stop()
+        self._software_trigger_capture_active = True
         self._camera.put_Option(nncam.NNCAM_OPTION_TRIGGER, 1)
         trigger_mode = int(self._camera.get_Option(nncam.NNCAM_OPTION_TRIGGER))
         if trigger_mode != 1:
             raise RuntimeError(
                 f"Camera trigger mode requested 1, read back {trigger_mode}"
             )
-        self._software_trigger_capture_active = True
-        self._camera.Trigger(0)
-        self._camera.put_Option(nncam.NNCAM_OPTION_FLUSH, 3)
         self._camera.put_ExpoTime(exposure_us)
         self._camera.put_ExpoAGain(int(gain))
+        self._start_stream()
+        self._camera.Trigger(0)
+        self._camera.put_Option(nncam.NNCAM_OPTION_FLUSH, 3)
         setting_exposure_us = int(self._camera.get_ExpoTime())
         real_exposure_us = int(self._camera.get_RealExpoTime())
+        if real_exposure_us <= 0:
+            raise RuntimeError(f"Invalid camera real exposure: {real_exposure_us} us")
         gain_readback = int(self._camera.get_ExpoAGain())
         self._camera.put_Option(nncam.NNCAM_OPTION_FLUSH, 3)
         self.exposure_changed.emit(setting_exposure_us, gain_readback)
@@ -857,6 +865,19 @@ class CameraController(QObject):
             "GainReadback": gain_readback,
             "TriggerModeReadback": trigger_mode,
             "CaptureQueueFlushMode": 3,
+            "CaptureStreamRestarted": True,
+        }
+
+    def triggered_capture_readback(self) -> dict[str, int]:
+        """Read hardware state after receiving the single triggered frame."""
+        if self._camera is None or not self._software_trigger_capture_active:
+            raise RuntimeError("Software-trigger capture is not active")
+        return {
+            "ExposureSettingAfterCaptureUs": int(self._camera.get_ExpoTime()),
+            "RealExposureAfterCaptureUs": int(self._camera.get_RealExpoTime()),
+            "GainAfterCapture": int(self._camera.get_ExpoAGain()),
+            "TriggerModeAfterCapture": int(self._camera.get_Option(nncam.NNCAM_OPTION_TRIGGER)),
+            "AutoExposureAfterCapture": int(self._camera.get_AutoExpoEnable()),
         }
 
     def trigger_single_frame(self) -> None:
@@ -874,13 +895,15 @@ class CameraController(QObject):
             return
         try:
             self._camera.Trigger(0)
-            self._camera.put_Option(nncam.NNCAM_OPTION_FLUSH, 3)
+            self._stream_generation += 1
+            self._camera.Stop()
             self._camera.put_Option(nncam.NNCAM_OPTION_TRIGGER, 0)
             readback = int(self._camera.get_Option(nncam.NNCAM_OPTION_TRIGGER))
             if readback != 0:
                 raise RuntimeError(
                     f"Camera video mode requested 0, read back {readback}"
                 )
+            self._start_stream()
         finally:
             self._software_trigger_capture_active = False
 
@@ -2154,22 +2177,26 @@ class CameraController(QObject):
         self._scientific_pull_error_reported = False
         self._pitch = nncam.TDIBWIDTHBYTES(self._width * self._scientific_pull_bits)
         self._buffer = bytes(self._pitch * self._height)
+        self._stream_generation += 1
         self._apply_camera_startup_setting(
             "StartPullModeWithCallback",
             lambda: self._camera.StartPullModeWithCallback(
-                self._camera_callback, self
+                self._camera_callback, (self, self._stream_generation)
             ),
         )
         self._fps_timer.start()
 
     @staticmethod
-    def _camera_callback(event_code: int, context: "CameraController") -> None:
+    def _camera_callback(event_code: int, context: tuple["CameraController", int]) -> None:
         # SDK callbacks run on an internal native thread. A Qt signal moves work
         # safely back to the GUI thread before the image buffer is touched.
-        context._sdk_event.emit(event_code)
+        controller, generation = context
+        controller._sdk_event.emit(event_code, generation)
 
-    @Slot(int)
-    def _handle_sdk_event(self, event_code: int) -> None:
+    @Slot(int, int)
+    def _handle_sdk_event(self, event_code: int, generation: int | None = None) -> None:
+        if generation is not None and generation != self._stream_generation:
+            return
         if self._camera is None:
             return
 
@@ -2476,6 +2503,10 @@ class CameraController(QObject):
             gain_valid = bool(frame_flags & nncam.NNCAM_FRAMEINFO_FLAG_EXPOGAIN)
             self._frame_capture_metadata[self._frame_sequence] = {
                 "FrameInfoFlags": frame_flags,
+                "FrameExposureRawUs": int(frame_info.v3.expotime),
+                "FrameGainRawPercent": int(frame_info.v3.expogain),
+                "FrameExposureMetadataValid": exposure_valid,
+                "FrameGainMetadataValid": gain_valid,
                 "FrameInfoSequence": int(frame_info.v3.seq),
                 "FrameTimestampUs": int(frame_info.v3.timestamp),
                 "FrameExposureUs": (
