@@ -29,6 +29,7 @@ from .camera_ae_calibration import (
     CALIBRATION_POINT_TIMEOUT_SECONDS,
     calibration_candidates,
 )
+from .camera_exposure import validate_official_exposure_us
 from .camera_temperature_monitor import CameraTemperatureUnsupportedError
 from .scientific_dn import (
     effective_dn_fraction,
@@ -136,6 +137,8 @@ class CameraController(QObject):
         self._latest_image: QImage | None = None
         self._status_query_failed = False
         self._frame_sequence = 0
+        self._frame_capture_metadata: dict[int, dict[str, Any]] = {}
+        self._software_trigger_capture_active = False
         self._sensor_bit_depth: int | None = None
         self._bit_depth_source = "Unknown"
         self._camera_is_mono = False
@@ -193,6 +196,11 @@ class CameraController(QObject):
     @property
     def frame_sequence(self) -> int:
         return self._frame_sequence
+
+    def frame_capture_metadata(self, sequence: int) -> dict[str, Any]:
+        """Return SDK-reported metadata for one pulled frame."""
+
+        return dict(self._frame_capture_metadata.get(int(sequence), {}))
 
     @property
     def auto_exposure_roi(self) -> tuple[int, int, int, int] | None:
@@ -539,6 +547,8 @@ class CameraController(QObject):
         self._latest_image = None
         self._status_query_failed = False
         self._frame_sequence = 0
+        self._frame_capture_metadata.clear()
+        self._software_trigger_capture_active = False
         self._sensor_bit_depth = None
         self._bit_depth_source = "Unknown"
         self._camera_is_mono = False
@@ -799,6 +809,7 @@ class CameraController(QObject):
         if self._camera is None:
             return
         try:
+            exposure_us = validate_official_exposure_us(exposure_us)
             self._continuous_auto_exposure_requested = False
             self._disable_sdk_auto_exposure(require_readback=True)
             self._camera.put_ExpoTime(int(exposure_us))
@@ -807,6 +818,71 @@ class CameraController(QObject):
             self.status_changed.emit(tr("camera.status_manual_applied"))
         except Exception as exc:
             self.error_occurred.emit(self._format_error(tr("camera.error_manual_apply"), exc))
+
+    def prepare_software_triggered_capture(
+        self, exposure_us: int, gain: int
+    ) -> dict[str, int | str]:
+        """Stop free-run acquisition and prepare one authoritative trigger frame."""
+
+        if self._camera is None:
+            raise RuntimeError("Camera is not connected")
+        exposure_us = validate_official_exposure_us(exposure_us)
+        flags = int(getattr(getattr(self._device, "model", None), "flag", 0))
+        if not flags & nncam.NNCAM_FLAG_TRIGGER_SOFTWARE:
+            raise RuntimeError("Camera does not report software-trigger support")
+
+        self._continuous_auto_exposure_requested = False
+        self._disable_sdk_auto_exposure(require_readback=True)
+        self._camera.put_Option(nncam.NNCAM_OPTION_TRIGGER, 1)
+        trigger_mode = int(self._camera.get_Option(nncam.NNCAM_OPTION_TRIGGER))
+        if trigger_mode != 1:
+            raise RuntimeError(
+                f"Camera trigger mode requested 1, read back {trigger_mode}"
+            )
+        self._software_trigger_capture_active = True
+        self._camera.Trigger(0)
+        self._camera.put_Option(nncam.NNCAM_OPTION_FLUSH, 3)
+        self._camera.put_ExpoTime(exposure_us)
+        self._camera.put_ExpoAGain(int(gain))
+        setting_exposure_us = int(self._camera.get_ExpoTime())
+        real_exposure_us = int(self._camera.get_RealExpoTime())
+        gain_readback = int(self._camera.get_ExpoAGain())
+        self._camera.put_Option(nncam.NNCAM_OPTION_FLUSH, 3)
+        self.exposure_changed.emit(setting_exposure_us, gain_readback)
+        return {
+            "CaptureMode": "SoftwareTrigger",
+            "RequestedExposureUs": exposure_us,
+            "ExposureSettingReadbackUs": setting_exposure_us,
+            "RealExposureReadbackUs": real_exposure_us,
+            "GainReadback": gain_readback,
+            "TriggerModeReadback": trigger_mode,
+            "CaptureQueueFlushMode": 3,
+        }
+
+    def trigger_single_frame(self) -> None:
+        if self._camera is None or not self._software_trigger_capture_active:
+            raise RuntimeError("Software-trigger capture is not prepared")
+        self._camera.Trigger(1)
+
+    def finish_software_triggered_capture(self) -> None:
+        """Return to video mode after a formal single-frame capture."""
+
+        if self._camera is None:
+            self._software_trigger_capture_active = False
+            return
+        if not self._software_trigger_capture_active:
+            return
+        try:
+            self._camera.Trigger(0)
+            self._camera.put_Option(nncam.NNCAM_OPTION_FLUSH, 3)
+            self._camera.put_Option(nncam.NNCAM_OPTION_TRIGGER, 0)
+            readback = int(self._camera.get_Option(nncam.NNCAM_OPTION_TRIGGER))
+            if readback != 0:
+                raise RuntimeError(
+                    f"Camera video mode requested 0, read back {readback}"
+                )
+        finally:
+            self._software_trigger_capture_active = False
 
     def switch_to_manual_exposure(self) -> bool:
         """Disable AE and preserve the camera's last actual exposure and gain."""
@@ -2250,8 +2326,9 @@ class CameraController(QObject):
                     ),
                 )
             try:
+                frame_info = nncam.NncamFrameInfoV4()
                 self._camera.PullImageV4(
-                    self._buffer, 0, self._scientific_pull_bits, 0, None
+                    self._buffer, 0, self._scientific_pull_bits, 0, frame_info
                 )
             except Exception as exc:
                 raise CameraStartupError("PullImageV4(bits=16)", exc) from exc
@@ -2394,6 +2471,23 @@ class CameraController(QObject):
             ).copy()
             self._latest_image = image
             self._frame_sequence += 1
+            frame_flags = int(frame_info.v3.flag)
+            exposure_valid = bool(frame_flags & nncam.NNCAM_FRAMEINFO_FLAG_EXPOTIME)
+            gain_valid = bool(frame_flags & nncam.NNCAM_FRAMEINFO_FLAG_EXPOGAIN)
+            self._frame_capture_metadata[self._frame_sequence] = {
+                "FrameInfoFlags": frame_flags,
+                "FrameInfoSequence": int(frame_info.v3.seq),
+                "FrameTimestampUs": int(frame_info.v3.timestamp),
+                "FrameExposureUs": (
+                    int(frame_info.v3.expotime) if exposure_valid else None
+                ),
+                "FrameGainPercent": (
+                    int(frame_info.v3.expogain) if gain_valid else None
+                ),
+                "FrameExposureGainMetadataValid": exposure_valid and gain_valid,
+            }
+            while len(self._frame_capture_metadata) > 64:
+                del self._frame_capture_metadata[min(self._frame_capture_metadata)]
             self.frame_ready.emit(image)
             self.frame_ready_sequenced.emit(image, self._frame_sequence)
             self.scientific_frame_ready.emit(scientific, image, self._frame_sequence)

@@ -1156,7 +1156,7 @@ class ELMatrixRunnerTests(unittest.TestCase):
         self.assertEqual(1.1, adapter.set_voltage(1.1, 20.0))
         self.assertEqual([("CC", 0.001, 3.0), ("CV", 1.1, 0.02)], calls)
 
-    def test_hardware_adapter_discards_transition_frame_only_when_settings_change(self) -> None:
+    def test_hardware_adapter_requires_per_frame_exposure_verification(self) -> None:
         calls = []
         camera = SimpleNamespace(
             capture=lambda *args, **kwargs: calls.append((args, kwargs)) or object()
@@ -1166,14 +1166,9 @@ class ELMatrixRunnerTests(unittest.TestCase):
         )
 
         adapter.capture(2_000, 500, 20, lambda: None)
-        adapter.capture(2_000, 500, 20, lambda: None)
-        adapter.capture(5_000, 500, 20, lambda: None)
-        adapter.capture(5_000, 600, 20, lambda: None)
 
-        self.assertEqual(
-            [1, 0, 1, 1],
-            [call[1]["settling_frames"] for call in calls],
-        )
+        self.assertTrue(calls[0][1]["require_frame_exposure_match"])
+        self.assertTrue(calls[0][1]["software_triggered"])
 
     def test_all_polarities_precede_shared_dark_and_channel_dark_iv(self) -> None:
         recipe = _small_recipe(2)
@@ -1477,6 +1472,32 @@ class _SequencedCameraController(_FakeCameraController):
     def __init__(self) -> None:
         super().__init__()
         self.frame_sequence = 10
+        self.frame_metadata = {}
+        self.trigger_calls = 0
+        self.trigger_cleanup_calls = 0
+        self.real_exposure_offset_us = 0
+
+    def frame_capture_metadata(self, sequence: int):
+        return dict(self.frame_metadata.get(sequence, {}))
+
+    def prepare_software_triggered_capture(self, exposure_us: int, gain: int):
+        self.configure_calls += 1
+        self.requested = (exposure_us, gain)
+        return {
+            "CaptureMode": "SoftwareTrigger",
+            "RequestedExposureUs": exposure_us,
+            "ExposureSettingReadbackUs": exposure_us,
+            "RealExposureReadbackUs": exposure_us + self.real_exposure_offset_us,
+            "GainReadback": gain,
+            "TriggerModeReadback": 1,
+            "CaptureQueueFlushMode": 3,
+        }
+
+    def trigger_single_frame(self):
+        self.trigger_calls += 1
+
+    def finish_software_triggered_capture(self):
+        self.trigger_cleanup_calls += 1
 
 
 class _RoundedCameraController(_FakeCameraController):
@@ -1568,6 +1589,176 @@ class CameraCaptureBridgeTests(unittest.TestCase):
         self.assertEqual(1, controller.configure_calls)
         self.assertEqual((4, 2), (result[0].image.width(), result[0].image.height()))
         self.assertEqual(2, result[0].camera_metadata["SettlingFramesDiscarded"])
+
+    def test_bridge_rejects_stale_frame_until_sdk_exposure_matches(self) -> None:
+        controller = _SequencedCameraController()
+        bridge = CameraCaptureBridge(controller)
+        result: list[CapturedFrame] = []
+        failure: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                result.append(bridge.capture(
+                    50,
+                    200,
+                    2,
+                    lambda: None,
+                    require_frame_exposure_match=True,
+                ))
+            except Exception as exc:
+                failure.append(exc)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        deadline = time.monotonic() + 1
+        while controller.configure_calls == 0 and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        controller.frame_metadata[11] = {
+            "FrameExposureUs": 2_000,
+            "FrameGainPercent": 200,
+            "FrameExposureGainMetadataValid": True,
+        }
+        controller.frame_ready_sequenced.emit(
+            QImage(2, 2, QImage.Format.Format_RGB888), 11
+        )
+        controller.frame_metadata[12] = {
+            "FrameExposureUs": 50_000,
+            "FrameGainPercent": 200,
+            "FrameExposureGainMetadataValid": True,
+        }
+        controller.frame_ready_sequenced.emit(
+            QImage(3, 2, QImage.Format.Format_RGB888), 12
+        )
+        while thread.is_alive() and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        thread.join(timeout=0.1)
+
+        self.assertFalse(failure)
+        self.assertEqual((3, 2), (result[0].image.width(), result[0].image.height()))
+        self.assertEqual(
+            1,
+            result[0].camera_metadata["ExposureMismatchFramesDiscarded"],
+        )
+        self.assertEqual(50_000, result[0].camera_metadata["FrameExposureUs"])
+
+    def test_bridge_formal_capture_triggers_once_and_records_all_exposure_levels(self) -> None:
+        controller = _SequencedCameraController()
+        bridge = CameraCaptureBridge(controller)
+        result: list[CapturedFrame] = []
+        failure: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                result.append(bridge.capture(
+                    500,
+                    200,
+                    2,
+                    lambda: None,
+                    require_frame_exposure_match=True,
+                    software_triggered=True,
+                ))
+            except Exception as exc:
+                failure.append(exc)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        deadline = time.monotonic() + 1
+        while controller.trigger_calls == 0 and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        controller.frame_metadata[11] = {
+            "FrameExposureUs": 500_000,
+            "FrameGainPercent": 200,
+            "FrameExposureGainMetadataValid": True,
+        }
+        controller.frame_ready_sequenced.emit(
+            QImage(3, 2, QImage.Format.Format_RGB888), 11
+        )
+        while thread.is_alive() and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        thread.join(timeout=0.1)
+
+        self.assertFalse(failure)
+        self.assertEqual(1, controller.trigger_calls)
+        self.assertEqual(1, controller.trigger_cleanup_calls)
+        metadata = result[0].camera_metadata
+        self.assertEqual(500_000, metadata["RequestedExposureUs"])
+        self.assertEqual(500_000, metadata["ExposureSettingReadbackUs"])
+        self.assertEqual(500_000, metadata["RealExposureReadbackUs"])
+        self.assertEqual(500_000, metadata["FrameExposureUs"])
+        self.assertEqual(0.0, metadata["ExposureDifferencePercent"])
+        self.assertEqual("EXACT", metadata["ExposureStatus"])
+
+    def test_bridge_accepts_one_hardware_actual_exposure_without_resending(self) -> None:
+        controller = _SequencedCameraController()
+        controller.real_exposure_offset_us = 1_000
+        bridge = CameraCaptureBridge(controller)
+        result: list[CapturedFrame] = []
+
+        thread = threading.Thread(
+            target=lambda: result.append(bridge.capture(
+                500,
+                200,
+                2,
+                lambda: None,
+                require_frame_exposure_match=True,
+                software_triggered=True,
+            ))
+        )
+        thread.start()
+        deadline = time.monotonic() + 1
+        while controller.trigger_calls == 0 and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        controller.frame_metadata[11] = {
+            "FrameExposureUs": 501_000,
+            "FrameGainPercent": 200,
+            "FrameExposureGainMetadataValid": True,
+        }
+        controller.frame_ready_sequenced.emit(
+            QImage(3, 2, QImage.Format.Format_RGB888), 11
+        )
+        while thread.is_alive() and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        thread.join(timeout=0.1)
+
+        self.assertEqual(1, controller.configure_calls)
+        self.assertEqual(1, controller.trigger_calls)
+        metadata = result[0].camera_metadata
+        self.assertEqual(501_000, metadata["RealExposureReadbackUs"])
+        self.assertEqual(501_000, metadata["FrameExposureUs"])
+        self.assertAlmostEqual(0.2, metadata["ExposureDifferencePercent"])
+        self.assertEqual("ACTUAL_DIFFERENT", metadata["ExposureStatus"])
+
+    def test_bridge_fails_closed_without_sdk_frame_exposure_metadata(self) -> None:
+        controller = _SequencedCameraController()
+        bridge = CameraCaptureBridge(controller)
+        failure: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                bridge.capture(
+                    50,
+                    200,
+                    2,
+                    lambda: None,
+                    require_frame_exposure_match=True,
+                )
+            except Exception as exc:
+                failure.append(exc)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        deadline = time.monotonic() + 1
+        while controller.configure_calls == 0 and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        controller.frame_ready_sequenced.emit(
+            QImage(2, 2, QImage.Format.Format_RGB888), 11
+        )
+        while thread.is_alive() and time.monotonic() < deadline:
+            self.app.processEvents(); time.sleep(0.005)
+        thread.join(timeout=0.1)
+
+        self.assertEqual(1, len(failure))
+        self.assertIn("metadata is unavailable", str(failure[0]))
 
     def test_bridge_restores_camera_state_on_owner_thread(self) -> None:
         controller = _FakeCameraController()

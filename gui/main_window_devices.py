@@ -14,7 +14,7 @@ from core.i18n import tr
 
 from . import __version__
 from .camera_auto_exposure_settings import target_effective_dn
-from .camera_exposure import ExposureMode
+from .camera_exposure import ExposureMode, constrained_exposure_range_us
 from .camera_temperature_monitor import TemperatureSample, format_temperature_c
 from .image_io import save_image_and_metadata
 from .instrument_state_manager import SMUUIState
@@ -299,8 +299,9 @@ class MainWindowDeviceMixin:
 
         exposure_range = info.get("exposure_range_us")
         gain_range = info.get("gain_range")
-        if exposure_range is not None:
-            exp_min, exp_max, _ = exposure_range
+        constrained_range = constrained_exposure_range_us(exposure_range)
+        if constrained_range is not None:
+            exp_min, exp_max = constrained_range
             self.exposure_spin.setRange(exp_min / 1000.0, exp_max / 1000.0)
             self.exposure_spin.setToolTip(
                 tr(

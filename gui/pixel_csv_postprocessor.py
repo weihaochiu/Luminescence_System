@@ -269,7 +269,9 @@ class PixelCSVPostprocessor:
                     "shared_dark_tiff": None if dark_metadata is None else str(dark_metadata["RawTiffPath"]),
                     "shared_dark_sha256": None if dark_metadata is None else sha256_file(dark_metadata["RawTiffPath"]),
                     "output_path": str(output_path),
-                    "exposure_ms": float(payload["Exposure"]),
+                    "exposure_ms": float(
+                        payload.get("ExposureNormalizationMs", payload["Exposure"])
+                    ),
                 })
         return jobs
 

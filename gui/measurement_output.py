@@ -17,6 +17,8 @@ import tifffile
 from PIL import Image, ImageDraw, ImageFont
 from PySide6.QtGui import QImage
 
+from core.i18n import tr
+
 from .scientific_dn import effective_dn_to_uint8
 from .numeric import format_voltage_number
 
@@ -44,10 +46,21 @@ def format_el_footer(metadata: dict[str, Any]) -> tuple[str, str, str]:
             "SetCurrentDensityMaCm2", metadata.get("CommandedCurrentDensity")
         )
         electrical = f"J={_number(density)} mA/cm²"
+    requested_exposure = _number(metadata["Exposure"], 3)
+    actual_exposure = _number(metadata.get("ActualExposureMs"), 3)
+    exposure_text = tr(
+        "measurement.footer_exposure_requested", requested=requested_exposure
+    )
+    if actual_exposure != "N/A" and actual_exposure != requested_exposure:
+        exposure_text = tr(
+            "measurement.footer_exposure_actual",
+            requested=requested_exposure,
+            actual=actual_exposure,
+        )
     return (
         f"Sample ID: {metadata['SampleID']}",
         f"{metadata['Channel']} | {electrical} | "
-        f"Gain={int(metadata['Gain'])}% | Exposure={_number(metadata['Exposure'], 3)} ms | "
+        f"Gain={int(metadata['Gain'])}% | {exposure_text} | "
         f"Repeat={metadata['RepeatIndex']}/{metadata['RepeatTotal']}",
         f"Measured: I={_number(metadata.get('MeasuredCurrentMa'))} mA | "
         f"V={_number(metadata.get('MeasuredVoltage'), 3)} V | "
@@ -57,9 +70,20 @@ def format_el_footer(metadata: dict[str, Any]) -> tuple[str, str, str]:
 
 def format_dark_footer(metadata: dict[str, Any]) -> tuple[str, str, str]:
     channels = ", ".join(metadata["ApplicableChannels"])
+    requested_exposure = _number(metadata["Exposure"], 3)
+    actual_exposure = _number(metadata.get("ActualExposureMs"), 3)
+    exposure_text = tr(
+        "measurement.footer_exposure_requested", requested=requested_exposure
+    )
+    if actual_exposure != "N/A" and actual_exposure != requested_exposure:
+        exposure_text = tr(
+            "measurement.footer_exposure_actual",
+            requested=requested_exposure,
+            actual=actual_exposure,
+        )
     return (
         f"Shared Dark | Applicable Channels: {channels}",
-        f"Gain={int(metadata['Gain'])}% | Exposure={_number(metadata['Exposure'], 3)} ms | "
+        f"Gain={int(metadata['Gain'])}% | {exposure_text} | "
         f"Repeat={metadata['RepeatIndex']}/{metadata['RepeatTotal']}",
         f"Camera={_number(metadata.get('CameraTemperature'), 1)} °C | {metadata['Timestamp']}",
     )

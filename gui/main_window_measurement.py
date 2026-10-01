@@ -14,7 +14,7 @@ from core.i18n import tr
 from .camera_capture_bridge import CameraCaptureBridge
 from .dark_iv_chart import DarkIVChartDialog
 from .error_reporting import report_error
-from .camera_exposure import ExposureMode
+from .camera_exposure import ExposureMode, constrained_exposure_range_us
 from .el_matrix_hardware import ELMatrixHardwareAdapter
 from .el_matrix_plan import ELMatrixPlan, format_duration, format_finish_time
 from .el_matrix_preflight import collect_preflight_errors
@@ -341,8 +341,9 @@ def _validate_camera_matrix(self: Any) -> list[str]:
         errors.append(tr("measurement.validation.capture_conditions_empty"))
     elif max(axes.exposures_ms) / 1000.0 > recipe.el_matrix.capture_timeout_s:
         errors.append(tr("measurement.validation.timeout_exposure"))
-    if exposure_range:
-        low, high = float(exposure_range[0]), float(exposure_range[1])
+    constrained_range = constrained_exposure_range_us(exposure_range)
+    if constrained_range:
+        low, high = (float(value) for value in constrained_range)
         if any(not low <= value * 1000.0 <= high for value in axes.exposures_ms):
             errors.append(tr("measurement.validation.exposure_range", low=f"{low / 1000:g}", high=f"{high / 1000:g}"))
     else:

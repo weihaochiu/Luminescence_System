@@ -608,6 +608,12 @@ class ELMatrixRunner:
             and capture.current_density_ma_cm2 is not None
             else None
         )
+        frame_exposure_us = frame.camera_metadata.get("FrameExposureUs")
+        actual_exposure_ms = (
+            float(frame_exposure_us) / 1000.0
+            if frame_exposure_us is not None
+            else float(capture.exposure_ms)
+        )
         metadata: dict[str, Any] = {
             "RecipeName": self.recipe.name, "MeasurementRunID": self.run_id,
             "MeasurementType": capture.measurement_type, "Channel": capture.channel,
@@ -646,7 +652,11 @@ class ELMatrixRunner:
                 self.plan.matrix.current_compliance_ma
                 if capture.output_mode == "voltage" else None
             ),
-            "Gain": capture.gain_percent, "Exposure": capture.exposure_ms,
+            "Gain": capture.gain_percent,
+            "Exposure": capture.exposure_ms,
+            "RequestedExposureMs": capture.exposure_ms,
+            "ActualExposureMs": actual_exposure_ms,
+            "ExposureNormalizationMs": actual_exposure_ms,
             "RepeatIndex": capture.repeat_index, "RepeatTotal": capture.repeat_total,
             "CameraTemperature": frame.camera_temperature_c, "Timestamp": timestamp,
             "DarkScope": None, "SharedDark": False, "ApplicableChannels": [],

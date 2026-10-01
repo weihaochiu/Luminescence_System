@@ -11,6 +11,10 @@ from typing import Any, TypeVar
 
 from core.i18n import tr
 
+from .camera_exposure import (
+    OFFICIAL_EXPOSURE_MAX_US,
+    OFFICIAL_EXPOSURE_MIN_US,
+)
 from .numeric import decimal_from_number, normalize_json_numbers, quantize_number
 from uuid import uuid4
 
@@ -352,6 +356,19 @@ class Recipe:
             for value in matrix.exposures_ms
         ):
             errors.append(tr("recipe.validation.exposure_values"))
+        elif any(
+            not OFFICIAL_EXPOSURE_MIN_US
+            <= float(value) * 1000.0
+            <= OFFICIAL_EXPOSURE_MAX_US
+            for value in matrix.exposures_ms
+        ):
+            errors.append(
+                tr(
+                    "recipe.validation.exposure_official_range",
+                    low=f"{OFFICIAL_EXPOSURE_MIN_US / 1000:g}",
+                    high=f"{OFFICIAL_EXPOSURE_MAX_US / 1000:g}",
+                )
+            )
         if not matrix.gains_percent or any(int(value) < 0 for value in matrix.gains_percent):
             errors.append(tr("recipe.validation.gain_values"))
         if matrix.repeat < 1:

@@ -168,6 +168,15 @@ class RecipeStoreTests(unittest.TestCase):
             {"exposure_ms", "gain_percent", "resolution"} & set(profiles[0]),
         )
 
+    def test_exposure_must_stay_within_official_camera_range(self) -> None:
+        recipe = Recipe()
+        recipe.el_matrix.exposures_ms = [0.029]
+        self.assertTrue(any("IUA8300KMB" in error for error in recipe.validate()))
+        recipe.el_matrix.exposures_ms = [15_000.001]
+        self.assertTrue(any("IUA8300KMB" in error for error in recipe.validate()))
+        recipe.el_matrix.exposures_ms = [0.03, 15_000.0]
+        self.assertFalse(any("IUA8300KMB" in error for error in recipe.validate()))
+
     def test_required_traceability_outputs_are_normalized_on_load(self) -> None:
         loaded = Recipe.from_dict({
             "output": {

@@ -62,9 +62,11 @@ class _FakeMonoCamera:
         self.auto_exposure_enable = 0
         self.ae_aux_rect = (0, 0, 3, 2)
         self.exposure_us = 1000
+        self.real_exposure_offset_us = 0
         self.gain_percent = 100
         self.exposure_writes: list[int] = []
         self.gain_writes: list[int] = []
+        self.trigger_calls: list[int] = []
 
     def get_eSize(self) -> int:
         return 0
@@ -128,6 +130,9 @@ class _FakeMonoCamera:
     def get_ExpoTime(self) -> int:
         return self.exposure_us
 
+    def get_RealExpoTime(self) -> int:
+        return self.exposure_us + self.real_exposure_offset_us
+
     def get_ExpoAGain(self) -> int:
         return self.gain_percent
 
@@ -153,17 +158,31 @@ class _FakeMonoCamera:
         if self.start_error is not None:
             raise self.start_error
 
+    def Trigger(self, count: int) -> None:
+        self.trigger_calls.append(int(count))
+
     def PullImageV4(self, _buffer, _still: int, bits: int, _pitch: int, _info) -> None:
         self.pull_bits.append(bits)
         if self.pull_error is not None:
             raise self.pull_error
+        if _info is not None:
+            _info.v3.flag = (
+                nncam.NNCAM_FRAMEINFO_FLAG_EXPOTIME
+                | nncam.NNCAM_FRAMEINFO_FLAG_EXPOGAIN
+            )
+            _info.v3.expotime = self.exposure_us
+            _info.v3.expogain = self.gain_percent
 
     def Close(self) -> None:
         pass
 
 
 def _mono_device(
-    flags: int = nncam.NNCAM_FLAG_MONO | nncam.NNCAM_FLAG_RAW12,
+    flags: int = (
+        nncam.NNCAM_FLAG_MONO
+        | nncam.NNCAM_FLAG_RAW12
+        | nncam.NNCAM_FLAG_TRIGGER_SOFTWARE
+    ),
 ) -> SimpleNamespace:
     resolution = SimpleNamespace(width=3, height=2)
     model = SimpleNamespace(
@@ -254,6 +273,11 @@ class MonoScientificCameraTests(unittest.TestCase):
             self.assertEqual(16, preview.pixelColor(2, 0).red())
             self.assertEqual(1, sequence)
 
+            frame_metadata = controller.frame_capture_metadata(sequence)
+            self.assertTrue(frame_metadata["FrameExposureGainMetadataValid"])
+            self.assertEqual(1000, frame_metadata["FrameExposureUs"])
+            self.assertEqual(100, frame_metadata["FrameGainPercent"])
+
             metadata = controller.capture_metadata()
             self.assertEqual(12, metadata["SensorBitDepth"])
             self.assertEqual("MaxBitDepth", metadata["BitDepthSource"])
@@ -270,6 +294,50 @@ class MonoScientificCameraTests(unittest.TestCase):
             self.assertEqual("RGBOption4", metadata["ScientificFormatNegotiation"])
             self.assertTrue(metadata["ScientificFrameValidated"])
             self.assertTrue(metadata["ScientificMeasurementReady"])
+        finally:
+            controller.close_camera()
+
+    def test_formal_capture_uses_trigger_flush_and_real_exposure_readback(self) -> None:
+        camera = _FakeMonoCamera()
+        camera.real_exposure_offset_us = 1_000
+        controller, errors = _open(camera)
+        try:
+            diagnostics = controller.prepare_software_triggered_capture(500_000, 200)
+
+            self.assertFalse(errors)
+            self.assertEqual(500_000, diagnostics["RequestedExposureUs"])
+            self.assertEqual(500_000, diagnostics["ExposureSettingReadbackUs"])
+            self.assertEqual(501_000, diagnostics["RealExposureReadbackUs"])
+            self.assertEqual(200, diagnostics["GainReadback"])
+            self.assertEqual(
+                [
+                    (nncam.NNCAM_OPTION_FLUSH, 3),
+                    (nncam.NNCAM_OPTION_FLUSH, 3),
+                ],
+                [
+                    item
+                    for item in camera.options
+                    if item[0] == nncam.NNCAM_OPTION_FLUSH
+                ],
+            )
+            self.assertEqual([0], camera.trigger_calls)
+
+            controller.trigger_single_frame()
+            controller.finish_software_triggered_capture()
+            self.assertEqual([0, 1, 0], camera.trigger_calls)
+            self.assertEqual(0, camera.get_Option(nncam.NNCAM_OPTION_TRIGGER))
+        finally:
+            controller.close_camera()
+
+    def test_formal_capture_rejects_exposure_outside_official_range(self) -> None:
+        camera = _FakeMonoCamera()
+        controller, _errors = _open(camera)
+        try:
+            with self.assertRaisesRegex(ValueError, "official IUA8300KMB range"):
+                controller.prepare_software_triggered_capture(29, 100)
+            with self.assertRaisesRegex(ValueError, "official IUA8300KMB range"):
+                controller.prepare_software_triggered_capture(15_000_001, 100)
+            self.assertEqual([], camera.exposure_writes)
         finally:
             controller.close_camera()
 
