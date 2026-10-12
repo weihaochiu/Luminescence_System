@@ -43,6 +43,7 @@ class EmergencyManager(QObject):
         super().__init__(parent)
         self.smu_control = smu_control
         self.relay_service = relay_service
+        self.light_service = None
         self._active = Event()
         self._lock = RLock()
         self._generation = 0
@@ -155,6 +156,16 @@ class EmergencyManager(QObject):
             actions["SMU routing Relays OFF"] = False
             failures.append(f"SMU routing Relays OFF: {exc}")
             LOG.exception("GLOBAL_EMERGENCY SMU routing shutdown failed")
+
+        if self.light_service is not None:
+            try:
+                actions["GSP4H Light OFF"] = self.light_service.verify_dark(zero=True)
+                if not actions["GSP4H Light OFF"]:
+                    failures.append("GSP4H Light OFF: OFF readback was not verified")
+            except Exception as exc:
+                actions["GSP4H Light OFF"] = False
+                failures.append(f"GSP4H Light OFF: {exc}")
+                LOG.exception("GLOBAL_EMERGENCY GSP4H shutdown failed")
 
         for name, action in abort_actions:
             try:

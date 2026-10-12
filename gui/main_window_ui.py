@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt
 from PySide6.QtGui import QAction, QKeySequence
+from .offline_tools import open_offline_viewer
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -32,6 +33,7 @@ from .measurement_control_bar import MeasurementControlBar
 from .responsive_layout import LayoutMode, ResponsiveLayoutManager
 from .sidebar import SidebarItem, SidebarRegistry, SidebarSettingsDialog
 from .smu_manual_panel import ManualSMUPanel
+from .light_panel import LightPanel
 from .widgets import CollapsibleSection, ImageView
 
 
@@ -85,6 +87,7 @@ class MainWindowUIMixin:
         )
         self.polarity_settings_action.setToolTip(tr("settings.polarity_tooltip"))
         self.relay_settings_action = QAction(tr("settings.relay"), self)
+        self.light_settings_action = QAction(tr("light.settings"), self)
         self.smu_safety_settings_action = QAction(tr("settings.smu_safety"), self)
         self.smu_safety_settings_action.setToolTip(
             tr("settings.smu_safety_tooltip")
@@ -102,6 +105,12 @@ class MainWindowUIMixin:
         )
         self.general_settings_action = QAction(tr("settings.general"), self)
         self.error_center_action = QAction(tr("error_center.title"), self)
+        self.offline_viewer_action = QAction(
+            style.standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView),
+            tr("toolbar.offline_hdr"), self,
+        )
+        self.offline_viewer_action.setToolTip(tr("toolbar.offline_hdr_tooltip"))
+        self.offline_viewer_action.triggered.connect(lambda: open_offline_viewer(self))
 
         self.refresh_action.triggered.connect(self.refresh_devices)
         self.connect_action.triggered.connect(self.toggle_connection)
@@ -119,6 +128,7 @@ class MainWindowUIMixin:
         )
         self.smu_safety_settings_action.triggered.connect(self.open_smu_safety_settings)
         self.relay_settings_action.triggered.connect(self.open_relay_settings)
+        self.light_settings_action.triggered.connect(self.open_light_settings)
         self.sidebar_settings_action.triggered.connect(self.open_sidebar_settings)
         self.smu_auto_connect_action.toggled.connect(
             lambda enabled: self.settings.setValue("devices/auto_connect_smu", enabled)
@@ -155,6 +165,7 @@ class MainWindowUIMixin:
         self.settings_menu.addAction(self.polarity_settings_action)
         self.settings_menu.addAction(self.smu_safety_settings_action)
         self.settings_menu.addAction(self.relay_settings_action)
+        self.settings_menu.addAction(self.light_settings_action)
         self.settings_menu.addSeparator()
         self.settings_menu.addAction(self.smu_auto_connect_action)
 
@@ -181,6 +192,8 @@ class MainWindowUIMixin:
         toolbar.addSeparator()
         toolbar.addAction(self.fit_action)
         toolbar.addAction(self.actual_action)
+        toolbar.addSeparator()
+        toolbar.addAction(self.offline_viewer_action)
         self.emergency_stop_button = QPushButton(tr("common.emergency_stop"))
         self.emergency_stop_button.setObjectName("globalEmergencyStop")
         self.emergency_stop_button.setToolTip(
@@ -333,12 +346,14 @@ class MainWindowUIMixin:
         sidebar_layout.setContentsMargins(3, 3, 3, 3)
         sidebar_layout.setSpacing(3)
         sidebar_layout.addStretch()
+        self.light_panel = LightPanel(self.light_service, self)
         section_specs = (
             ("camera_connection", "toolbar.camera_connect", "toolbar.camera_connect", self.device_panel.camera_content, True, 10),
             ("smu_connection", "toolbar.smu_connect", "toolbar.smu_connect", self.device_panel.smu_content, True, 20),
             ("manual_smu", "toolbar.manual_smu", "smu.manual_output", self.manual_smu_panel, True, 30),
             ("recipe", "recipe.selection", "recipe.title", self.device_panel.recipe_content, True, 40),
             ("manual_capture", "camera.manual_capture", "camera.manual_capture", capture_content, True, 50),
+            ("light_control", "light.title", "light.title", self.light_panel, True, 45),
             ("resolution", "camera.resolution", "camera.resolution", resolution_content, True, 60),
             ("exposure", "camera.exposure_control", "camera.exposure_control", exposure_content, True, 70),
             ("temperature", "camera.temperature", "camera.temperature", temperature_content, True, 75),
@@ -484,6 +499,7 @@ class MainWindowUIMixin:
             (self.temperature_chart_action, "camera.temperature_chart", "camera.temperature_chart_tooltip"),
             (self.fit_action, "view.fit_window", "view.fit_window_tooltip"),
             (self.actual_action, "view.actual_size", "view.actual_size_tooltip"),
+            (self.offline_viewer_action, "toolbar.offline_hdr", "toolbar.offline_hdr_tooltip"),
             (self.recipe_manager_action, "recipe.manager", "recipe.manager_tooltip"),
             (self.polarity_settings_action, "settings.polarity", "settings.polarity_tooltip"),
             (self.camera_auto_exposure_settings_action, "settings.auto_exposure", "settings.auto_exposure_tooltip"),
@@ -498,6 +514,7 @@ class MainWindowUIMixin:
         self.exit_action.setText(tr("app.exit"))
         self.about_action.setText(tr("app.about"))
         self.general_settings_action.setText(tr("settings.general"))
+        self.light_settings_action.setText(tr("light.settings"))
         self.error_center_action.setText(tr("error_center.title"))
         self.main_toolbar.setWindowTitle(tr("toolbar.main"))
         self.emergency_stop_button.setText(tr("common.emergency_stop"))

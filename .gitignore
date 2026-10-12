@@ -9,3 +9,6 @@ venv/
 
 # Local private Codex / project context
 /private/
+
+# Local literature discussion notes; article/SI files live in D:\Literature_Library
+/paper/

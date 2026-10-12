@@ -66,6 +66,8 @@ def start_background_measurement(
 ) -> bool:
     if self._measurement_thread is not None:
         raise RuntimeError("Measurement is already running")
+    if getattr(self, "_measurement_starting", False):
+        return False
     control = self.smu_manager.control
     if acquire_recipe_ownership and control.ownership is SMUOwnership.MANUAL:
         detail = tr("measurement.manual_output_shutdown_detail") if control.output_enabled else ""
@@ -79,10 +81,19 @@ def start_background_measurement(
         if answer != QMessageBox.StandardButton.Yes:
             return False
     if acquire_recipe_ownership:
+        if hasattr(self, "light_service"):
+            self._measurement_starting = True
+            try:
+                if not self._prepare_light_for_measurement("recipe"):
+                    return False
+            finally:
+                self._measurement_starting = False
         try:
             self.emergency_manager.begin_operator_operation()
             control.prepare_recipe_start(close_manual=True)
         except SMUInterlockError as exc:
+            if hasattr(self, "light_service"):
+                self.light_service.set_locked("recipe", False)
             self.show_smu_error(str(exc))
             return False
     thread = QThread(self)
@@ -155,6 +166,8 @@ def stop_background_measurement(self: Any) -> None:
     if smu_safe:
         _best_effort_routing_off(self, "stop_measurement")
     self.relay_service.safe_white_light_off("stop_measurement")
+    if hasattr(self, "light_service"):
+        self.light_service.off()
 
 
 def emergency_stop_measurement(self: Any) -> None:
@@ -534,6 +547,7 @@ def begin_el_matrix_measurement(self: Any) -> None:
         self.relay_service,
         bridge,
         PolarityMeasurementSettings.from_dict(polarity_snapshot),
+        light_service=getattr(self, "light_service", None),
     )
     dialog = MeasurementProgressDialog(recipe.name, self)
     dialog.stop_requested.connect(self.stop_background_measurement)
@@ -636,6 +650,8 @@ def _clear_measurement_worker(self: Any) -> None:
     self._measurement_worker = None
     self._measurement_thread = None
     self._measurement_hardware_active = False
+    if hasattr(self, "light_service"):
+        self.light_service.set_locked("recipe", False)
     self.stop_measurement_button.setEnabled(False)
     _set_measurement_controls_locked(self, False)
     self._update_measurement_controls()

@@ -2,7 +2,22 @@
 
 文件版本：1.9.1
 對應程式版本：V1.9.1
-最後更新：2026-08-25（UTC+8）
+最後更新：2026-10-07（UTC+8）
+
+## GSP-4H 整合補充（2026-10-06）
+
+資料流為 `LightPanel / LightSettingsDialog → LightService → ControllerWorker → LightController → QtSerialTransport → GSP-4H`。
+
+- `gui/light_service.py` 管理主程式唯一的光源 session、延遲建立的 QThread、每通道最新值合併、原子亮度保存、安全命令優先排程與有界驗證等待。協定／探索／驅動直接共用 `tools/gsp4h_controller/`，不複製另一套硬體邏輯，也不建立獨立工具視窗。
+- `gui/light_panel.py` 提供精簡 Sidebar 光源面板和設定選單的進階對話框；兩者共用服務。CH selection 只選擇編輯對象；重新翻譯與讀回更新採 QSignalBlocker，不送硬體命令。設定視窗關閉不關燈、不斷線。
+- `gui/main_window_light.py` 負責主視窗的初始化、設定視窗生命週期、SMU／Emergency policy 及中央錯誤 routing。光源錯誤使用 COMM-201／COMM-203；輸入／保存失敗沿用 CFG-101／FILE-201。
+- 主程式保存至 AppData `light_brightness.json`；首次沒有設定時匯入 GenericConfigLocation 下 `Luminescence_GSP4H/brightness.json`，不改來源。QSettings 保存 canonical parity、啟動偏好、上次成功 PORT／轉接器序號，不保存自動 ON 命令。
+- CH 自訂名稱以 QSettings `light/channels/{1..4}/name` 持久化，由 LightService 存取並發布 changed。LightSettingsDialog 的名稱欄位自動保存；LightPanel 透過 QSignalBlocker 原地更新顯示文字及 tooltip，保留選取及整數 itemData。名稱不參與串口命令、亮度 schema 或燈具連接判定。
+- 普通 OFF 驗證模式 L 並保留四通道設定；Emergency OFF／退出驗證 L＋四通道 0；退出還須釋放串口並結束 worker。設定保存失敗不跳過硬體關燈，但取消退出以便重試保存。
+- `verify_dark()` 在主 Qt thread 以有界事件迴圈等待新讀回，量測 thread 則以 signal＋Event marshaling；呼叫者不直接操作 controller。回傳 True 代表已驗證完成；未建立 session 是選配設備不適用，已有 session 斷線則不能以未連線當作安全成功。
+- Recipe 啟動及 Manual polarity sequence 先鎖住光源、丟棄待送亮度／取消 ON，再驗證 L。Shared Dark／Dark I-V 與最終 safe-shutdown 再次驗證。量測中光源故障觸發 Emergency；UI 鎖住開燈、調光、連線及換設備，保留 OFF 路徑。
+- Production safe-shutdown 增加 `gsp4h_light_off`，Runner／Pixel CSV gate 拒絕明確 False；未包含此欄位的歷史結果與既有 fake adapters 保持相容。既有 Relay 白光仍獨立用於 polarity，尚未加入 PL／Recipe 調光。
+- 共用原相機拍照入口、曝光／Gain 及影像輸出；一般影像 sidecar 增加 GSP4H requested/readback 診斷值，這些是設備設定而不是實測光強。
 
 ## 0. 雙語與中央錯誤架構
 
@@ -179,6 +194,23 @@ Pilot、Quick、synthetic/fake、缺 Dark/repeats 或非完整 PASS 的 profile 
 `profile_usable_for_production=false`；真實 RisingCam/平場光源驗證屬硬體 acceptance，不能由 CI 宣稱完成。
 
 HID path 僅供當次連線使用，設定檔不保存 USB port、Windows location 或 path。主畫面白光控制只能呼叫 `RelayService.group_on/off("white_light")`；CH1／CH2 的單獨控制僅位於設定視窗。Group ON 部分失敗會對全部 member 嘗試 OFF rollback，Group OFF 則累積失敗但繼續操作後續 member。
+
+### 4.7 Offline viewing-only batch HDR
+
+`standalone/hdr_viewer/` 為獨立離線工具。`gui/offline_tools.py` 使用專案目前 Python 的
+`QProcess.startDetached` 啟動 module，主工具列只提供啟動入口，不載入 HDR 數值層、不取得
+相機／SMU／Relay ownership。亦支援根目錄與 standalone BAT。
+
+- `scan.py`：TIFF/JSON inventory、metadata 驗證、MeasurementRunID／原量測資料夾辨識與
+  run/sample/channel/commanded-J/Gain grouping；requested exposure 用於 Repeat bucket，actual exposure 用於逐張正規化。
+- `processing.py`：逐曝光累積 Repeat、RAW alignment、未驗證線性假設的浮點加權合成、有效像素遮罩；
+  `Correction` protocol 預留 dark/gain/flat-field seam；`tone_map` 只作用於顯示副本。
+- `batch.py`：唯一新輸出目錄、逐組暫存／發布、版本及來源 SHA-256、JSON／CSV checkpoint，取消保留完成組別。
+- `window.py`：獨立 QThread scan/generate、每 500 ms elapsed/ETA heartbeat、可取消的 lifecycle。
+
+第一版始終 `quantitative=false`。後續校正介面實作不能自行提升此標記，須另有正式校正相容性、
+數值驗證與定量輸出契約。各組觀看圖獨立映射，不能據顯示亮度比較電流密度／樣品。
+主程式已移除的 `gui/auto_hdr.py` 等 acquisition HDR 模組仍不恢復。
 
 ## 5. Recipe 與 EL Matrix 邊界
 

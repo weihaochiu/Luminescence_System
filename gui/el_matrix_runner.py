@@ -271,7 +271,8 @@ class ELMatrixRunner:
             "smu_output_off", "routing_off", "white_light_off",
             "ownership_released", "ok",
         )
-        if not all(normalized.get(name) is True for name in required):
+        if (not all(normalized.get(name) is True for name in required)
+                or normalized.get("gsp4h_light_off", True) is not True):
             raise RuntimeError("Safe shutdown did not satisfy every post-processing gate")
         if result is None:
             raise RuntimeError("Hardware measurement ended without a result")

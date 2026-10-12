@@ -1,5 +1,23 @@
 # EL 量測設備控制程式
 
+## GSP-4H 光源控制
+
+- Sidebar「光源控制」提供連線狀態、自動連線、全機開關、CH1～CH4 選擇及所選通道的 0～255 強度；拍照及曝光／Gain 沿用既有功能。
+- 「設定 → 光源設定」提供 PORT、掃描／手動連線、安全斷線、同位檢查、啟動自動連線偏好、設備讀回及通訊紀錄匯出。
+- 光源設定可為 CH1～CH4 自訂名稱並自動保存；Sidebar 顯示例如「CH2（藍光光源）」，留白時顯示原 CH 編號。名稱只作識別，不改硬體通道或確認燈具連接。
+- 啟動與連線只查詢，不自動點燈。一般關燈保留強度；安全斷線／退出驗證常暗及四通道歸零，但保存的使用者強度仍保留。
+- 主程式使用 AppData `light_brightness.json`，首次可匯入原獨立工具設定。獨立工具仍可單獨使用；同一串口一次只由一個程式開啟。
+- 量測及手動極性前驗證關燈並鎖住手動調光；Emergency 與退出接入光源安全清理。既有 Relay 白光維持原用途，尚未加入 PL／Recipe 自動光照。
+- 自動化驗證使用 fake serial devices，不操作實際 COM PORT；實機仍需確認接線、強度與熄燈。
+
+## Offline Batch HDR Viewer (viewing only)
+
+- 主程式上方工具列「HDR 生成」啟動獨立工具；也可雙擊 `run_hdr_viewer.bat` 或 `standalone/hdr_viewer/run.bat`。
+- 選擇整個 EL 原始 TIFF 資料夾，自動掃描子資料夾，依批次、樣品、通道、設定電流密度、Gain 分組。同曝光 Repeat 平均；不同批次／Gain 分開。
+- 背景生成提供進度、預估剩餘及完成時間、取消；每組至少兩種曝光。輸出新資料夾，保存 float32 未校正 TIFF、16-bit 觀看 TIFF、PNG、有效像素遮罩、來源 JSON 與整批 CSV。
+- 僅供觀看；假設線性且無 Dark／Gain／平場校正，各組預覽獨立調整亮度，不能作 EL 定量比較。預留校正介面，未來須從原始照片重新處理。
+- 詳細資料與限制見 `standalone/hdr_viewer/README.md`。主程式既有 Recipe／拍攝 HDR 移除規則維持不變。
+
 ## Standalone Camera Linearity Qualification
 
 - `run_camera_linearity_qualification.bat` launches an independent PySide6 tool for guided

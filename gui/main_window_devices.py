@@ -129,6 +129,9 @@ class MainWindowDeviceMixin:
         area_cm2: float,
     ) -> None:
         try:
+            if hasattr(self, "light_service"):
+                if not self._prepare_light_for_measurement("manual"):
+                    return
             self.emergency_manager.begin_operator_operation()
             accepted = self.smu_manager.control.request_manual_output_sequence(
                 channel_id,
@@ -164,6 +167,9 @@ class MainWindowDeviceMixin:
             self.status_message.setText(tr("smu.routing_channel", channel=channel_id))
         except (ValueError, SMUInterlockError, RelayError) as exc:
             self.show_smu_error(str(exc))
+        finally:
+            if hasattr(self, "light_service"):
+                self._sync_light_policy()
 
     def on_manual_smu_sequence_finished(self, success: bool) -> None:
         self._update_white_light_control()
@@ -860,6 +866,8 @@ class MainWindowDeviceMixin:
             "manual_smu_routing": self.smu_manager.control.manual_routing_snapshot,
         })
         metadata.update(self.temperature_monitor.metadata_fields())
+        if hasattr(self, "light_service"):
+            metadata.update(self.light_service.metadata_fields())
         try:
             image_path, sidecar_path = save_image_and_metadata(self.last_image, path, metadata)
             self.status_message.setText(tr("file.saved_name", name=image_path.name))

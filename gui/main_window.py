@@ -33,6 +33,7 @@ from .polarity_settings import PolaritySettingsStore
 from .polarity_settings_dialog import PolaritySettingsDialog
 from .relay_controller import RelayController, RelayService
 from .main_window_relay import attach_relay_handlers
+from .main_window_light import attach_light_handlers
 from .relay_settings import RelaySettingsStore
 from .smu_manager import SMUManager
 from .smu_monitor import SMUMonitor
@@ -99,6 +100,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             self.relay_service,
             parent=self,
         )
+        self.initialize_light(application_directory)
         self.error_reporter = ErrorReporter(parent=self)
         self.error_reporter.presenter = self._present_error
         self._error_center_dialog = None
@@ -145,6 +147,8 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         QTimer.singleShot(50, self.refresh_devices)
         QTimer.singleShot(300, self.auto_connect_smu_on_startup)
         QTimer.singleShot(500, self.refresh_relay_connection)
+        if self.settings.value("light/auto_connect", True, type=bool):
+            QTimer.singleShot(700, self.light_service.auto_connect)
 
     def _retranslate_application_shell(self, _language: str = "") -> None:
         self.setWindowTitle(tr("app.title", version=__version__))
@@ -283,6 +287,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         )
 
 attach_relay_handlers(MainWindow)
+attach_light_handlers(MainWindow)
 attach_measurement_handlers(MainWindow)
 attach_close_handlers(MainWindow)
 attach_error_handlers(MainWindow)

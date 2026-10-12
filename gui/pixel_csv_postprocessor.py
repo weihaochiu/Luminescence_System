@@ -28,7 +28,8 @@ SAFE_SHUTDOWN_KEYS = (
 
 
 def verified_safe_shutdown(result: Mapping[str, Any] | None) -> bool:
-    return bool(result) and all(result.get(key) is True for key in SAFE_SHUTDOWN_KEYS)
+    return (bool(result) and all(result.get(key) is True for key in SAFE_SHUTDOWN_KEYS)
+            and result.get("gsp4h_light_off", True) is True)
 
 
 @dataclass(frozen=True)

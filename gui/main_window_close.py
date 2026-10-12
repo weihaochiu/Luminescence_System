@@ -37,6 +37,11 @@ def closeEvent(self: Any, event: QCloseEvent) -> None:  # noqa: N802 - Qt API na
                 self.emergency_manager.trigger("forced application exit")
             except Exception:
                 LOG.exception("Forced-exit emergency cleanup failed")
+            light = getattr(self, "light_service", None)
+            if light is not None and not light.shutdown():
+                QMessageBox.warning(self, tr("light.settings"), tr("light.close_unconfirmed"))
+                self._cancel_close_after_safety_failure(event)
+                return
             self.smu_manager.shutdown(force=True)
             self.controller.close_camera()
             event.accept()
@@ -44,6 +49,11 @@ def closeEvent(self: Any, event: QCloseEvent) -> None:  # noqa: N802 - Qt API na
         self._cancel_close_after_safety_failure(event)
         return
 
+    light = getattr(self, "light_service", None)
+    if light is not None and not light.shutdown():
+        QMessageBox.warning(self, tr("light.settings"), tr("light.close_unconfirmed"))
+        self._cancel_close_after_safety_failure(event)
+        return
     self.relay_service.shutdown()
     self.smu_manager.shutdown(safety_confirmed=True)
     self.controller.close_camera()

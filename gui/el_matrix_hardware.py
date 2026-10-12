@@ -25,15 +25,22 @@ class ELMatrixHardwareAdapter:
         camera_bridge: CameraCaptureBridge,
         polarity_settings: Any,
         status: Callable[[str], None] = lambda _message: None,
+        light_service: Any = None,
     ) -> None:
         self.control = control
         self.relay = relay_service
         self.camera = camera_bridge
         self.polarity_settings = polarity_settings
         self.status = status
+        self.light_service = light_service
+
+    def _verify_gsp4h_dark(self) -> None:
+        if self.light_service is not None and not self.light_service.verify_dark():
+            raise RuntimeError("GSP4H Light OFF could not be verified")
 
     def prepare_shared_dark(self) -> None:
         self.output_off()
+        self._verify_gsp4h_dark()
         if not self.relay.safe_white_light_off("el_matrix_shared_dark"):
             raise RuntimeError("White Light OFF could not be verified for Shared Dark")
         self.clear_routing()
@@ -80,6 +87,7 @@ class ELMatrixHardwareAdapter:
 
     def prepare_channel_dark(self) -> None:
         self.output_off()
+        self._verify_gsp4h_dark()
         if not self.relay.safe_white_light_off("el_matrix_channel_dark"):
             raise RuntimeError("White Light OFF could not be verified for channel Dark I-V")
 
@@ -227,6 +235,14 @@ class ELMatrixHardwareAdapter:
         except Exception as exc:
             failures.append(f"White Light OFF failed: {exc}")
         ownership_released = self.control.ownership is SMUOwnership.IDLE
+        gsp4h_light_off = self.light_service is None
+        if self.light_service is not None:
+            try:
+                gsp4h_light_off = bool(self.light_service.verify_dark())
+                if not gsp4h_light_off:
+                    failures.append("GSP4H Light OFF could not be verified")
+            except Exception as exc:
+                failures.append(f"GSP4H Light OFF failed: {exc}")
         if not ownership_released:
             failures.append("SMU ownership was not safely released")
         if failures:
@@ -240,5 +256,6 @@ class ELMatrixHardwareAdapter:
             "routing_off": routing_off,
             "white_light_off": white_light_off,
             "ownership_released": ownership_released,
+            "gsp4h_light_off": gsp4h_light_off,
             "ok": True,
         }

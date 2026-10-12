@@ -42,6 +42,7 @@ class MainToolbarStructureTests(unittest.TestCase):
                 "auto_capture_action",
                 "fit_action",
                 "actual_action",
+                "offline_viewer_action",
             ],
             action_names,
         )
