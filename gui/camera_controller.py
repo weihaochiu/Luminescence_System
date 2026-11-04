@@ -32,6 +32,7 @@ from .camera_ae_calibration import (
 )
 from .camera_exposure import validate_official_exposure_us
 from .camera_temperature_monitor import CameraTemperatureUnsupportedError
+from .camera_sdk_diagnostics import sdk_call, stop_for_configuration
 from .scientific_dn import (
     effective_dn_fraction,
     effective_dn_max,
@@ -839,26 +840,25 @@ class CameraController(QObject):
         self._disable_sdk_auto_exposure(require_readback=True)
         # Stop joins the previous acquisition before any new exposure is set.
         # Ignore already queued Qt callbacks from that acquisition as well.
-        self._stream_generation += 1
-        self._camera.Stop()
+        stop_for_configuration(self, "Trigger capture setup")
         self._software_trigger_capture_active = True
-        self._camera.put_Option(nncam.NNCAM_OPTION_TRIGGER, 1)
-        trigger_mode = int(self._camera.get_Option(nncam.NNCAM_OPTION_TRIGGER))
+        sdk_call("Trigger capture setup", self._camera.put_Option, nncam.NNCAM_OPTION_TRIGGER, 1)
+        trigger_mode = int(sdk_call("Trigger capture setup", self._camera.get_Option, nncam.NNCAM_OPTION_TRIGGER))
         if trigger_mode != 1:
             raise RuntimeError(
                 f"Camera trigger mode requested 1, read back {trigger_mode}"
             )
-        self._camera.put_ExpoTime(exposure_us)
-        self._camera.put_ExpoAGain(int(gain))
-        self._start_stream()
-        self._camera.Trigger(0)
-        self._camera.put_Option(nncam.NNCAM_OPTION_FLUSH, 3)
-        setting_exposure_us = int(self._camera.get_ExpoTime())
-        real_exposure_us = int(self._camera.get_RealExpoTime())
+        sdk_call("Trigger capture setup", self._camera.put_ExpoTime, exposure_us)
+        sdk_call("Trigger capture setup", self._camera.put_ExpoAGain, int(gain))
+        sdk_call("Trigger capture setup: start acquisition", self._start_stream)
+        sdk_call("Trigger capture setup", self._camera.Trigger, 0)
+        sdk_call("Trigger capture setup", self._camera.put_Option, nncam.NNCAM_OPTION_FLUSH, 3)
+        setting_exposure_us = int(sdk_call("Trigger capture setup", self._camera.get_ExpoTime))
+        real_exposure_us = int(sdk_call("Trigger capture setup", self._camera.get_RealExpoTime))
         if real_exposure_us <= 0:
             raise RuntimeError(f"Invalid camera real exposure: {real_exposure_us} us")
-        gain_readback = int(self._camera.get_ExpoAGain())
-        self._camera.put_Option(nncam.NNCAM_OPTION_FLUSH, 3)
+        gain_readback = int(sdk_call("Trigger capture setup", self._camera.get_ExpoAGain))
+        sdk_call("Trigger capture setup", self._camera.put_Option, nncam.NNCAM_OPTION_FLUSH, 3)
         self.exposure_changed.emit(setting_exposure_us, gain_readback)
         return {
             "CaptureMode": "SoftwareTrigger",
@@ -876,17 +876,17 @@ class CameraController(QObject):
         if self._camera is None or not self._software_trigger_capture_active:
             raise RuntimeError("Software-trigger capture is not active")
         return {
-            "ExposureSettingAfterCaptureUs": int(self._camera.get_ExpoTime()),
-            "RealExposureAfterCaptureUs": int(self._camera.get_RealExpoTime()),
-            "GainAfterCapture": int(self._camera.get_ExpoAGain()),
-            "TriggerModeAfterCapture": int(self._camera.get_Option(nncam.NNCAM_OPTION_TRIGGER)),
-            "AutoExposureAfterCapture": int(self._camera.get_AutoExpoEnable()),
+            "ExposureSettingAfterCaptureUs": int(sdk_call("Trigger capture readback", self._camera.get_ExpoTime)),
+            "RealExposureAfterCaptureUs": int(sdk_call("Trigger capture readback", self._camera.get_RealExpoTime)),
+            "GainAfterCapture": int(sdk_call("Trigger capture readback", self._camera.get_ExpoAGain)),
+            "TriggerModeAfterCapture": int(sdk_call("Trigger capture readback", self._camera.get_Option, nncam.NNCAM_OPTION_TRIGGER)),
+            "AutoExposureAfterCapture": int(sdk_call("Trigger capture readback", self._camera.get_AutoExpoEnable)),
         }
 
     def trigger_single_frame(self) -> None:
         if self._camera is None or not self._software_trigger_capture_active:
             raise RuntimeError("Software-trigger capture is not prepared")
-        self._camera.Trigger(1)
+        sdk_call("Trigger capture", self._camera.Trigger, 1)
 
     def finish_software_triggered_capture(self) -> None:
         """Return to video mode after a formal single-frame capture."""
@@ -897,16 +897,15 @@ class CameraController(QObject):
         if not self._software_trigger_capture_active:
             return
         try:
-            self._camera.Trigger(0)
-            self._stream_generation += 1
-            self._camera.Stop()
-            self._camera.put_Option(nncam.NNCAM_OPTION_TRIGGER, 0)
-            readback = int(self._camera.get_Option(nncam.NNCAM_OPTION_TRIGGER))
+            sdk_call("Trigger capture cleanup", self._camera.Trigger, 0)
+            stop_for_configuration(self, "Trigger capture cleanup")
+            sdk_call("Trigger capture cleanup", self._camera.put_Option, nncam.NNCAM_OPTION_TRIGGER, 0)
+            readback = int(sdk_call("Trigger capture cleanup", self._camera.get_Option, nncam.NNCAM_OPTION_TRIGGER))
             if readback != 0:
                 raise RuntimeError(
                     f"Camera video mode requested 0, read back {readback}"
                 )
-            self._start_stream()
+            sdk_call("Trigger capture cleanup: restart preview", self._start_stream)
         finally:
             self._software_trigger_capture_active = False
 
@@ -1440,8 +1439,8 @@ class CameraController(QObject):
             max(int(requested), nncam.NNCAM_AETARGET_MIN),
             nncam.NNCAM_AETARGET_MAX,
         )
-        camera.put_AutoExpoTarget(requested)
-        readback = int(camera.get_AutoExpoTarget())
+        sdk_call("AE target", camera.put_AutoExpoTarget, requested)
+        readback = int(sdk_call("AE target", camera.get_AutoExpoTarget))
         self._sdk_auto_exposure_target = requested
         self._sdk_auto_exposure_target_readback = readback
         if readback != requested:
@@ -1464,8 +1463,8 @@ class CameraController(QObject):
         if mode not in {SDKAutoExposureMode.CONTINUOUS, SDKAutoExposureMode.ONCE}:
             raise ValueError("SDK AE enable mode must be Continuous or Once")
         enable_value = 1 if mode is SDKAutoExposureMode.CONTINUOUS else 2
-        self._camera.put_AutoExpoEnable(enable_value)
-        readback = int(self._camera.get_AutoExpoEnable())
+        sdk_call("Enable AE", self._camera.put_AutoExpoEnable, enable_value)
+        readback = int(sdk_call("Enable AE", self._camera.get_AutoExpoEnable))
         self._sdk_auto_exposure_enable_readback = readback
         if readback != enable_value:
             raise RuntimeError(
@@ -1479,9 +1478,9 @@ class CameraController(QObject):
             self._sdk_auto_exposure_mode = SDKAutoExposureMode.MANUAL
             self._sdk_auto_exposure_enable_readback = 0
             return
-        self._camera.put_AutoExpoEnable(0)
+        sdk_call("Disable AE", self._camera.put_AutoExpoEnable, 0)
         try:
-            readback = int(self._camera.get_AutoExpoEnable())
+            readback = int(sdk_call("Disable AE", self._camera.get_AutoExpoEnable))
         except Exception:
             if require_readback:
                 raise

@@ -86,8 +86,11 @@ class RecipeAutoExposureTests(unittest.TestCase):
         controller = CameraController()
         controller._camera = AutoCamera()
         controller._width, controller._height = 4, 3
+        controller._camera_is_mono = True
+        controller._scientific_pull_bits = 16
         controller._auto_exposure_roi_readback = (0, 0, 4, 3)
         controller._auto_exposure_roi_verified = True
+        self.addCleanup(controller.close_camera)
         return controller
 
     def test_legacy_recipe_defaults_to_manual(self):

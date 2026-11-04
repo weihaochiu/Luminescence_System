@@ -34,6 +34,7 @@ class _PendingCapture:
     exposure_mismatch_frames: int = 0
     software_triggered: bool = False
     capture_diagnostics: dict[str, object] | None = None
+    exception: Exception | None = None
 
 
 @dataclass
@@ -44,6 +45,7 @@ class _PendingAutoExposure:
     result: dict[str, Any] | None = None
     error: str = ""
     active: bool = True
+    exception: Exception | None = None
 
 
 @dataclass
@@ -52,6 +54,7 @@ class _PendingROI:
     event: Event
     active: bool = True
     error: str = ""
+    exception: Exception | None = None
 
 
 class CameraCaptureBridge(QObject):
@@ -135,6 +138,7 @@ class CameraCaptureBridge(QObject):
             float(timeout_s),
             exposure_s * (settling_frame_count + 1) + 2.0,
         )
+        failure = None
         try:
             while not pending.event.wait(0.05):
                 check_cancel()
@@ -143,10 +147,13 @@ class CameraCaptureBridge(QObject):
                         f"Camera capture timeout at {exposure_ms:g} ms / Gain {gain_percent}%"
                     )
             if pending.error:
-                raise RuntimeError(pending.error)
+                raise RuntimeError(pending.error) from pending.exception
             if pending.frame is None:
                 raise RuntimeError("Camera capture completed without a frame")
             return pending.frame
+        except Exception as exc:
+            failure = exc
+            raise
         finally:
             # Keep the request reserved until cleanup ends, but invalidate
             # late configuration callbacks after cancellation or timeout.
@@ -155,6 +162,10 @@ class CameraCaptureBridge(QObject):
             try:
                 if pending.software_triggered:
                     self._request_trigger_cleanup()
+            except Exception as cleanup:
+                if failure is not None:
+                    raise RuntimeError(f"{failure}; Camera cleanup failed: {cleanup}") from failure
+                raise
             finally:
                 with self._lock:
                     if self._pending is pending:
@@ -177,7 +188,7 @@ class CameraCaptureBridge(QObject):
                     raise TimeoutError("Channel ROI setting timed out")
             check_cancel()
             if pending.error:
-                raise RuntimeError(pending.error)
+                raise RuntimeError(pending.error) from pending.exception
         finally:
             pending.active = False
             with self._lock:
@@ -192,6 +203,7 @@ class CameraCaptureBridge(QObject):
             if not self.controller.set_auto_exposure_roi(*pending.roi):
                 raise RuntimeError("Channel AE ROI readback verification failed")
         except Exception as exc:
+            pending.exception = exc
             pending.error = str(exc)
         finally:
             pending.event.set()
@@ -208,6 +220,7 @@ class CameraCaptureBridge(QObject):
             self._pending_ae = pending
         deadline = monotonic() + float(settings["auto_timeout_s"])
         self.auto_exposure_requested.emit(pending)
+        failure = None
         try:
             while not pending.event.wait(0.05):
                 check_cancel()
@@ -215,10 +228,13 @@ class CameraCaptureBridge(QObject):
                     raise TimeoutError("Recipe auto exposure did not converge before timeout")
             check_cancel()
             if pending.error:
-                raise RuntimeError(pending.error)
+                raise RuntimeError(pending.error) from pending.exception
             if pending.result is None:
                 raise RuntimeError("Recipe AE completed without Exposure/Gain readback")
             return pending.result
+        except Exception as exc:
+            failure = exc
+            raise
         finally:
             pending.active = False
             completed, response = Event(), {}
@@ -227,7 +243,11 @@ class CameraCaptureBridge(QObject):
                 if not completed.wait(5.0):
                     raise TimeoutError("Recipe AE cleanup timed out")
                 if response.get("error"):
-                    raise RuntimeError(response["error"])
+                    raise RuntimeError(response["error"]) from response.get("exception")
+            except Exception as cleanup:
+                if failure is not None:
+                    raise RuntimeError(f"{failure}; Recipe AE cleanup failed: {cleanup}") from failure
+                raise
             finally:
                 with self._lock:
                     if self._pending_ae is pending:
@@ -241,6 +261,7 @@ class CameraCaptureBridge(QObject):
             from .camera_recipe_ae import begin_recipe_ae
             begin_recipe_ae(self.controller, pending.settings, pending.state)
         except Exception as exc:
+            pending.exception = exc
             pending.error = str(exc)
             pending.event.set()
 
@@ -261,6 +282,7 @@ class CameraCaptureBridge(QObject):
             pending.result = {"exposure_us": exposure, "gain_percent": gain,
                               "metadata": metadata}
         except Exception as exc:
+            pending.exception = exc
             pending.error = str(exc)
         pending.event.set()
 
@@ -278,6 +300,7 @@ class CameraCaptureBridge(QObject):
                 from .camera_recipe_ae import restore_recipe_ae
                 restore_recipe_ae(self.controller, pending.state)
         except Exception as exc:
+            response["exception"] = exc
             response["error"] = str(exc)
         finally:
             completed.set()
@@ -286,21 +309,21 @@ class CameraCaptureBridge(QObject):
         """Synchronously request state restoration on the CameraController owner thread."""
 
         completed = Event()
-        response: dict[str, str] = {}
+        response: dict[str, Any] = {}
         self.restore_requested.emit(dict(state), completed, response)
         if not completed.wait(max(0.1, float(timeout_s))):
             raise TimeoutError("Camera state restoration timed out")
         if response.get("error"):
-            raise RuntimeError(response["error"])
+            raise RuntimeError(response["error"]) from response.get("exception")
 
     def _request_trigger_cleanup(self, timeout_s: float = 5.0) -> None:
         completed = Event()
-        response: dict[str, str] = {}
+        response: dict[str, Any] = {}
         self.cleanup_requested.emit(completed, response)
         if not completed.wait(max(0.1, float(timeout_s))):
             raise TimeoutError("Camera trigger-mode cleanup timed out")
         if response.get("error"):
-            raise RuntimeError(response["error"])
+            raise RuntimeError(response["error"]) from response.get("exception")
 
     @Slot(object, object)
     def _cleanup_trigger_mode(self, completed: object, response: object) -> None:
@@ -312,6 +335,7 @@ class CameraCaptureBridge(QObject):
                 finish()
         except Exception as exc:
             if isinstance(response, dict):
+                response["exception"] = exc
                 response["error"] = str(exc)
         finally:
             if isinstance(completed, Event):
@@ -329,6 +353,7 @@ class CameraCaptureBridge(QObject):
                 self.controller.restore_exposure_state(state)
         except Exception as exc:
             if isinstance(response, dict):
+                response["exception"] = exc
                 response["error"] = str(exc)
         finally:
             if isinstance(completed, Event):
@@ -390,15 +415,19 @@ class CameraCaptureBridge(QObject):
             if pending.software_triggered:
                 trigger()
         except Exception as exc:
+            cleanup_error = None
             finish = getattr(
                 self.controller, "finish_software_triggered_capture", None
             )
             if pending.software_triggered and callable(finish):
                 try:
                     finish()
-                except Exception:
-                    pass
+                except Exception as cleanup:
+                    cleanup_error = cleanup
+            pending.exception = exc
             pending.error = str(exc)
+            if cleanup_error is not None:
+                pending.error += f"; Camera cleanup failed: {cleanup_error}"
             pending.event.set()
 
     @Slot(QImage)
@@ -480,6 +509,7 @@ class CameraCaptureBridge(QObject):
                         )
                     verification.update(after)
                 except Exception as exc:
+                    pending.exception = exc
                     pending.error = str(exc)
                     pending.event.set()
                     return

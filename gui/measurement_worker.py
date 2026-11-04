@@ -3,10 +3,14 @@ from __future__ import annotations
 """Cancelable background execution primitives for measurement workflows."""
 
 from dataclasses import dataclass
+import logging
 from threading import Event
 from typing import Callable
 
 from PySide6.QtCore import QObject, Signal, Slot
+
+
+LOG = logging.getLogger(__name__)
 
 
 class MeasurementCancelled(Exception):
@@ -38,6 +42,7 @@ class MeasurementWorker(QObject):
         super().__init__()
         self._run = run
         self._cancel_requested = Event()
+        self._last_progress = None
 
     @Slot()
     def execute(self) -> None:
@@ -51,7 +56,14 @@ class MeasurementWorker(QObject):
         except MeasurementCancelled:
             self.cancelled.emit()
         except Exception as exc:
-            self.failed.emit(str(exc))
+            LOG.exception("MEASUREMENT_WORKER_FAILED")
+            progress = self._last_progress
+            fields = [f"Stage={getattr(progress, 'phase', 'Initialization')}"]
+            for name in ("channel", "sample_id"):
+                value = getattr(progress, name, "")
+                if value:
+                    fields.append(f"{name}={value}")
+            self.failed.emit(f"{'; '.join(fields)}; {exc}")
 
     @Slot()
     def request_cancel(self) -> None:
@@ -72,8 +84,10 @@ class MeasurementWorker(QObject):
         message: str = "",
     ) -> None:
         if current is None and total is None and not isinstance(phase, str):
+            self._last_progress = phase
             self.progress_changed.emit(phase)
             return
         if current is None or total is None:
             raise TypeError("current and total are required for text progress")
-        self.progress_changed.emit(MeasurementProgress(str(phase), current, total, message))
+        self._last_progress = MeasurementProgress(str(phase), current, total, message)
+        self.progress_changed.emit(self._last_progress)

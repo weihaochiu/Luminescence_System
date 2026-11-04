@@ -95,6 +95,7 @@ class DarkIVChartDialog(QDialog):
         self._channel = ""
         self._sample_id = ""
         self._rows: list[dict[str, Any]] = []
+        self._completed = False
         self._series: dict[tuple[int, str], QLineSeries] = {}
 
         self.channel_value = QLabel("—")
@@ -145,6 +146,7 @@ class DarkIVChartDialog(QDialog):
         return self._channel
 
     def reset(self) -> None:
+        self._completed = False
         self._channel = ""
         self._sample_id = ""
         self._rows.clear()
@@ -166,6 +168,7 @@ class DarkIVChartDialog(QDialog):
             self.reset()
         self._channel = str(progress.channel)
         self._sample_id = str(progress.sample_id)
+        self._completed = False
         row = dict(progress.row)
         self._rows.append(row)
         key = _curve_key(row)
@@ -210,14 +213,15 @@ class DarkIVChartDialog(QDialog):
             self.show()
 
     def mark_complete(self, png_path: str) -> None:
+        self._completed = True
         self.status_value.setText(tr("dark_iv.completed_png", path=png_path))
 
     def mark_aborted(self) -> None:
-        if self._rows:
+        if self._rows and not self._completed:
             self.status_value.setText(tr("dark_iv.aborted"))
 
     def mark_failed(self, reason: str) -> None:
-        if self._rows:
+        if self._rows and not self._completed:
             self.status_value.setText(tr("dark_iv.failed", reason=reason))
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API

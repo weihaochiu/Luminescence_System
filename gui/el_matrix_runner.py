@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
+import traceback
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -33,6 +35,10 @@ from .measurement_snapshot import (
 from .recipe_store import ChannelRecipe, Recipe
 from .numeric import format_voltage_number
 from .dark_iv_chart import save_dark_iv_plot_png
+from .camera_sdk_diagnostics import exception_hresult
+
+
+LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -315,6 +321,7 @@ class ELMatrixRunner:
         )
         self._run_started = monotonic()
         result: dict[str, Any] | None = None
+        failure = None
         try:
             if "polarity" in self.execution_plan.keys:
                 self._run_all_polarities()
@@ -342,9 +349,21 @@ class ELMatrixRunner:
                 "final_manifest": str(final_manifest),
                 "completed_at": self.now().isoformat(timespec="seconds"),
             }
+        except Exception as exc:
+            failure = exc
+            from .measurement_worker import MeasurementCancelled
+            if not isinstance(exc, MeasurementCancelled):
+                self._record_failure(exc)
+            raise
         finally:
             self._output_started = None
-            shutdown_result = self.hardware.safe_shutdown()
+            try:
+                shutdown_result = self.hardware.safe_shutdown()
+            except Exception as cleanup:
+                self._record_failure(failure or cleanup, cleanup=cleanup)
+                if failure is not None:
+                    raise RuntimeError(f"{failure}; Safe shutdown failed: {cleanup}") from failure
+                raise
         normalized = dict(shutdown_result)
         required = (
             "smu_output_off", "routing_off", "white_light_off",
@@ -358,6 +377,30 @@ class ELMatrixRunner:
         result["hardware_measurement_completed"] = True
         result["safe_shutdown"] = normalized
         return result
+
+    def _record_failure(self, error: Exception, *, cleanup: Exception | None = None) -> None:
+        progress = self._last_progress
+        code = exception_hresult(error)
+        payload = {
+            "run_id": self.run_id,
+            "phase": getattr(progress, "phase", "Initialization"),
+            "channel": getattr(progress, "channel", ""),
+            "sample_id": getattr(progress, "sample_id", ""),
+            "completed_captures": self._completed,
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "hresult": f"0x{code:08X}" if code is not None else None,
+            "traceback": "".join(traceback.format_exception(type(error), error, error.__traceback__)),
+        }
+        if cleanup is not None:
+            payload["safe_shutdown_error"] = str(cleanup)
+        LOG.error("MEASUREMENT_FAILED %s", payload,
+                  exc_info=(type(error), error, error.__traceback__))
+        try:
+            (self.run_directory / "measurement_failure.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            LOG.exception("Could not save measurement failure diagnostics")
 
     def _route(self, channel: ChannelRecipe, channel_index: int, phase: str) -> None:
         self.check_cancel()
@@ -444,6 +487,7 @@ class ELMatrixRunner:
     def _run_channel(self, channel: ChannelRecipe, channel_index: int) -> None:
         if self.channel_rois is not None:
             self.check_cancel()
+            self._phase("Channel ROI", channel.channel, channel, channel_index)
             self.hardware.set_channel_roi(self.channel_rois[channel.channel], self.check_cancel)
         self._route(channel, channel_index, "Channel Switching")
         polarity = self._polarity[channel.channel]
@@ -483,6 +527,7 @@ class ELMatrixRunner:
             finally:
                 self._output_started = None
             self._eta.finish_fixed()
+            self._phase("Dark I-V Save", channel.channel, channel, channel_index)
             png_path = self._save_dark_iv(channel, rows)
             self.report_progress(DarkIVScanCompleted(
                 channel=channel.channel,
@@ -494,9 +539,11 @@ class ELMatrixRunner:
 
         channel_capture_total = self.plan.estimate().el_per_channel
         channel_completed = 0
+        failure = None
         try:
             for setpoint in self.plan.electrical_setpoints:
                 self.check_cancel()
+                self._phase("EL Preparation", f"{channel.channel} — {setpoint}", channel, channel_index)
                 if self.plan.matrix.output_mode == "voltage":
                     density = None
                     voltage = float(setpoint)
@@ -589,10 +636,18 @@ class ELMatrixRunner:
                 self.check_cancel()
                 self.hardware.output_off()
                 self._output_started = None
+        except Exception as exc:
+            failure = exc
+            raise
         finally:
             self._output_started = None
-            self.hardware.output_off()
-            self.hardware.clear_routing()
+            try:
+                self.hardware.output_off()
+                self.hardware.clear_routing()
+            except Exception as cleanup:
+                if failure is not None:
+                    raise RuntimeError(f"{failure}; Channel cleanup failed: {cleanup}") from failure
+                raise
 
     def _save_dark_iv(self, channel: ChannelRecipe, rows: list[dict[str, Any]]) -> Path:
         sample_id = self.sample_ids[channel.channel]
