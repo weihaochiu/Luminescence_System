@@ -271,10 +271,14 @@ class CameraCaptureBridge(QObject):
         if pending is None or not pending.active or pending.event.is_set():
             return
         try:
+            from .camera_recipe_ae import verify_recipe_ae_roi
             if not success:
                 raise RuntimeError(message)
-            exposure, gain = self.controller.current_exposure()
             metadata = dict(pending.state["result_metadata"])
+            verify_recipe_ae_roi(
+                self.controller, metadata["RecipeAEROI"], metadata["RecipeAEROIStreamGeneration"],
+            )
+            exposure, gain = self.controller.current_exposure()
             if (not metadata["RecipeAEMinExposureMs"] * 1000 <= exposure
                     <= metadata["RecipeAEMaxExposureMs"] * 1000
                     or not metadata["RecipeAEMinGain"] <= gain <= metadata["RecipeAEMaxGain"]):
@@ -283,7 +287,12 @@ class CameraCaptureBridge(QObject):
                               "metadata": metadata}
         except Exception as exc:
             pending.exception = exc
-            pending.error = str(exc)
+            from .camera_recipe_ae import recipe_ae_failure_context
+            try:
+                details = recipe_ae_failure_context(self.controller, pending.state)
+            except Exception as diagnostic_error:
+                details = f"unavailable: {diagnostic_error}"
+            pending.error = f"{exc}; Recipe AE diagnostics={details}"
         pending.event.set()
 
     def _fail_auto_exposure(self, message: str = "Camera disconnected during Recipe AE") -> None:

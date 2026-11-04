@@ -84,6 +84,35 @@ Shared Dark 依 Gain／曝光時間去重，沿用既有 Repeat／解析度／�
 - 自動模式的正式 EL 張數為 Channel 數 × 電氣條件數 × Stop 數 × Repeat。Dark 張數最多與 EL 張數相同，實際會依唯一曝光／Gain 去重；啟動前張數與磁碟按最多 Dark 估算，時間則採包含每條件 AE 逾時及各 Stop 曝光上限之和的保守估算。時間仍受實際拍攝／存檔速度影響，估算不代表 SDK 已算出曝光值，也不是固定的完成期限。
 - 自動 Gain 可能使不同條件的 Gain 不同。未完成 Gain／線性／Dark 等校正前，不可直接視為定量可比的 EL 資料。
 
+### 串流重啟後的測光 ROI 驗證
+
+Recipe 會為設定 SDK AE policy 暫停並重啟串流。重啟前已讀回的 ROI
+不能證明新串流仍採用相同的測光區域，因此啟動單次 AE 前依序：
+
+1. 保留已驗證的 Channel ROI；沒有有效 ROI 時禁止啟動。
+2. 停用 AE、暫停串流，保存並設定臨時 policy／target。
+3. 使舊 ROI 驗證與 ROI DN 失效，重啟串流，套用並讀回曝光／Gain 範圍。
+4. 重新下發 Channel ROI 並逐項核對 SDK `get_AEAuxRect()`；失敗時不啟動 AE。
+5. 收到 SDK 收斂成功事件時，再次讀回 ROI 並確認串流 generation 未變，才接受結果。
+6. 正常、失敗或取消後，重啟預覽、恢復 AE 範圍，並重新套用／驗證 Channel ROI。
+   若連最初的範圍快照都讀取失敗，預覽恢復時也執行 ROI 驗證。
+
+結果 metadata 保存 `RecipeAEROI`、`RecipeAEROIVerified` 與
+`RecipeAEROIStreamGeneration`。SDK 收斂失敗或結果驗證失敗時，在恢復預覽設定前
+將原生 ROI、目前曝光／Gain、AE 上下限、target、串流 generation 和最近影格的
+ROI DN 寫入 `RECIPE_AE_FAILURE_CONTEXT` 日誌及錯誤 Actual。最近影格若有內嵌曝光／Gain
+metadata，另存於 `LastFrameMetadata`；不將目前 getter 值誤當成該影格的拍攝參數。
+新串流尚無有效 scientific frame 時，最近影格 DN／metadata 留空。
+診斷讀取失敗不覆蓋原始量測錯誤，也不阻止既有安全清理。
+
+此修正不把「曾達到目標 DN」或 SDK `CONVFAIL` 當成收斂成功，亦不放寬曝光、Gain
+或安全限制。仍需用實機確認新串流的 ROI 讀回、收斂事件及正式影像；模擬測試不能
+證明特定光源／樣品條件必然收斂。可由「設定 → 匯出日誌 ZIP…」保存實機診斷資料。
+
+回歸測試：`tests/test_recipe_ae_roi_lifecycle.py`，涵蓋重啟後遺失 ROI 的 SDK 模型、
+套用順序、快照失敗恢復、錯誤讀回／HRESULT、收斂成功時 ROI 或 generation 改變、
+清理失敗、影格參數延遲與診斷讀取失敗。
+
 ## 5. Recipe 保存與相容性
 
 Recipe schema 更新為 **13**。新設定存於既有 `el_matrix`：

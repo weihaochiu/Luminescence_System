@@ -727,7 +727,7 @@ class CameraController(QObject):
                     self._emit_effective_dn_status()
                 return False
         try:
-            self._camera.put_AEAuxRect(*requested)
+            sdk_call(reason, self._camera.put_AEAuxRect, *requested)
         except Exception as exc:
             self._set_auto_exposure_roi_failure(
                 requested, "WriteFailed", "AE_ROI_WRITE_FAILED", str(exc)
@@ -736,7 +736,7 @@ class CameraController(QObject):
                 self._emit_effective_dn_status()
             return False
         try:
-            readback = tuple(int(value) for value in self._camera.get_AEAuxRect())
+            readback = tuple(int(value) for value in sdk_call(reason, self._camera.get_AEAuxRect))
         except Exception as exc:
             self._set_auto_exposure_roi_failure(
                 requested, "ReadbackFailed", "AE_ROI_READBACK_FAILED", str(exc)

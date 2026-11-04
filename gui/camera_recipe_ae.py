@@ -5,6 +5,8 @@ from __future__ import annotations
 All functions run on the CameraController's Qt owner thread.
 """
 
+import json
+import logging
 from typing import Any
 
 from .camera_controller import SDKAutoExposureMode
@@ -15,6 +17,99 @@ from .camera_exposure import (
 from .sdk import nncam
 from .recipe_ae_stops import native_baseline_range_us
 from .camera_sdk_diagnostics import sdk_call, stop_for_configuration
+
+
+LOG = logging.getLogger(__name__)
+
+
+def _restart_recipe_stream(controller: Any, stage: str) -> None:
+    # The rectangle belongs to the SDK image pipeline. A verified rectangle in
+    # the previous stream does not establish what the restarted pipeline uses.
+    controller._auto_exposure_roi_verified = False
+    controller._auto_exposure_roi_readback = None
+    controller._auto_exposure_roi_verification_status = "Pending"
+    controller._latest_metering_mean_effective_dn = None
+    controller._latest_metering_effective_dn_fraction = None
+    sdk_call(stage, controller._start_stream)
+
+
+def _reapply_recipe_roi(controller: Any, state: dict[str, Any], stage: str) -> None:
+    requested = state["roi"]
+    if not controller._apply_auto_exposure_roi(
+        requested, reason=stage, refresh_profile=False,
+    ):
+        raise RuntimeError(
+            f"{stage}: AE ROI verification failed; requested={requested}; "
+            f"readback={controller._auto_exposure_roi_readback}; "
+            f"{controller._auto_exposure_roi_error}"
+        )
+
+
+def verify_recipe_ae_roi(
+    controller: Any, expected: tuple[int, int, int, int], generation: int,
+) -> None:
+    """Read the native rectangle again when accepting a convergence event."""
+    try:
+        actual = tuple(map(int, sdk_call(
+            "Recipe AE result ROI", controller._camera.get_AEAuxRect,
+        )))
+    except Exception as exc:
+        controller._auto_exposure_roi_readback = None
+        controller._set_auto_exposure_roi_failure(
+            tuple(expected), "ReadbackFailed", "RECIPE_AE_RESULT_ROI_FAILED", str(exc),
+        )
+        raise
+    if (not controller._auto_exposure_roi_verified or actual != tuple(expected)
+            or generation != controller._stream_generation):
+        controller._auto_exposure_roi_readback = actual
+        detail = (
+            f"Recipe AE ROI changed; requested={expected}; native_readback={actual}; "
+            f"expected_stream={generation}; current_stream={controller._stream_generation}"
+        )
+        controller._set_auto_exposure_roi_failure(
+            tuple(expected), "ReadbackMismatch", "RECIPE_AE_RESULT_ROI_FAILED", detail,
+        )
+        raise RuntimeError(detail)
+
+
+def recipe_ae_failure_context(controller: Any, state: dict[str, Any]) -> str:
+    """Capture owner-thread diagnostics before temporary settings are restored.
+
+    Getter values describe the current camera settings; last-frame DN and its
+    embedded exposure metadata are separate because frames can arrive later.
+    Diagnostic read failures must not replace the original measurement error.
+    """
+    valid_frame = controller._scientific_frame_validated
+    details = {
+        "RequestedROI": state.get("roi"),
+        "ROIStreamGeneration": state.get("result_metadata", {}).get("RecipeAEROIStreamGeneration"),
+        "CurrentStreamGeneration": controller._stream_generation,
+        "ROIVerified": controller._auto_exposure_roi_verified,
+        "TargetPercent": controller.auto_exposure_target_percent,
+        "LastScientificFrameValid": valid_frame,
+        "LastFrameROIMeanDN": controller._latest_metering_mean_effective_dn if valid_frame else None,
+        "LastFrameROIMeanPercent": (
+            controller._latest_metering_effective_dn_fraction * 100
+            if valid_frame and controller._latest_metering_effective_dn_fraction is not None else None
+        ),
+        "LastFrameMetadata": dict(controller._frame_capture_metadata.get(controller._frame_sequence, {}))
+        if valid_frame else {},
+    }
+    for name, method in (
+        ("NativeROIReadback", "get_AEAuxRect"),
+        ("ExposureReadbackUs", "get_ExpoTime"),
+        ("GainReadbackPercent", "get_ExpoAGain"),
+        ("NativeTargetReadback", "get_AutoExpoTarget"),
+        ("AEMinTimeGain", "get_MinAutoExpoTimeAGain"),
+        ("AEMaxTimeGain", "get_MaxAutoExpoTimeAGain"),
+    ):
+        try:
+            details[name] = sdk_call("Recipe AE failure snapshot", getattr(controller._camera, method))
+        except Exception as exc:
+            details[name] = f"unavailable: {exc}"
+    text = json.dumps(details, ensure_ascii=False)
+    LOG.error("RECIPE_AE_FAILURE_CONTEXT %s", text)
+    return text
 
 
 def _read_ae_range(camera: Any, stage: str) -> tuple[int, int, int, int]:
@@ -56,7 +151,8 @@ def restore_recipe_ae(controller: Any, state: dict[str, Any]) -> None:
     if "range" not in state:
         # Snapshot reads failed before any Recipe parameter was written.
         if state.get("stream_stopped"):
-            sdk_call("Recipe AE snapshot cleanup: restart preview", controller._start_stream)
+            _restart_recipe_stream(controller, "Recipe AE snapshot cleanup: restart preview")
+            _reapply_recipe_roi(controller, state, "RECIPE_AE_SNAPSHOT_CLEANUP_ROI")
         return
     controller._auto_exposure_target_percent = state["target_percent"]
     controller._disable_sdk_auto_exposure(require_readback=True)
@@ -68,8 +164,9 @@ def restore_recipe_ae(controller: Any, state: dict[str, Any]) -> None:
     sdk_call("Recipe AE restore", camera.put_AutoExpoTarget, state["target"])
     if int(sdk_call("Recipe AE restore", camera.get_AutoExpoTarget)) != state["target"]:
         raise RuntimeError("Recipe AE target restoration readback mismatch")
-    sdk_call("Recipe AE restore: restart preview", controller._start_stream)
+    _restart_recipe_stream(controller, "Recipe AE restore: restart preview")
     _write_ae_range(camera, state["range"], "Recipe AE restore")
+    _reapply_recipe_roi(controller, state, "RECIPE_AE_RESTORE_ROI")
     controller._sdk_auto_exposure_policy_readback = state["options"][nncam.NNCAM_OPTION_AUTOEXP_POLICY]
     controller._sdk_auto_exposure_percent_readback = state["options"][nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT]
     controller._sdk_auto_exposure_target_readback = state["target"]
@@ -84,6 +181,11 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         raise RuntimeError("Recipe AE requires a connected, available camera")
     if settings["auto_gain_mode"] not in {"auto", "fixed"}:
         raise ValueError("Invalid Recipe AE gain mode")
+    if not controller._auto_exposure_roi_verified or controller._auto_exposure_roi_readback is None:
+        raise RuntimeError("Recipe AE requires a verified channel metering ROI")
+    state["roi"] = controller._validate_auto_exposure_roi(
+        controller._auto_exposure_roi_requested or controller._auto_exposure_roi_readback,
+    )
     controller.finish_software_triggered_capture()
     controller._continuous_auto_exposure_requested = False
     controller._disable_sdk_auto_exposure(require_readback=True)
@@ -143,8 +245,9 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         raise RuntimeError("Recipe AE target readback mismatch")
     # Stop is needed for the policy options above, but the time/Gain setters
     # return E_UNEXPECTED without an active SDK acquisition pipeline.
-    sdk_call("Recipe AE setup: start acquisition", controller._start_stream)
+    _restart_recipe_stream(controller, "Recipe AE setup: start acquisition")
     _write_ae_range(camera, requested_range, "Recipe AE setup")
+    _reapply_recipe_roi(controller, state, "RECIPE_AE_SETUP_ROI")
     controller._sdk_auto_exposure_policy_readback = 0 if fixed else 1
     controller._sdk_auto_exposure_percent_readback = 100
     controller._auto_exposure_range = (minimum, maximum, min_gain, max_gain)
@@ -160,5 +263,7 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         "RecipeAEExposureCeilingMs": settings["auto_max_exposure_ms"],
         "RecipeAESDKMaxExposureMs": SDK_AUTO_EXPOSURE_MAX_US / 1000.0,
         "RecipeAEROI": controller._auto_exposure_roi_readback,
+        "RecipeAEROIVerified": controller._auto_exposure_roi_verified,
+        "RecipeAEROIStreamGeneration": controller._stream_generation,
     }
     controller._enable_sdk_auto_exposure(SDKAutoExposureMode.ONCE)
