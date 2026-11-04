@@ -1671,6 +1671,12 @@ class CameraController(QObject):
             "LINEARReadback": self._linear_readback,
             "CURVEReadback": self._curve_readback,
             "GammaReadback": self._gamma_readback,
+            "AutoExposureROIRequested": self._auto_exposure_roi_requested,
+            "AutoExposureROIReadback": self._auto_exposure_roi_readback,
+            "AutoExposureROIMode": self._auto_exposure_roi_mode,
+            "AutoExposureROIVerified": self._auto_exposure_roi_verified,
+            "AutoExposureROIVerificationStatus": self._auto_exposure_roi_verification_status,
+            "AutoExposureROIError": self._auto_exposure_roi_error,
             "AutoExposureMode": auto_mode,
             "AutoExposureController": "RisingCamSDK" if auto_active else None,
             "AutoExposureTargetPercent": (

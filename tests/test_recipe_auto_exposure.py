@@ -28,6 +28,7 @@ from core.i18n import tr
 from gui.sdk import nncam
 from tests.qt_test_utils import ensure_qapplication
 from tests.test_camera_exposure import FakeModeCamera
+from tests.test_camera_scientific import _FakeMonoCamera, _install_frame, _open
 from tests.test_el_matrix import _FakeHardware
 
 
@@ -239,6 +240,66 @@ class RecipeAutoExposureTests(unittest.TestCase):
             self.assertEqual([], preflight())
             current["AutoExposureROIVerified"] = False
             self.assertIn(tr("recipe.validation.ae_capability"), preflight())
+
+    def test_auto_preflight_uses_controller_metadata_after_ae_is_disabled(self):
+        camera = _FakeMonoCamera()
+        with patch.object(camera, "get_ExpTimeRange", return_value=(30, 15000000, 10000)):
+            controller, errors = _open(camera)
+        try:
+            self.assertTrue(controller.is_open, errors)
+            _install_frame(controller)
+            controller._pull_live_frame()
+            self.assertTrue(controller.disable_auto_exposure_for_formal_measurement())
+            with tempfile.TemporaryDirectory() as directory:
+                for roi in ((0, 0, 3, 2), (1, 0, 2, 2)):
+                    with self.subTest(roi=roi):
+                        self.assertTrue(controller.set_auto_exposure_roi(*roi))
+                        metadata = controller.capture_metadata()
+                        current = {**metadata, "exposure_range_us": controller._exposure_range,
+                                   "gain_range": controller._gain_range}
+                        blockers = collect_preflight_errors(
+                            auto_recipe(), smu_metadata={"connected": True, "supported": True,
+                                "manufacturer": "Keysight Technologies", "model": "B2901BL"},
+                            smu_output_confirmed_off=True, relay_connected=True,
+                            relay_settings=RelaySettings.defaults(), camera_connected=True,
+                            camera_snapshot=metadata, current_camera=current, output_root=directory)
+                        self.assertEqual([], blockers)
+                        self.assertIs(metadata["AutoExposureROIVerified"], True)
+                        self.assertEqual(roi, metadata["AutoExposureROIRequested"])
+                        self.assertEqual(roi, metadata["AutoExposureROIReadback"])
+                        self.assertEqual("Verified", metadata["AutoExposureROIVerificationStatus"])
+        finally:
+            controller.close_camera()
+
+    def test_metadata_retains_failed_roi_readback_and_preflight_still_blocks(self):
+        camera = _FakeMonoCamera()
+        with patch.object(camera, "get_ExpTimeRange", return_value=(30, 15000000, 10000)):
+            controller, errors = _open(camera)
+        try:
+            self.assertTrue(controller.is_open, errors)
+            _install_frame(controller)
+            controller._pull_live_frame()
+            self.assertTrue(controller.disable_auto_exposure_for_formal_measurement())
+            with patch.object(camera, "get_AEAuxRect", return_value=(0, 0, 3, 2)):
+                self.assertFalse(controller.set_auto_exposure_roi(1, 0, 2, 2))
+            metadata = controller.capture_metadata()
+            self.assertIs(metadata["AutoExposureROIVerified"], False)
+            self.assertEqual("ReadbackMismatch", metadata["AutoExposureROIVerificationStatus"])
+            self.assertEqual((1, 0, 2, 2), metadata["AutoExposureROIRequested"])
+            self.assertEqual((0, 0, 3, 2), metadata["AutoExposureROIReadback"])
+            self.assertTrue(metadata["AutoExposureROIError"])
+            current = {**metadata, "exposure_range_us": controller._exposure_range,
+                       "gain_range": controller._gain_range}
+            with tempfile.TemporaryDirectory() as directory:
+                blockers = collect_preflight_errors(
+                    auto_recipe(), smu_metadata={"connected": True, "supported": True,
+                        "manufacturer": "Keysight Technologies", "model": "B2901BL"},
+                    smu_output_confirmed_off=True, relay_connected=True,
+                    relay_settings=RelaySettings.defaults(), camera_connected=True,
+                    camera_snapshot=metadata, current_camera=current, output_root=directory)
+                self.assertEqual([tr("recipe.validation.ae_capability")], blockers)
+        finally:
+            controller.close_camera()
 
     def test_fixed_gain_sets_exposure_only_and_restores_sdk_limits(self):
         controller = self.make_controller()
