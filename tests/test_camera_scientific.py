@@ -36,6 +36,7 @@ class _FakeMonoCamera:
         self.max_bit_depth_calls = 0
         self.options: list[tuple[int, int]] = []
         self.option_values = {
+            nncam.NNCAM_OPTION_UPSIDE_DOWN: 1,
             nncam.NNCAM_OPTION_BYTEORDER: 1,
             nncam.NNCAM_OPTION_BITDEPTH: 0,
             nncam.NNCAM_OPTION_LINEAR: 1,

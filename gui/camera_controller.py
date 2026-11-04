@@ -166,6 +166,8 @@ class CameraController(QObject):
         self._scientific_frame_validated = False
         self._scientific_pull_error_reported = False
         self._bitdepth_readback: int | None = None
+        self._upside_down_readback: int | None = None
+        self._upside_down_before_normalization: int | None = None
         self._rgb_option_readback: int | None = None
         self._byteorder_readback: int | None = None
         self._linear_readback: int | None = None
@@ -283,7 +285,10 @@ class CameraController(QObject):
                 lambda: camera.get_Option(nncam.NNCAM_OPTION_BYTEORDER),
             )
 
-            # BITDEPTH is the one required SDK option for this scientific path.
+            # QImage/NumPy use top-down rows. The Windows SDK defaults to
+            # bottom-up output; leaving that implicit can separate the visible
+            # crop from the SDK's image-coordinate AE rectangle.
+            self._configure_top_down_rows(camera)
             self._bitdepth_readback = self._configure_mono16_bitdepth(camera)
 
             # Tone controls are requested neutral but remain non-blocking. The
@@ -575,6 +580,8 @@ class CameraController(QObject):
         self._scientific_frame_validated = False
         self._scientific_pull_error_reported = False
         self._bitdepth_readback = None
+        self._upside_down_readback = None
+        self._upside_down_before_normalization = None
         self._rgb_option_readback = None
         self._byteorder_readback = None
         self._linear_readback = None
@@ -1663,6 +1670,9 @@ class CameraController(QObject):
             "CameraConnected": self.is_open,
             "BITDEPTHRequested": 1,
             "BITDEPTHReadback": self._bitdepth_readback,
+            "SDKUpsideDownReadback": self._upside_down_readback,
+            "SDKUpsideDownBeforeNormalization": self._upside_down_before_normalization,
+            "ScientificRowOrder": "TopDown" if self._upside_down_readback == 0 else "Unverified",
             "RGBOptionRequested": 4,
             "RGBOptionReadback": self._rgb_option_readback,
             "ByteOrderReadback": self._byteorder_readback,
@@ -2173,6 +2183,28 @@ class CameraController(QObject):
             and self._scientific_frame_validated
         )
 
+    def _configure_top_down_rows(self, camera: Any) -> None:
+        self._upside_down_before_normalization = self._read_nonblocking_setting(
+            "NNCAM_OPTION_UPSIDE_DOWN before normalization",
+            lambda: camera.get_Option(nncam.NNCAM_OPTION_UPSIDE_DOWN),
+        )
+        self._apply_camera_startup_setting(
+            "NNCAM_OPTION_UPSIDE_DOWN=0",
+            lambda: camera.put_Option(nncam.NNCAM_OPTION_UPSIDE_DOWN, 0),
+        )
+        self._verify_top_down_rows(camera)
+
+    def _verify_top_down_rows(self, camera: Any) -> None:
+        self._upside_down_readback = int(self._apply_camera_startup_setting(
+            "NNCAM_OPTION_UPSIDE_DOWN readback",
+            lambda: camera.get_Option(nncam.NNCAM_OPTION_UPSIDE_DOWN),
+        ))
+        if self._upside_down_readback != 0:
+            raise CameraStartupError(
+                "NNCAM_OPTION_UPSIDE_DOWN readback",
+                RuntimeError(f"Top-down rows requested 0, read back {self._upside_down_readback}"),
+            )
+
     def _start_stream(self) -> None:
         if self._camera is None:
             return
@@ -2182,6 +2214,7 @@ class CameraController(QObject):
                 RuntimeError("Scientific camera format was not configured"),
             )
         self._scientific_frame_validated = False
+        self._verify_top_down_rows(self._camera)
         self._scientific_pull_error_reported = False
         self._pitch = nncam.TDIBWIDTHBYTES(self._width * self._scientific_pull_bits)
         self._buffer = bytes(self._pitch * self._height)

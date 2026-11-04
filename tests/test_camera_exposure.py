@@ -60,6 +60,7 @@ class FakeModeCamera:
         self.auto_exposure_target = 120
         self.ae_aux_rect = (0, 0, 4, 3)
         self.options = {
+            nncam.NNCAM_OPTION_UPSIDE_DOWN: 0,
             nncam.NNCAM_OPTION_AUTOEXP_POLICY: 1,
             nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT: 100,
             nncam.NNCAM_OPTION_AUTOEXP_EXPOTIME_DAMP: 0,

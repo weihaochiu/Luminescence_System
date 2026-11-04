@@ -15,9 +15,9 @@ from core.i18n import tr
 from uuid import uuid4
 
 
-# Version 2 makes AE ROI geometry part of profile identity. Version 1 profiles
-# were measured against an implicit full image and are intentionally ignored.
-CALIBRATION_SCHEMA_VERSION = 2
+# Version 3 requires verified top-down scientific rows. Older custom-ROI
+# calibrations may describe the vertically opposite physical region.
+CALIBRATION_SCHEMA_VERSION = 3
 CALIBRATION_CANDIDATES = (
     24,
     32,

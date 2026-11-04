@@ -107,6 +107,13 @@ def recipe_ae_failure_context(controller: Any, state: dict[str, Any]) -> str:
             details[name] = sdk_call("Recipe AE failure snapshot", getattr(controller._camera, method))
         except Exception as exc:
             details[name] = f"unavailable: {exc}"
+    try:
+        details["UpsideDownReadback"] = sdk_call(
+            "Recipe AE failure snapshot", controller._camera.get_Option,
+            nncam.NNCAM_OPTION_UPSIDE_DOWN,
+        )
+    except Exception as exc:
+        details["UpsideDownReadback"] = f"unavailable: {exc}"
     text = json.dumps(details, ensure_ascii=False)
     LOG.error("RECIPE_AE_FAILURE_CONTEXT %s", text)
     return text

@@ -113,6 +113,26 @@ metadata，另存於 `LastFrameMetadata`；不將目前 getter 值誤當成該�
 套用順序、快照失敗恢復、錯誤讀回／HRESULT、收斂成功時 ROI 或 generation 改變、
 清理失敗、影格參數延遲與診斷讀取失敗。
 
+### Scientific frame 列方向
+
+`nncam.py` 的 `NNCAM_OPTION_UPSIDE_DOWN` 註明 Windows 預設為 1；Qt／NumPy
+直接使用由上到下的列索引。程式現在開啟相機時記錄原值，設定此選項為 0 並驗證讀回，
+每次重新啟動串流前也核對為 0。設定不支援或讀回不符時，不啟動方向未確認的 scientific
+串流。這是資料座標契約的修正，不能單憑舊日誌缺少方向資料，就斷言某次失敗一定由此造成。
+
+新 capture metadata 包含 `SDKUpsideDownBeforeNormalization`、
+`SDKUpsideDownReadback` 及 `ScientificRowOrder=TopDown`；AE 失敗快照另讀原生方向值。
+更新後影像可能與舊 Windows 預覽上下相反，必須依新預覽重新框選 ROI。Scientific DN、
+預覽、匯出影像及量測 ROI 使用同一列順序，不只翻轉畫面顯示。
+
+AE calibration schema 升為 3；舊版檔案保留，但不使用其校正曲線，避免把舊列方向的
+自訂 ROI 校正套用至另一物理區域。需校正時在目前影像方向與 ROI 下重新進行。
+曝光／Gain 上限與 SDK 原生收斂判定不變。
+
+不對稱亮區回歸：`tests/test_camera_row_order.py`，涵蓋 Windows 預設底列先行的模型、
+啟動前設定、SDK／scientific ROI 對應、方向讀回不符、重啟檢查，以及舊校正檔保留。
+API 座標與方向定義可對照 [廠商 SDK header](https://raw.githubusercontent.com/indigo-astronomy/indigo/master/indigo_drivers/ccd_touptek/bin_externals/libtoupcam/include/toupcam.h)。
+
 ## 5. Recipe 保存與相容性
 
 Recipe schema 更新為 **13**。新設定存於既有 `el_matrix`：
