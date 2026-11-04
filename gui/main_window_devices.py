@@ -573,6 +573,9 @@ class MainWindowDeviceMixin:
         MainWindowDeviceMixin._refresh_live_view_roi_dn(self)
 
     def on_frame_ready(self, image: QImage) -> None:
+        if getattr(self, "_measurement_starting", False):
+            # The modal Recipe ROI dialog owns the live preview during setup.
+            return
         self.last_image = image.copy()
         self.image_view.set_image(image)
         self.resolution_status.setText(f"{image.width()} × {image.height()}")
@@ -596,6 +599,8 @@ class MainWindowDeviceMixin:
         # CameraController already owns an independent ndarray for this frame;
         # retain that reference and slice only the selected ROI.
         self._latest_scientific_frame = scientific
+        if getattr(self, "_measurement_starting", False):
+            return
         MainWindowDeviceMixin._refresh_live_view_roi_dn(self)
 
     def begin_live_view_dn_roi_selection(self) -> None:

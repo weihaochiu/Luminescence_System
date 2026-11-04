@@ -78,7 +78,7 @@ class ImageView(QGraphicsView):
         self._pixmap_item.setPixmap(QPixmap.fromImage(image))
         self._message_item.setVisible(False)
         self._scene.setSceneRect(self._pixmap_item.boundingRect())
-        if not self._has_image or self._fit_mode:
+        if not self._has_image or (previous_size != new_size and self._fit_mode):
             self.fit_to_window()
         self._has_image = True
 

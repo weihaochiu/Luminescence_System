@@ -21,6 +21,8 @@ class RecipeROIDialog(QDialog):
         self._size = None
         self._index = 0
         self._connections = []
+        self._pending_image = None
+        self._closed = False
         self.setWindowTitle(tr("recipe.roi_title"))
         self.resize(1000, 740)
         self.prompt = QLabel()
@@ -44,6 +46,10 @@ class RecipeROIDialog(QDialog):
         layout.addWidget(self.view, 1)
         layout.addLayout(buttons)
         self.view.roi_selected.connect(self._selected)
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(100)
+        self._preview_timer.timeout.connect(self._render_pending_frame)
         self._connect(controller.frame_ready, self._frame)
         self._connect(controller.camera_closed, self.reject)
         self._connect(controller.error_occurred, self._fail)
@@ -61,6 +67,9 @@ class RecipeROIDialog(QDialog):
         self._connections.append((signal, slot))
 
     def done(self, result):
+        self._closed = True
+        self._preview_timer.stop()
+        self._pending_image = None
         self._frame_timer.stop()
         for signal, slot in self._connections:
             signal.disconnect(slot)
@@ -72,6 +81,8 @@ class RecipeROIDialog(QDialog):
         self.reject()
 
     def _frame(self, image):
+        if self._closed or image.isNull():
+            return
         self._frame_timer.start()
         size = (image.width(), image.height())
         if self._size is not None and size != self._size:
@@ -79,10 +90,19 @@ class RecipeROIDialog(QDialog):
             return
         first = self._size is None
         self._size = size
-        self.view.set_image(image)
+        self._pending_image = image
         if first:
+            self._render_pending_frame()
             self.redraw.setEnabled(True)
             self.view.begin_roi_selection()
+        elif not self._preview_timer.isActive():
+            self._preview_timer.start()
+
+    def _render_pending_frame(self):
+        image = self._pending_image
+        self._pending_image = None
+        if not self._closed and image is not None:
+            self.view.set_image(image)
 
     def _prompt(self):
         channel = self.channels[self._index]

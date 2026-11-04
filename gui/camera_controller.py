@@ -5,11 +5,12 @@ from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from threading import Lock
 from time import monotonic
 from typing import Any, TypeVar
 
 import numpy as np
-from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QImage
 
 from core.i18n import tr
@@ -140,6 +141,8 @@ class CameraController(QObject):
         self._frame_capture_metadata: dict[int, dict[str, Any]] = {}
         self._software_trigger_capture_active = False
         self._stream_generation = 0
+        self._preview_event_lock = Lock()
+        self._pending_preview_generation: int | None = None
         self._sensor_bit_depth: int | None = None
         self._bit_depth_source = "Unknown"
         self._camera_is_mono = False
@@ -168,7 +171,7 @@ class CameraController(QObject):
         self._curve_readback: int | None = None
         self._gamma_readback: int | None = None
 
-        self._sdk_event.connect(self._handle_sdk_event)
+        self._sdk_event.connect(self._handle_sdk_event, Qt.ConnectionType.QueuedConnection)
         self._fps_timer = QTimer(self)
         self._fps_timer.setInterval(1000)
         self._fps_timer.timeout.connect(self._poll_frame_rate)
@@ -2191,6 +2194,16 @@ class CameraController(QObject):
         # SDK callbacks run on an internal native thread. A Qt signal moves work
         # safely back to the GUI thread before the image buffer is touched.
         controller, generation = context
+        if event_code == nncam.NNCAM_EVENT_IMAGE:
+            with controller._preview_event_lock:
+                if generation != controller._stream_generation:
+                    return
+                if not controller._software_trigger_capture_active:
+                    # A slow 4K preview must not enqueue one expensive GUI task
+                    # per SDK callback. Keep at most one waiting notification.
+                    if controller._pending_preview_generation == generation:
+                        return
+                    controller._pending_preview_generation = generation
         controller._sdk_event.emit(event_code, generation)
 
     @Slot(int, int)
@@ -2201,6 +2214,11 @@ class CameraController(QObject):
             return
 
         if event_code == nncam.NNCAM_EVENT_IMAGE:
+            with self._preview_event_lock:
+                if self._pending_preview_generation == generation:
+                    self._pending_preview_generation = None
+            # Release before pulling: callbacks during processing can queue the
+            # next pull, including when the SDK's bounded frame queue was full.
             self._pull_live_frame()
         elif event_code == nncam.NNCAM_EVENT_EXPOSURE:
             self._emit_exposure()
