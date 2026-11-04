@@ -54,6 +54,20 @@ class AutoCamera(FakeModeCamera):
         self.calls.append(("ae_range", *values))
         self.auto_range = tuple(values)
 
+    def get_MinAutoExpoTimeAGain(self):
+        return self.auto_range[1], self.auto_range[3]
+
+    def get_MaxAutoExpoTimeAGain(self):
+        return self.auto_range[0], self.auto_range[2]
+
+    def put_MinAutoExpoTimeAGain(self, minimum, gain):
+        maximum, _, max_gain, _ = self.auto_range
+        self.put_AutoExpoRange(maximum, minimum, max_gain, gain)
+
+    def put_MaxAutoExpoTimeAGain(self, maximum, gain):
+        _, minimum, _, min_gain = self.auto_range
+        self.put_AutoExpoRange(maximum, minimum, gain, min_gain)
+
     def get_ExpTimeRange(self):
         return 30, 15000000, 10000
 

@@ -14,16 +14,47 @@ from .recipe_ae_stops import baseline_range_us
 from .camera_sdk_diagnostics import sdk_call, stop_for_configuration
 
 
+def _read_ae_range(camera: Any, stage: str) -> tuple[int, int, int, int]:
+    # Use the same individual limit APIs as camera capability discovery.
+    # The combined get_AutoExpoRange can fail on deployed camera/SDK pairs.
+    min_time, min_gain = map(int, sdk_call(stage, camera.get_MinAutoExpoTimeAGain))
+    max_time, max_gain = map(int, sdk_call(stage, camera.get_MaxAutoExpoTimeAGain))
+    if not (0 < min_time <= max_time and 0 < min_gain <= max_gain):
+        raise RuntimeError(f"{stage}: Invalid AE limits {(max_time, min_time, max_gain, min_gain)}")
+    return max_time, min_time, max_gain, min_gain
+
+
+def _write_ae_range(camera: Any, requested: tuple[int, int, int, int], stage: str) -> None:
+    max_time, min_time, max_gain, min_gain = requested
+    current_max_time, current_min_time, current_max_gain, current_min_gain = _read_ae_range(camera, stage)
+    # Expand the upper limits before moving the lower limits. This also works
+    # when exposure and gain move in opposite directions, or fixed Gain rises
+    # above the old maximum. AE is disabled and acquisition is stopped here.
+    expanded = max(current_max_time, max_time), max(current_max_gain, max_gain)
+    if expanded != (current_max_time, current_max_gain):
+        sdk_call(stage, camera.put_MaxAutoExpoTimeAGain, *expanded)
+    if (min_time, min_gain) != (current_min_time, current_min_gain):
+        sdk_call(stage, camera.put_MinAutoExpoTimeAGain, min_time, min_gain)
+    if (max_time, max_gain) != expanded:
+        sdk_call(stage, camera.put_MaxAutoExpoTimeAGain, max_time, max_gain)
+    actual = _read_ae_range(camera, stage)
+    if actual != requested:
+        raise RuntimeError(f"{stage}: AE range readback mismatch; requested={requested}, actual={actual}")
+
+
 def restore_recipe_ae(controller: Any, state: dict[str, Any]) -> None:
-    controller._auto_exposure_target_percent = state["target_percent"]
     camera = controller._camera
     if camera is None:
         raise RuntimeError("Camera disconnected during Recipe AE cleanup")
+    if "range" not in state:
+        # Snapshot reads failed before any Recipe parameter was written.
+        if state.get("stream_stopped"):
+            sdk_call("Recipe AE snapshot cleanup: restart preview", controller._start_stream)
+        return
+    controller._auto_exposure_target_percent = state["target_percent"]
     controller._disable_sdk_auto_exposure(require_readback=True)
     stop_for_configuration(controller, "Recipe AE restore")
-    sdk_call("Recipe AE restore", camera.put_AutoExpoRange, *state["range"])
-    if tuple(sdk_call("Recipe AE restore", camera.get_AutoExpoRange)) != tuple(state["range"]):
-        raise RuntimeError("Recipe AE range restoration readback mismatch")
+    _write_ae_range(camera, state["range"], "Recipe AE restore")
     for option, value in state["options"].items():
         sdk_call("Recipe AE restore", camera.put_Option, option, value)
         if int(sdk_call("Recipe AE restore", camera.get_Option, option)) != value:
@@ -49,9 +80,11 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
     controller.finish_software_triggered_capture()
     controller._continuous_auto_exposure_requested = False
     controller._disable_sdk_auto_exposure(require_readback=True)
+    stop_for_configuration(controller, "Recipe AE snapshot")
+    state["stream_stopped"] = True
     # Read everything before writing so partial setup can always be unwound.
     original = {
-        "range": tuple(map(int, sdk_call("Recipe AE snapshot", camera.get_AutoExpoRange))),
+        "range": _read_ae_range(camera, "Recipe AE snapshot"),
         "target": int(sdk_call("Recipe AE snapshot", camera.get_AutoExpoTarget)),
         "target_percent": controller.auto_exposure_target_percent,
         "options": {
@@ -86,12 +119,7 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         if min_gain > max_gain:
             raise ValueError("Recipe AE Gain limits do not intersect hardware capabilities")
     requested_range = (maximum, minimum, max_gain, min_gain)
-    # Some SDK/model combinations reject AE option writes while acquiring,
-    # even with AE disabled. Configure and verify with acquisition stopped.
-    stop_for_configuration(controller, "Recipe AE setup")
-    sdk_call("Recipe AE setup", camera.put_AutoExpoRange, *requested_range)
-    if tuple(sdk_call("Recipe AE setup", camera.get_AutoExpoRange)) != requested_range:
-        raise RuntimeError("Recipe AE range readback mismatch")
+    _write_ae_range(camera, requested_range, "Recipe AE setup")
     if fixed:
         sdk_call("Recipe AE setup", camera.put_ExpoAGain, gain)
         if int(sdk_call("Recipe AE setup", camera.get_ExpoAGain)) != gain:

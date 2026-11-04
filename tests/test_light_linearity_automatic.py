@@ -4,6 +4,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
+from time import monotonic, sleep
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -276,21 +277,27 @@ class DeferredLuxTests(unittest.TestCase):
 class AutomaticGuiTests(unittest.TestCase):
     def test_cancelling_lux_measurement_turns_off_light_through_worker(self):
         from qt_test_utils import ensure_qapplication
-        from PySide6.QtTest import QTest
         from test_gsp4h_controller import FakeRegistry
         from standalone.light_linearity_tester.window import LightLinearityWindow
-        ensure_qapplication()
+        app = ensure_qapplication()
         with tempfile.TemporaryDirectory() as tmp, patch("gui.camera_controller.CameraController.enumerate_devices", return_value=[]):
             window = LightLinearityWindow()
             window.profile_dir = Path(tmp) / "profiles"
             registry = FakeRegistry()
             window.device_worker.make_transport = registry.make_transport
-            def wait_idle():
-                for _ in range(150):
-                    QTest.qWait(10)
-                    if not window.job_busy:
+            def wait_until(predicate, failure):
+                deadline = monotonic() + 1.5
+                while monotonic() < deadline:
+                    app.processEvents()
+                    if predicate():
                         return
-                self.fail("Worker did not complete")
+                    # Let the Python worker emit its queued trace/result signals.
+                    # Repeated native qWait calls can starve it of the GIL.
+                    sleep(0.01)
+                self.fail(failure)
+
+            def wait_idle():
+                wait_until(lambda: not window.job_busy, "Worker did not complete")
             try:
                 window._dispatch({"operation": "connect", "port": "COM6", "parity": "none"})
                 wait_idle()
@@ -309,10 +316,7 @@ class AutomaticGuiTests(unittest.TestCase):
                 self.assertEqual("L", registry.devices["COM6"].mode)
                 self.assertEqual([0, 0, 0, 0], registry.devices["COM6"].values)
                 window.close()
-                for _ in range(150):
-                    QTest.qWait(10)
-                    if not window.device_thread.isRunning():
-                        break
+                wait_until(lambda: not window.device_thread.isRunning(), "Worker thread did not stop")
                 self.assertFalse(window.device_thread.isRunning())
             finally:
                 if window.device_thread.isRunning():

@@ -68,6 +68,56 @@ class StoppedConfigurationCamera(AutoCamera):
         super().put_Option(option, value)
 
 
+class IndividualLimitCamera(StoppedConfigurationCamera):
+    """Reproduce the deployed SDK failure; only individual limits work."""
+
+    def __init__(self):
+        super().__init__()
+        self.limit_writes = []
+        self.fail_snapshot = False
+        self.fail_after_max_write = False
+        self.mismatch_readback = False
+
+    def get_AutoExpoRange(self):
+        raise NativeFailure()
+
+    def put_AutoExpoRange(self, *values):
+        raise NativeFailure()
+
+    def get_MinAutoExpoTimeAGain(self):
+        if self.running:
+            raise NativeFailure()
+        if self.fail_snapshot:
+            raise NativeFailure()
+        if self.mismatch_readback and self.limit_writes:
+            self.mismatch_readback = False
+            return self.auto_range[1] + 1, self.auto_range[3]
+        return self.auto_range[1], self.auto_range[3]
+
+    def get_MaxAutoExpoTimeAGain(self):
+        if self.running:
+            raise NativeFailure()
+        return self.auto_range[0], self.auto_range[2]
+
+    def _set_limits(self, raw):
+        if self.running:
+            raise NativeFailure()
+        maximum, minimum, max_gain, min_gain = raw
+        if not (0 < minimum <= maximum <= 15000000 and 100 <= min_gain <= max_gain <= 800):
+            raise ValueError(f"Invalid intermediate AE limits: {raw}")
+        self.auto_range = tuple(raw)
+        self.limit_writes.append(self.auto_range)
+
+    def put_MinAutoExpoTimeAGain(self, minimum, gain):
+        self._set_limits((self.auto_range[0], minimum, self.auto_range[2], gain))
+
+    def put_MaxAutoExpoTimeAGain(self, maximum, gain):
+        self._set_limits((maximum, self.auto_range[1], gain, self.auto_range[3]))
+        if self.fail_after_max_write:
+            self.fail_after_max_write = False
+            raise NativeFailure()
+
+
 class MeasurementSDKRecoveryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -120,6 +170,102 @@ class MeasurementSDKRecoveryTests(unittest.TestCase):
         self.assertEqual(0, camera.auto_exposure_enable)
         self.assertIs(controller.sdk_auto_exposure_mode, SDKAutoExposureMode.MANUAL)
         self.assertEqual((0, 0, 4, 3), controller._auto_exposure_roi_readback)
+
+    def test_recipe_ae_works_without_combined_range_api_and_restores_verified_limits(self):
+        camera = IndividualLimitCamera()
+        controller = self.controller(camera)
+        state = {}
+        begin_recipe_ae(controller, asdict(auto_recipe().el_matrix), state)
+        self.assertEqual((15000000, 30, 500, 100), camera.auto_range)
+        self.assertEqual(2, camera.auto_exposure_enable)
+        self.assertTrue(camera.running)
+        restore_recipe_ae(controller, state)
+        self.assertEqual((350000, 30, 500, 100), camera.auto_range)
+        self.assertEqual(120, camera.auto_exposure_target)
+        self.assertEqual(0, camera.auto_exposure_enable)
+        self.assertTrue(camera.running)
+
+    def test_individual_limits_support_fixed_gain_above_and_below_original_range(self):
+        for original, gain in (((350000, 30, 500, 100), 700),
+                               ((350000, 30, 800, 700), 200)):
+            with self.subTest(original=original, gain=gain):
+                camera = IndividualLimitCamera()
+                camera.auto_range = original
+                controller = self.controller(camera)
+                settings = asdict(auto_recipe().el_matrix)
+                settings.update(auto_gain_mode="fixed", auto_gain_percent=gain)
+                state = {}
+                begin_recipe_ae(controller, settings, state)
+                self.assertEqual((15000000, 30, gain, gain), camera.auto_range)
+                restore_recipe_ae(controller, state)
+                self.assertEqual(original, camera.auto_range)
+
+    def test_individual_limits_handle_exposure_and_gain_moving_in_opposite_directions(self):
+        camera = IndividualLimitCamera()
+        controller = self.controller(camera)
+        state = {}
+        settings = asdict(auto_recipe().el_matrix)
+        settings.update(auto_gain_mode="fixed", auto_gain_percent=200)
+        begin_recipe_ae(controller, settings, state)
+        # Restore a range above the current Gain but below the current exposure.
+        state["range"] = (350000, 30, 800, 700)
+        restore_recipe_ae(controller, state)
+        self.assertEqual((350000, 30, 800, 700), camera.auto_range)
+
+    def test_snapshot_read_failure_restarts_preview_without_writing_limits(self):
+        camera = IndividualLimitCamera()
+        camera.fail_snapshot = True
+        controller = self.controller(camera)
+        bridge = CameraCaptureBridge(controller)
+        with self.assertLogs("gui.camera_sdk_diagnostics", level="ERROR"):
+            values, errors = self.in_worker(
+                lambda: bridge.auto_exposure(asdict(auto_recipe().el_matrix), lambda: None))
+        self.assertEqual([], values)
+        self.assertIn("Recipe AE snapshot: get_MinAutoExpoTimeAGain", str(errors[0]))
+        self.assertEqual(nncam.E_UNEXPECTED, exception_hresult(errors[0]))
+        self.assertEqual([], camera.limit_writes)
+        self.assertEqual(0, camera.auto_exposure_enable)
+        self.assertTrue(camera.running)
+        self.assertIsNone(bridge._pending_ae)
+
+    def test_partial_individual_limit_write_is_restored_before_worker_returns_error(self):
+        camera = IndividualLimitCamera()
+        camera.fail_after_max_write = True
+        controller = self.controller(camera)
+        bridge = CameraCaptureBridge(controller)
+        with self.assertLogs("gui.camera_sdk_diagnostics", level="ERROR"):
+            _, errors = self.in_worker(
+                lambda: bridge.auto_exposure(asdict(auto_recipe().el_matrix), lambda: None))
+        self.assertIn("Recipe AE setup: put_MaxAutoExpoTimeAGain", str(errors[0]))
+        self.assertEqual(nncam.E_UNEXPECTED, exception_hresult(errors[0]))
+        self.assertEqual((350000, 30, 500, 100), camera.auto_range)
+        self.assertEqual(0, camera.auto_exposure_enable)
+        self.assertTrue(camera.running)
+        self.assertIsNone(bridge._pending_ae)
+
+    def test_individual_limit_readback_mismatch_aborts_and_restores_original_range(self):
+        camera = IndividualLimitCamera()
+        camera.mismatch_readback = True
+        controller = self.controller(camera)
+        bridge = CameraCaptureBridge(controller)
+        _, errors = self.in_worker(
+            lambda: bridge.auto_exposure(asdict(auto_recipe().el_matrix), lambda: None))
+        self.assertIn("AE range readback mismatch", str(errors[0]))
+        self.assertEqual((350000, 30, 500, 100), camera.auto_range)
+        self.assertEqual(0, camera.auto_exposure_enable)
+        self.assertTrue(camera.running)
+
+    def test_invalid_snapshot_limits_are_rejected_before_any_recipe_write(self):
+        camera = IndividualLimitCamera()
+        camera.auto_range = (350000, 400000, 500, 100)
+        controller = self.controller(camera)
+        bridge = CameraCaptureBridge(controller)
+        _, errors = self.in_worker(
+            lambda: bridge.auto_exposure(asdict(auto_recipe().el_matrix), lambda: None))
+        self.assertIn("Invalid AE limits", str(errors[0]))
+        self.assertEqual([], camera.limit_writes)
+        self.assertEqual(0, camera.auto_exposure_enable)
+        self.assertTrue(camera.running)
 
     def test_partial_ae_failure_preserves_sdk_operation_and_hresult_and_restores(self):
         camera = StoppedConfigurationCamera(fail_policy=True)
