@@ -365,10 +365,14 @@ class CameraController(QObject):
             self._exposure_range = capabilities.get("exposure_range_us")
             self._gain_range = capabilities.get("gain_range")
             self._auto_exposure_range = capabilities.get("auto_exposure_range")
+            # Policy is configured while stopped; metering rectangles belong
+            # to the running pipeline and must be verified AFTER Start.
+            self._disable_sdk_auto_exposure(require_readback=True)
+            self._configure_sdk_auto_exposure_parameters(camera)
+            self._start_stream()
             # The SDK can retain an old/native-default metering rectangle.
             # Force an explicit full-current-image rectangle and verify it
             # before any Continuous AE is enabled.
-            self._disable_sdk_auto_exposure(require_readback=True)
             ae_roi_ready = self._apply_auto_exposure_roi(
                 (0, 0, self._width, self._height),
                 reason="AE_ROI_RESET_FULL_IMAGE",
@@ -376,12 +380,11 @@ class CameraController(QObject):
                 emit_status=False,
             )
             self._refresh_ae_calibration_profile()
-            self._configure_sdk_auto_exposure_parameters(camera)
+            self._write_sdk_auto_exposure_target(camera)
             if self._continuous_auto_exposure_requested and ae_roi_ready:
                 self._enable_sdk_auto_exposure(SDKAutoExposureMode.CONTINUOUS)
             else:
                 self._disable_sdk_auto_exposure(require_readback=True)
-            self._start_stream()
 
             current = self._read_current_exposure(camera)
             info = {
@@ -602,7 +605,7 @@ class CameraController(QObject):
         try:
             previous_mode = self._sdk_auto_exposure_mode
             self._disable_sdk_auto_exposure(require_readback=True)
-            self._camera.Stop()
+            stop_for_configuration(self, "Resolution change")
             self._camera.put_eSize(index)
             resolution = self._device.model.res[index]
             self._width, self._height = resolution.width, resolution.height
@@ -610,6 +613,8 @@ class CameraController(QObject):
             self._latest_effective_dn_fraction = None
             self._latest_metering_mean_effective_dn = None
             self._latest_metering_effective_dn_fraction = None
+            self._configure_sdk_auto_exposure_parameters(self._camera)
+            self._start_stream()
             ae_roi_ready = self._apply_auto_exposure_roi(
                 (0, 0, self._width, self._height),
                 reason="AE_ROI_RESET_RESOLUTION_CHANGE",
@@ -617,10 +622,9 @@ class CameraController(QObject):
                 emit_status=False,
             )
             self._refresh_ae_calibration_profile()
+            self._write_sdk_auto_exposure_target(self._camera)
             if previous_mode is not SDKAutoExposureMode.MANUAL and ae_roi_ready:
-                self._configure_sdk_auto_exposure_parameters(self._camera)
                 self._enable_sdk_auto_exposure(previous_mode)
-            self._start_stream()
             self._emit_effective_dn_status()
             if not ae_roi_ready:
                 self.error_occurred.emit(
@@ -913,6 +917,9 @@ class CameraController(QObject):
                     f"Camera video mode requested 0, read back {readback}"
                 )
             sdk_call("Trigger capture cleanup: restart preview", self._start_stream)
+            roi = self._auto_exposure_roi_requested or (0, 0, self._width, self._height)
+            if not self._apply_auto_exposure_roi(roi, reason="TRIGGER_CLEANUP_ROI"):
+                raise RuntimeError(f"Trigger cleanup ROI verification failed: {self._auto_exposure_roi_error}")
         finally:
             self._software_trigger_capture_active = False
 
@@ -2214,6 +2221,11 @@ class CameraController(QObject):
                 RuntimeError("Scientific camera format was not configured"),
             )
         self._scientific_frame_validated = False
+        self._auto_exposure_roi_verified = False
+        self._auto_exposure_roi_readback = None
+        self._auto_exposure_roi_verification_status = "Pending"
+        self._latest_metering_mean_effective_dn = None
+        self._latest_metering_effective_dn_fraction = None
         self._verify_top_down_rows(self._camera)
         self._scientific_pull_error_reported = False
         self._pitch = nncam.TDIBWIDTHBYTES(self._width * self._scientific_pull_bits)
@@ -2225,6 +2237,16 @@ class CameraController(QObject):
                 self._camera_callback, (self, self._stream_generation)
             ),
         )
+        try:
+            self._verify_top_down_rows(self._camera)
+        except Exception as failure:
+            # Start may have reset an option. Do not leave an invalid stream
+            # producing scientific frames after the caller catches this error.
+            try:
+                stop_for_configuration(self, "Invalid started stream cleanup")
+            except Exception as cleanup:
+                raise RuntimeError(f"{failure}; stream cleanup failed: {cleanup}") from failure
+            raise
         self._fps_timer.start()
 
     @staticmethod

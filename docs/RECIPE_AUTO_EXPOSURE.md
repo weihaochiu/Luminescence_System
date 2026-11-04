@@ -61,7 +61,7 @@
 1. 沿用既有初始化、hardware preflight 與選配的各 Channel 極性確認。
 2. 各 Channel 完成 routing、polarity factor 套用及選配 Dark I–V。
 3. 套用該條件的電流密度／電壓並等待穩定。
-4. 停止取像後保存原設定並設定測光策略／目標；重新啟動取像後，設定及核對個別 AE 最小／最大範圍，最後啟用單次 AE。AE 範圍設定需要已啟動的影像處理流程。
+4. 關閉 AE，先保存仍在取像時的原設定，再停止取像並設定測光策略／目標及合法起始曝光／Gain；重新啟動取像後，設定及核對個別 AE 最小／最大範圍、ROI 與其餘設定，最後啟用單次 AE。AE 範圍設定需要已啟動的影像處理流程。
 5. 收到 SDK 收斂事件後，先關閉 AE 並讀回曝光時間／Gain；確認結果符合曝光上限與 Gain 限制。
 6. AE 關閉後，停止取像以恢復策略、測光比例與亮度目標，再啟動取像以恢復並核對 AE 範圍。正式拍攝會重新套用並驗證收斂後的曝光／Gain。
 7. 鎖定收斂 Gain，以「AE 基準曝光時間 × 2^Stop」計算各級曝光，依清單順序、每級 Repeat 次拍攝；沿用既有軟體觸發、設定讀回、frame generation barrier 與影格驗證流程。
@@ -90,12 +90,12 @@ Recipe 會為設定 SDK AE policy 暫停並重啟串流。重啟前已讀回的 
 不能證明新串流仍採用相同的測光區域，因此啟動單次 AE 前依序：
 
 1. 保留已驗證的 Channel ROI；沒有有效 ROI 時禁止啟動。
-2. 停用 AE、暫停串流，保存並設定臨時 policy／target。
+2. 停用 AE，在暫停串流前保存原設定，再暫停串流並設定臨時 policy／target。
 3. 使舊 ROI 驗證與 ROI DN 失效，重啟串流，套用並讀回曝光／Gain 範圍。
 4. 重新下發 Channel ROI 並逐項核對 SDK `get_AEAuxRect()`；失敗時不啟動 AE。
 5. 收到 SDK 收斂成功事件時，再次讀回 ROI 並確認串流 generation 未變，才接受結果。
 6. 正常、失敗或取消後，重啟預覽、恢復 AE 範圍，並重新套用／驗證 Channel ROI。
-   若連最初的範圍快照都讀取失敗，預覽恢復時也執行 ROI 驗證。
+   若最初的範圍快照就讀取失敗，尚未 Stop，不必額外重啟串流。
 
 結果 metadata 保存 `RecipeAEROI`、`RecipeAEROIVerified` 與
 `RecipeAEROIStreamGeneration`。SDK 收斂失敗或結果驗證失敗時，在恢復預覽設定前
@@ -132,6 +132,27 @@ AE calibration schema 升為 3；舊版檔案保留，但不使用其校正曲�
 不對稱亮區回歸：`tests/test_camera_row_order.py`，涵蓋 Windows 預設底列先行的模型、
 啟動前設定、SDK／scientific ROI 對應、方向讀回不符、重啟檢查，以及舊校正檔保留。
 API 座標與方向定義可對照 [廠商 SDK header](https://raw.githubusercontent.com/indigo-astronomy/indigo/master/indigo_drivers/ccd_touptek/bin_externals/libtoupcam/include/toupcam.h)。
+
+### AE 全流程邊界檢查（2026-11-04）
+
+這次檢查補齊 Recipe 以外的串流生命週期，不把單元測試通過當成現場相機已收斂：
+
+| 檢查範圍 | 處理及驗證 |
+| --- | --- |
+| 首次開啟／解析度切換 | 停機時設定 policy；先 Start，再寫入／讀回完整 ROI，之後才啟用 AE。避免向尚未建立的測光 pipeline 寫 ROI，或 Start 重設已驗證的 ROI。 |
+| 任意串流重啟 | 清除舊 scientific frame 與 ROI 驗證／ROI DN；Start 前後確認列方向，啟動後方向錯誤立即 Stop。 |
+| 正式 software trigger 拍攝完成 | 重啟 video 後重新套用及核對原 Channel ROI，避免復原持續 AE 時沿用錯誤的驗證旗標。 |
+| 原設定快照 | 在 Stop 前讀回 AE 範圍、target、policy 及平均百分比，避免 Stop 銷毀 pipeline 後只保存到 SDK 預設值。 |
+| AE 起始曝光／Gain | 依本次 Stop 清單與已驗證範圍限制起始值；Start 前設定、Start 後再次讀回。舊手動 15 s 曝光不會直接成為最多 5 s 原生 AE 的第一張曝光。這只限制起始值，不擴大搜尋範圍。 |
+| 接受收斂結果 | 再讀原生 ROI、stream generation、AE 上下限、policy、平均百分比、列方向、target，以及最後曝光／Gain。設定漂移即中止，不因收到 CONV 就直接接受。 |
+| 成功／失敗後復原 | 復原原設定及 ROI，再檢查重啟後設定。保留原始錯誤與復原錯誤。 |
+| 逾時／設定失敗／相機錯誤／取消 | 復原前記錄原生快照；逾時錯誤仍為 TimeoutError，並附帶復原前的診斷，避免只剩通用錯誤。取消仍保留原取消語意。 |
+
+新增 `RecipeAEInitialExposureUs`／`RecipeAEInitialGainPercent`；失敗快照增加經過時間、Recipe 設定、policy、平均百分比及 damping 讀回。
+最近影格的 DN／嵌入 metadata 與當前 SDK getter 仍分開記錄；相機沒有 exposure/gain 影格旗標時，不把 getter 當成該張影格的實際設定。
+
+回歸：`tests/test_recipe_ae_boundaries.py` 使用「ROI 只在 Start 後可寫」、「Start 重設 ROI／設定」、「Stop 重設 AE 範圍」、「忽略設定寫入」等模型；另沿用既有 ROI、方向、原生 HRESULT、取消、逾時、觸發影格及存檔測試。
+本次沒有放寬原生 5 s／Gain 範圍、修改收斂容差、把 CONVFAIL 當成功，或增加軟體 AE 替代。現場仍須更新、重啟及重新框選 ROI，以相同 Recipe 驗證 AE、EL／Dark 拍攝及檔案保存後，才能關閉這個 issue。
 
 ## 5. Recipe 保存與相容性
 

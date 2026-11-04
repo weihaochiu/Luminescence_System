@@ -238,10 +238,13 @@ class CameraCaptureBridge(QObject):
         finally:
             pending.active = False
             completed, response = Event(), {}
+            pending.state["failed"] = failure is not None
             self.auto_exposure_cleanup_requested.emit(pending, completed, response)
             try:
                 if not completed.wait(5.0):
                     raise TimeoutError("Recipe AE cleanup timed out")
+                if isinstance(failure, TimeoutError) and response.get("diagnostics"):
+                    failure.args = (f"{failure}; Recipe AE diagnostics={response['diagnostics']}",)
                 if response.get("error"):
                     raise RuntimeError(response["error"]) from response.get("exception")
             except Exception as cleanup:
@@ -271,13 +274,14 @@ class CameraCaptureBridge(QObject):
         if pending is None or not pending.active or pending.event.is_set():
             return
         try:
-            from .camera_recipe_ae import verify_recipe_ae_roi
+            from .camera_recipe_ae import verify_recipe_ae_roi, verify_recipe_ae_configuration
             if not success:
                 raise RuntimeError(message)
             metadata = dict(pending.state["result_metadata"])
             verify_recipe_ae_roi(
                 self.controller, metadata["RecipeAEROI"], metadata["RecipeAEROIStreamGeneration"],
             )
+            verify_recipe_ae_configuration(self.controller, metadata)
             exposure, gain = self.controller.current_exposure()
             if (not metadata["RecipeAEMinExposureMs"] * 1000 <= exposure
                     <= metadata["RecipeAEMaxExposureMs"] * 1000
@@ -306,7 +310,12 @@ class CameraCaptureBridge(QObject):
                                completed: Event, response: dict) -> None:
         try:
             if pending.state:
-                from .camera_recipe_ae import restore_recipe_ae
+                from .camera_recipe_ae import restore_recipe_ae, recipe_ae_failure_context
+                if pending.state.get("failed") and "Recipe AE diagnostics=" not in pending.error:
+                    try:
+                        response["diagnostics"] = recipe_ae_failure_context(self.controller, pending.state)
+                    except Exception as exc:
+                        response["diagnostics"] = f"unavailable: {exc}"
                 restore_recipe_ae(self.controller, pending.state)
         except Exception as exc:
             response["exception"] = exc

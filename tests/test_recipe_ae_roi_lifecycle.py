@@ -208,10 +208,13 @@ class RecipeAEROILifecycleTests(unittest.TestCase):
         for collector_fails in (False, True):
             with self.subTest(collector_fails=collector_fails):
                 def failed(_bridge):
-                    self.controller._handle_sdk_event(nncam.NNCAM_EVENT_AUTOEXPO_CONVFAIL)
+                    getter = (nullcontext() if collector_fails else
+                              patch.object(self.camera, "get_ExpoTime", side_effect=NativeFailure()))
+                    with getter:
+                        self.controller._handle_sdk_event(nncam.NNCAM_EVENT_AUTOEXPO_CONVFAIL)
 
                 patcher = (patch("gui.camera_recipe_ae.recipe_ae_failure_context", side_effect=ValueError("collector failed"))
-                           if collector_fails else patch.object(self.camera, "get_ExpoTime", side_effect=NativeFailure()))
+                           if collector_fails else nullcontext())
                 with patcher, (self.assertLogs(level="ERROR") if not collector_fails else nullcontext()):
                     result, errors = self.bridge_run(failed)
                 self.assertEqual([], result)

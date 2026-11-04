@@ -7,6 +7,7 @@ All functions run on the CameraController's Qt owner thread.
 
 import json
 import logging
+from time import monotonic
 from typing import Any
 
 from .camera_controller import SDKAutoExposureMode
@@ -72,6 +73,49 @@ def verify_recipe_ae_roi(
         raise RuntimeError(detail)
 
 
+def verify_recipe_ae_configuration(controller: Any, metadata: dict[str, Any]) -> None:
+    """Check the running pipeline, not just values echoed before Start."""
+    camera = controller._camera
+    expected_range = (
+        round(metadata["RecipeAEMaxExposureMs"] * 1000),
+        round(metadata["RecipeAEMinExposureMs"] * 1000),
+        metadata["RecipeAEMaxGain"], metadata["RecipeAEMinGain"],
+    )
+    actual_range = _read_ae_range(camera, "Recipe AE verification")
+    if actual_range != expected_range:
+        raise RuntimeError(f"Recipe AE limits changed: expected={expected_range}, actual={actual_range}")
+    for option, expected in (
+        (nncam.NNCAM_OPTION_AUTOEXP_POLICY, metadata["RecipeAEPolicy"]),
+        (nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT, metadata.get("RecipeAEMeteringPercent", 100)),
+        (nncam.NNCAM_OPTION_UPSIDE_DOWN, 0),
+    ):
+        actual = int(sdk_call("Recipe AE verification", camera.get_Option, option))
+        if actual != expected:
+            raise RuntimeError(f"Recipe AE option {option:#x} changed: expected={expected}, actual={actual}")
+    target = int(sdk_call("Recipe AE verification", camera.get_AutoExpoTarget))
+    if target != metadata["RecipeAESDKTarget"]:
+        raise RuntimeError(f"Recipe AE target changed: expected={metadata['RecipeAESDKTarget']}, actual={target}")
+
+
+def _seed_within_limits(camera: Any, limits: tuple[int, int, int, int]) -> tuple[int, int]:
+    maximum, minimum, max_gain, min_gain = limits
+    exposure = int(sdk_call("Recipe AE initial settings", camera.get_ExpoTime))
+    gain = int(sdk_call("Recipe AE initial settings", camera.get_ExpoAGain))
+    requested_exposure = min(maximum, max(minimum, exposure))
+    requested_gain = min(max_gain, max(min_gain, gain))
+    if exposure != requested_exposure:
+        sdk_call("Recipe AE initial settings", camera.put_ExpoTime, requested_exposure)
+    if gain != requested_gain:
+        sdk_call("Recipe AE initial settings", camera.put_ExpoAGain, requested_gain)
+    actual = (
+        int(sdk_call("Recipe AE initial settings", camera.get_ExpoTime)),
+        int(sdk_call("Recipe AE initial settings", camera.get_ExpoAGain)),
+    )
+    if actual != (requested_exposure, requested_gain):
+        raise RuntimeError(f"Recipe AE initial Exposure/Gain readback mismatch: requested={(requested_exposure, requested_gain)}, actual={actual}")
+    return actual
+
+
 def recipe_ae_failure_context(controller: Any, state: dict[str, Any]) -> str:
     """Capture owner-thread diagnostics before temporary settings are restored.
 
@@ -86,6 +130,8 @@ def recipe_ae_failure_context(controller: Any, state: dict[str, Any]) -> str:
         "CurrentStreamGeneration": controller._stream_generation,
         "ROIVerified": controller._auto_exposure_roi_verified,
         "TargetPercent": controller.auto_exposure_target_percent,
+        "ElapsedSeconds": monotonic() - state["started_at"] if "started_at" in state else None,
+        "RecipeConfiguration": state.get("result_metadata", {}),
         "LastScientificFrameValid": valid_frame,
         "LastFrameROIMeanDN": controller._latest_metering_mean_effective_dn if valid_frame else None,
         "LastFrameROIMeanPercent": (
@@ -114,6 +160,16 @@ def recipe_ae_failure_context(controller: Any, state: dict[str, Any]) -> str:
         )
     except Exception as exc:
         details["UpsideDownReadback"] = f"unavailable: {exc}"
+    for name, option in (
+        ("PolicyReadback", nncam.NNCAM_OPTION_AUTOEXP_POLICY),
+        ("MeteringPercentReadback", nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT),
+        ("ExposureDampingReadback", nncam.NNCAM_OPTION_AUTOEXP_EXPOTIME_DAMP),
+        ("GainDampingReadback", nncam.NNCAM_OPTION_AUTOEXP_GAIN_DAMP),
+    ):
+        try:
+            details[name] = sdk_call("Recipe AE failure snapshot", controller._camera.get_Option, option)
+        except Exception as exc:
+            details[name] = f"unavailable: {exc}"
     text = json.dumps(details, ensure_ascii=False)
     LOG.error("RECIPE_AE_FAILURE_CONTEXT %s", text)
     return text
@@ -174,11 +230,19 @@ def restore_recipe_ae(controller: Any, state: dict[str, Any]) -> None:
     _restart_recipe_stream(controller, "Recipe AE restore: restart preview")
     _write_ae_range(camera, state["range"], "Recipe AE restore")
     _reapply_recipe_roi(controller, state, "RECIPE_AE_RESTORE_ROI")
+    raw = state["range"]
+    verify_recipe_ae_configuration(controller, {
+        "RecipeAEMaxExposureMs": raw[0] / 1000.0,
+        "RecipeAEMinExposureMs": raw[1] / 1000.0,
+        "RecipeAEMaxGain": raw[2], "RecipeAEMinGain": raw[3],
+        "RecipeAEPolicy": state["options"][nncam.NNCAM_OPTION_AUTOEXP_POLICY],
+        "RecipeAESDKTarget": state["target"],
+        "RecipeAEMeteringPercent": state["options"][nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT],
+    })
     controller._sdk_auto_exposure_policy_readback = state["options"][nncam.NNCAM_OPTION_AUTOEXP_POLICY]
     controller._sdk_auto_exposure_percent_readback = state["options"][nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT]
     controller._sdk_auto_exposure_target_readback = state["target"]
     controller._sdk_auto_exposure_target = state["target"]
-    raw = state["range"]
     controller._auto_exposure_range = (raw[1], raw[0], raw[3], raw[2])
 
 
@@ -196,9 +260,7 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
     controller.finish_software_triggered_capture()
     controller._continuous_auto_exposure_requested = False
     controller._disable_sdk_auto_exposure(require_readback=True)
-    stop_for_configuration(controller, "Recipe AE snapshot")
-    state["stream_stopped"] = True
-    # Read everything before writing so partial setup can always be unwound.
+    # Snapshot live pipeline limits BEFORE Stop can destroy/reset that pipeline.
     original = {
         "range": _read_ae_range(camera, "Recipe AE snapshot"),
         "target": int(sdk_call("Recipe AE snapshot", camera.get_AutoExpoTarget)),
@@ -211,6 +273,8 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         },
     }
     state.update(original)
+    stop_for_configuration(controller, "Recipe AE snapshot")
+    state["stream_stopped"] = True
     # Runtime DN/alignment updates use this value when refreshing SDK targets.
     # Keep them on the Recipe target for the entire AE interval.
     controller._auto_exposure_target_percent = settings["auto_target_percent"]
@@ -236,10 +300,6 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         if min_gain > max_gain:
             raise ValueError("Recipe AE Gain limits do not intersect hardware capabilities")
     requested_range = (maximum, minimum, max_gain, min_gain)
-    if fixed:
-        sdk_call("Recipe AE setup", camera.put_ExpoAGain, gain)
-        if int(sdk_call("Recipe AE setup", camera.get_ExpoAGain)) != gain:
-            raise RuntimeError("Recipe AE fixed Gain readback mismatch")
     for option, value in (
         (nncam.NNCAM_OPTION_AUTOEXP_POLICY, 0 if fixed else 1),
         (nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT, 100),
@@ -250,11 +310,15 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
     target, calibrated = controller.calibrated_sdk_target(settings["auto_target_percent"])
     if controller._write_sdk_auto_exposure_target_value(camera, target) != target:
         raise RuntimeError("Recipe AE target readback mismatch")
+    # Avoid starting a first frame at an inherited 15 s exposure when this AE
+    # run only permits 5 s (or less with positive Stops). Recheck after Start.
+    _seed_within_limits(camera, requested_range)
     # Stop is needed for the policy options above, but the time/Gain setters
     # return E_UNEXPECTED without an active SDK acquisition pipeline.
     _restart_recipe_stream(controller, "Recipe AE setup: start acquisition")
     _write_ae_range(camera, requested_range, "Recipe AE setup")
     _reapply_recipe_roi(controller, state, "RECIPE_AE_SETUP_ROI")
+    initial_exposure, initial_gain = _seed_within_limits(camera, requested_range)
     controller._sdk_auto_exposure_policy_readback = 0 if fixed else 1
     controller._sdk_auto_exposure_percent_readback = 100
     controller._auto_exposure_range = (minimum, maximum, min_gain, max_gain)
@@ -272,5 +336,9 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         "RecipeAEROI": controller._auto_exposure_roi_readback,
         "RecipeAEROIVerified": controller._auto_exposure_roi_verified,
         "RecipeAEROIStreamGeneration": controller._stream_generation,
+        "RecipeAEInitialExposureUs": initial_exposure,
+        "RecipeAEInitialGainPercent": initial_gain,
     }
+    verify_recipe_ae_configuration(controller, state["result_metadata"])
+    state["started_at"] = monotonic()
     controller._enable_sdk_auto_exposure(SDKAutoExposureMode.ONCE)
