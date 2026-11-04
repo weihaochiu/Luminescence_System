@@ -5,7 +5,10 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 
-from .camera_exposure import OFFICIAL_EXPOSURE_MIN_US, OFFICIAL_EXPOSURE_MAX_US
+from .camera_exposure import (
+    OFFICIAL_EXPOSURE_MIN_US, OFFICIAL_EXPOSURE_MAX_US,
+    SDK_AUTO_EXPOSURE_MAX_US,
+)
 
 
 def stop_factors(stops: object) -> tuple[float, ...]:
@@ -30,6 +33,16 @@ def baseline_range_us(stops: object, maximum_ms: float,
     maximum = math.floor(ceiling / max(1.0, *factors))
     if minimum > maximum:
         raise ValueError("Stop list leaves no valid AE baseline exposure range")
+    return minimum, maximum
+
+
+def native_baseline_range_us(stops: object, maximum_ms: float,
+                             hardware_range: Sequence[float] | None = None) -> tuple[int, int]:
+    """Fit bracketing inside the capture ceiling and the native AE time cap."""
+    minimum, maximum = baseline_range_us(stops, maximum_ms, hardware_range)
+    maximum = min(maximum, SDK_AUTO_EXPOSURE_MAX_US)
+    if minimum > maximum:
+        raise ValueError("Stop list leaves no valid baseline within native SDK AE limits")
     return minimum, maximum
 
 

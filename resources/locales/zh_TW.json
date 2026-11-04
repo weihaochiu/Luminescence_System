@@ -1246,7 +1246,7 @@
   "recipe.fixed_gain": "指定 Gain",
   "recipe.ae_max_exposure": "拍攝曝光時間上限（含 Stop）",
   "recipe.ae_timeout": "自動曝光收斂逾時",
-  "recipe.ae_note": "每個電流／電壓條件收斂一次 AE，固定 Gain 後依 Stop 清單拍攝，每級套用 Repeat。曝光上限適用於所有拍攝，系統會縮小 AE 基準範圍以容納完整清單。",
+  "recipe.ae_note": "每個電流／電壓條件收斂一次 AE，鎖定 Gain 後按 Stop 清單與 Repeat 拍攝。AE 基準最多 5000 ms；各張影像仍受曝光上限限制，系統會限縮基準以容納完整清單。",
   "recipe.ae_sequence_note": "AE 收斂 → 鎖定 Gain → 依自訂 Stop 清單 × Repeat 拍攝 EL → 輸出關閉後拍攝匹配的共用 Dark。",
   "recipe.ae_warning": "自動曝光：拍攝數量與時間為上限估算；Shared Dark 於 EL 後按實際曝光／Gain 去重拍攝。不同 Gain 的影像在校正前不能直接定量比較；亮度百分比未校正時僅為 SDK 目標估計。",
   "recipe.ae_dark_after": "匹配 Shared Dark（EL 後）",

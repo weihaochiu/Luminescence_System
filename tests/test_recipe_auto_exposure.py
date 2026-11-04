@@ -326,7 +326,7 @@ class RecipeAutoExposureTests(unittest.TestCase):
         state = {}
         try:
             begin_recipe_ae(controller, settings, state)
-            self.assertEqual((15000000, 30, 700, 700), camera.auto_range)
+            self.assertEqual((5000000, 30, 700, 700), camera.auto_range)
             self.assertEqual(700, camera.gain)
             self.assertEqual(0, camera.options[nncam.NNCAM_OPTION_AUTOEXP_POLICY])
             self.assertEqual(2, camera.auto_exposure_enable)
@@ -343,7 +343,7 @@ class RecipeAutoExposureTests(unittest.TestCase):
         state = {}
         try:
             begin_recipe_ae(controller, asdict(auto_recipe().el_matrix), state)
-            self.assertEqual((15000000, 30, 500, 100), controller._camera.auto_range)
+            self.assertEqual((5000000, 30, 500, 100), controller._camera.auto_range)
             self.assertEqual(1, controller._camera.options[nncam.NNCAM_OPTION_AUTOEXP_POLICY])
             restore_recipe_ae(controller, state)
         finally:

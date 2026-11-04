@@ -8,9 +8,12 @@ All functions run on the CameraController's Qt owner thread.
 from typing import Any
 
 from .camera_controller import SDKAutoExposureMode
-from .camera_exposure import constrained_exposure_range_us
+from .camera_exposure import (
+    constrained_exposure_range_us, SDK_AUTO_EXPOSURE_MAX_US,
+    SDK_AUTO_EXPOSURE_MAX_GAIN_PERCENT,
+)
 from .sdk import nncam
-from .recipe_ae_stops import baseline_range_us
+from .recipe_ae_stops import native_baseline_range_us
 from .camera_sdk_diagnostics import sdk_call, stop_for_configuration
 
 
@@ -26,10 +29,14 @@ def _read_ae_range(camera: Any, stage: str) -> tuple[int, int, int, int]:
 
 def _write_ae_range(camera: Any, requested: tuple[int, int, int, int], stage: str) -> None:
     max_time, min_time, max_gain, min_gain = requested
+    if not (0 < min_time <= max_time <= SDK_AUTO_EXPOSURE_MAX_US
+            and 0 < min_gain <= max_gain <= SDK_AUTO_EXPOSURE_MAX_GAIN_PERCENT):
+        raise ValueError(f"{stage}: Requested limits exceed native SDK AE capabilities: {requested}")
     current_max_time, current_min_time, current_max_gain, current_min_gain = _read_ae_range(camera, stage)
     # Expand the upper limits before moving the lower limits. This also works
     # when exposure and gain move in opposite directions, or fixed Gain rises
-    # above the old maximum. AE is disabled and acquisition is stopped here.
+    # above the old maximum. AE is disabled; acquisition must be active because
+    # the bundled SDK applies these limits to its running image pipeline.
     expanded = max(current_max_time, max_time), max(current_max_gain, max_gain)
     if expanded != (current_max_time, current_max_gain):
         sdk_call(stage, camera.put_MaxAutoExpoTimeAGain, *expanded)
@@ -54,7 +61,6 @@ def restore_recipe_ae(controller: Any, state: dict[str, Any]) -> None:
     controller._auto_exposure_target_percent = state["target_percent"]
     controller._disable_sdk_auto_exposure(require_readback=True)
     stop_for_configuration(controller, "Recipe AE restore")
-    _write_ae_range(camera, state["range"], "Recipe AE restore")
     for option, value in state["options"].items():
         sdk_call("Recipe AE restore", camera.put_Option, option, value)
         if int(sdk_call("Recipe AE restore", camera.get_Option, option)) != value:
@@ -62,13 +68,14 @@ def restore_recipe_ae(controller: Any, state: dict[str, Any]) -> None:
     sdk_call("Recipe AE restore", camera.put_AutoExpoTarget, state["target"])
     if int(sdk_call("Recipe AE restore", camera.get_AutoExpoTarget)) != state["target"]:
         raise RuntimeError("Recipe AE target restoration readback mismatch")
+    sdk_call("Recipe AE restore: restart preview", controller._start_stream)
+    _write_ae_range(camera, state["range"], "Recipe AE restore")
     controller._sdk_auto_exposure_policy_readback = state["options"][nncam.NNCAM_OPTION_AUTOEXP_POLICY]
     controller._sdk_auto_exposure_percent_readback = state["options"][nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT]
     controller._sdk_auto_exposure_target_readback = state["target"]
     controller._sdk_auto_exposure_target = state["target"]
     raw = state["range"]
     controller._auto_exposure_range = (raw[1], raw[0], raw[3], raw[2])
-    sdk_call("Recipe AE restore: restart preview", controller._start_stream)
 
 
 def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, Any]) -> None:
@@ -103,10 +110,11 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         raise RuntimeError("Recipe AE exposure capabilities are unavailable")
     if float(settings["auto_max_exposure_ms"]) * 1000 > hardware_range[1]:
         raise ValueError("Recipe AE maximum exposure is outside camera capabilities")
-    minimum, maximum = baseline_range_us(
+    minimum, maximum = native_baseline_range_us(
         settings.get("auto_exposure_stops", [0.0]),
         float(settings["auto_max_exposure_ms"]), hardware_range)
     gain_low, gain_high, _default = map(int, sdk_call("Recipe AE setup", camera.get_ExpoAGainRange))
+    gain_high = min(gain_high, SDK_AUTO_EXPOSURE_MAX_GAIN_PERCENT)
     fixed = settings["auto_gain_mode"] == "fixed"
     if fixed:
         gain = int(settings["auto_gain_percent"])
@@ -119,7 +127,6 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         if min_gain > max_gain:
             raise ValueError("Recipe AE Gain limits do not intersect hardware capabilities")
     requested_range = (maximum, minimum, max_gain, min_gain)
-    _write_ae_range(camera, requested_range, "Recipe AE setup")
     if fixed:
         sdk_call("Recipe AE setup", camera.put_ExpoAGain, gain)
         if int(sdk_call("Recipe AE setup", camera.get_ExpoAGain)) != gain:
@@ -134,6 +141,10 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
     target, calibrated = controller.calibrated_sdk_target(settings["auto_target_percent"])
     if controller._write_sdk_auto_exposure_target_value(camera, target) != target:
         raise RuntimeError("Recipe AE target readback mismatch")
+    # Stop is needed for the policy options above, but the time/Gain setters
+    # return E_UNEXPECTED without an active SDK acquisition pipeline.
+    sdk_call("Recipe AE setup: start acquisition", controller._start_stream)
+    _write_ae_range(camera, requested_range, "Recipe AE setup")
     controller._sdk_auto_exposure_policy_readback = 0 if fixed else 1
     controller._sdk_auto_exposure_percent_readback = 100
     controller._auto_exposure_range = (minimum, maximum, min_gain, max_gain)
@@ -147,7 +158,7 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         "RecipeAEMaxExposureMs": maximum / 1000.0,
         "RecipeAEMinExposureMs": minimum / 1000.0,
         "RecipeAEExposureCeilingMs": settings["auto_max_exposure_ms"],
+        "RecipeAESDKMaxExposureMs": SDK_AUTO_EXPOSURE_MAX_US / 1000.0,
         "RecipeAEROI": controller._auto_exposure_roi_readback,
     }
-    sdk_call("Recipe AE setup: start acquisition", controller._start_stream)
     controller._enable_sdk_auto_exposure(SDKAutoExposureMode.ONCE)

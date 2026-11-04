@@ -1246,7 +1246,7 @@
   "recipe.fixed_gain": "Specified Gain",
   "recipe.ae_max_exposure": "Exposure ceiling (including Stops)",
   "recipe.ae_timeout": "Auto exposure convergence timeout",
-  "recipe.ae_note": "AE converges once per electrical condition. Lock Gain, then capture each Stop entry with Repeat. The exposure ceiling applies to all frames; the AE baseline range is narrowed to fit the entire list.",
+  "recipe.ae_note": "AE converges once per electrical condition. Lock Gain, then capture each Stop entry with Repeat. The AE baseline is limited to 5000 ms. Every frame must fit the exposure ceiling; the baseline range is narrowed to fit the entire list.",
   "recipe.ae_sequence_note": "AE convergence → lock Gain → capture EL for each custom Stop × Repeat → capture matching shared Dark after output is off.",
   "recipe.ae_warning": "Auto exposure: capture counts and times are upper-bound estimates. Capture deduplicated Shared Dark after EL at resolved Exposure / Gain. Different gains require calibration for quantitative comparison; uncalibrated brightness percentages are SDK target estimates.",
   "recipe.ae_dark_after": "Matched Shared Dark (after EL)",

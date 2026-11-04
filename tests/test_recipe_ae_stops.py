@@ -14,7 +14,7 @@ from gui.el_matrix_plan import ELMatrixPlan
 from gui.el_matrix_runner import ELMatrixRunner, _RuntimeETA
 from gui.main_window_measurement import _validate_camera_matrix
 from gui.pixel_csv_postprocessor import PixelCSVPostprocessor
-from gui.recipe_ae_stops import baseline_range_us, bracket_exposures_us
+from gui.recipe_ae_stops import baseline_range_us, bracket_exposures_us, native_baseline_range_us
 from gui.recipe_dialog import RecipeManagerDialog
 from gui.recipe_store import RecipeStore
 from gui.smu_control import SMUSafetyLimits
@@ -51,6 +51,55 @@ class RecipeAEStopTests(unittest.TestCase):
             baseline_range_us([-2, 2], 0.1)
         with self.assertRaises(ValueError):
             bracket_exposures_us(30, [0, 0.000001])
+
+    def test_native_baseline_respects_sdk_and_capture_caps_independently(self):
+        self.assertEqual((30, 5000000), native_baseline_range_us([0], 15000))
+        self.assertEqual((30, 1000000), native_baseline_range_us([0], 1000))
+        self.assertEqual((120, 3750000), native_baseline_range_us([-2, 0, 2], 15000))
+        low, high = native_baseline_range_us([0, 1], 15000)
+        self.assertEqual((30, 5000000), (low, high))
+        self.assertEqual((5000000, 10000000), bracket_exposures_us(high, [0, 1]))
+        with self.assertRaisesRegex(ValueError, "native SDK AE"):
+            native_baseline_range_us([-1], 15000, (3000000, 15000000))
+
+    def test_native_baseline_rejected_before_measurement_if_camera_minimum_is_too_high(self):
+        recipe = auto_recipe()
+        recipe.el_matrix.auto_exposure_stops = [-1]
+        owner = SimpleNamespace(selected_recipe=recipe,
+            camera_info={'exposure_range_us': (3000000, 15000000), 'gain_range': (100, 800)},
+            smu_manager=SimpleNamespace(control=SimpleNamespace(safety=SimpleNamespace(limits=SMUSafetyLimits()))))
+        self.assertIn(tr('recipe.validation.auto_stops'), _validate_camera_matrix(owner))
+
+    def test_native_gain_limit_does_not_limit_manual_capture_settings(self):
+        recipe = auto_recipe()
+        recipe.el_matrix.auto_gain_mode = "fixed"
+        recipe.el_matrix.auto_gain_percent = 6000
+        owner = SimpleNamespace(selected_recipe=recipe,
+            camera_info={'exposure_range_us': (30, 15000000), 'gain_range': (100, 10000)},
+            smu_manager=SimpleNamespace(control=SimpleNamespace(safety=SimpleNamespace(limits=SMUSafetyLimits()))))
+        self.assertIn(tr('measurement.validation.gain_range', low=100, high=5000),
+                      _validate_camera_matrix(owner))
+        recipe.el_matrix.exposure_mode = "manual"
+        recipe.el_matrix.gains_percent = [6000]
+        recipe.el_matrix.exposures_ms = [15000]
+        self.assertEqual([], _validate_camera_matrix(owner))
+
+    def test_formal_stop_capture_can_exceed_native_ae_time_limit(self):
+        recipe = auto_recipe()
+        recipe.el_matrix.current_density_ma_cm2 = [2]
+        recipe.el_matrix.auto_exposure_stops = [0, 1]
+        recipe.el_matrix.repeat = 1
+        recipe.el_matrix.dark_frame_enabled = False
+        hardware = AutoHardware(((5000000, 200),))
+        with tempfile.TemporaryDirectory() as directory:
+            runner = ELMatrixRunner(recipe, hardware, directory,
+                report_progress=lambda _: None, is_cancel_requested=lambda: False)
+            result = runner.run()
+            captures = [event for event in hardware.events
+                        if isinstance(event, tuple) and event[0] == 'capture']
+            self.assertEqual([5000, 10000], [event[1] for event in captures])
+            self.assertEqual(2, result['captures'])
+            self.assertTrue(hardware.safe)
 
     def test_v12_defaults_to_zero_and_v13_round_trip_preserves_custom_list(self):
         recipe = auto_recipe()

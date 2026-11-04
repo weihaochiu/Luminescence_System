@@ -117,9 +117,9 @@ def collect_preflight_errors(
     else:
         low, high = float(exposure_range[0]), float(exposure_range[1])
         if recipe.el_matrix.exposure_mode == "auto":
-            from .recipe_ae_stops import baseline_range_us
+            from .recipe_ae_stops import native_baseline_range_us
             try:
-                baseline_range_us(recipe.el_matrix.auto_exposure_stops,
+                native_baseline_range_us(recipe.el_matrix.auto_exposure_stops,
                                   recipe.el_matrix.auto_max_exposure_ms, exposure_range)
             except ValueError:
                 errors.append(tr("recipe.validation.auto_stops"))
@@ -129,6 +129,9 @@ def collect_preflight_errors(
         errors.append(tr("preflight.camera_gain_capability_missing"))
     else:
         low, high = int(gain_range[0]), int(gain_range[1])
+        if recipe.el_matrix.exposure_mode == "auto":
+            from .camera_exposure import SDK_AUTO_EXPOSURE_MAX_GAIN_PERCENT
+            high = min(high, SDK_AUTO_EXPOSURE_MAX_GAIN_PERCENT)
         if any(not low <= value <= high for value in axes.gains_percent):
             errors.append(tr("preflight.camera_gain_out_of_range", low=low, high=high))
     for key in ("ResolutionId", "Resolution", "PixelFormat", "BitDepth", "ContainerDtype"):

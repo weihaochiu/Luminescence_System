@@ -9,6 +9,12 @@ from core.i18n import tr
 OFFICIAL_EXPOSURE_MIN_US = 30
 OFFICIAL_EXPOSURE_MAX_US = 15_000_000
 
+# Bundled Nncam 57.27250: native AE setters reject time > 5 s / Gain > 5000%.
+# These are AE limits, separate from manual/formal capture capabilities.
+# See docs/RECIPE_AUTO_EXPOSURE.md for the DLL validation evidence.
+SDK_AUTO_EXPOSURE_MAX_US = 5_000_000
+SDK_AUTO_EXPOSURE_MAX_GAIN_PERCENT = 5000
+
 
 def validate_official_exposure_us(exposure_us: int) -> int:
     value = int(exposure_us)

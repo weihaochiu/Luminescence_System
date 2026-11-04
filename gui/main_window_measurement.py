@@ -365,9 +365,9 @@ def _validate_camera_matrix(self: Any) -> list[str]:
     if constrained_range:
         low, high = (float(value) for value in constrained_range)
         if recipe.el_matrix.exposure_mode == "auto":
-            from .recipe_ae_stops import baseline_range_us
+            from .recipe_ae_stops import native_baseline_range_us
             try:
-                baseline_range_us(recipe.el_matrix.auto_exposure_stops,
+                native_baseline_range_us(recipe.el_matrix.auto_exposure_stops,
                                   recipe.el_matrix.auto_max_exposure_ms, constrained_range)
             except ValueError:
                 errors.append(tr("recipe.validation.auto_stops"))
@@ -377,6 +377,9 @@ def _validate_camera_matrix(self: Any) -> list[str]:
         errors.append(tr("measurement.validation.exposure_capability"))
     if gain_range:
         low, high = int(gain_range[0]), int(gain_range[1])
+        if recipe.el_matrix.exposure_mode == "auto":
+            from .camera_exposure import SDK_AUTO_EXPOSURE_MAX_GAIN_PERCENT
+            high = min(high, SDK_AUTO_EXPOSURE_MAX_GAIN_PERCENT)
         if any(not low <= value <= high for value in axes.gains_percent):
             errors.append(tr("measurement.validation.gain_range", low=low, high=high))
     else:
