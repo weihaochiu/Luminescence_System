@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-"""Live, channel-labelled ROI preparation before any Recipe output is enabled."""
+"""Live channel ROIs, armed only after the requested EL channel is ready."""
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from core.i18n import tr
@@ -12,7 +12,9 @@ from .widgets import ImageView
 
 
 class RecipeROIDialog(QDialog):
-    def __init__(self, controller, channels, parent=None):
+    channel_requested = Signal(str)
+
+    def __init__(self, controller, channels, parent=None, *, excitation_required=False):
         super().__init__(parent)
         self.controller = controller
         self.channels = tuple(channels)
@@ -23,6 +25,9 @@ class RecipeROIDialog(QDialog):
         self._connections = []
         self._pending_image = None
         self._closed = False
+        self._excitation_required = excitation_required
+        self._waiting_channel = excitation_required
+        self._fresh_channel_frame = excitation_required
         self.setWindowTitle(tr("recipe.roi_title"))
         self.resize(1000, 740)
         self.prompt = QLabel()
@@ -62,8 +67,9 @@ class RecipeROIDialog(QDialog):
         self._frame_timer.timeout.connect(lambda: self._fail(tr("recipe.roi_frame_timeout")))
         self._frame_timer.start()
         self._prompt()
-        # Wait for a NEW white-light frame; an old preview may belong to the
-        # resolution used before Recipe preparation.
+        if excitation_required:
+            self._frame_timer.stop()
+            self.view.setEnabled(False)
 
     def _connect(self, signal, slot):
         signal.connect(slot)
@@ -84,18 +90,20 @@ class RecipeROIDialog(QDialog):
         self.reject()
 
     def _frame(self, image):
-        if self._closed or image.isNull():
+        if self._closed or self._waiting_channel or image.isNull():
             return
         self._frame_timer.start()
         size = (image.width(), image.height())
         if self._size is not None and size != self._size:
             self._fail(tr("recipe.roi_resolution_changed"))
             return
-        first = self._size is None
+        first = self._size is None or self._fresh_channel_frame
+        self._fresh_channel_frame = False
         self._size = size
         self._pending_image = image
         if first:
             self._render_pending_frame()
+            self.view.setEnabled(True)
             self.redraw.setEnabled(True)
             self.view.begin_roi_selection()
         elif not self._preview_timer.isActive():
@@ -121,6 +129,8 @@ class RecipeROIDialog(QDialog):
         self.redraw.setEnabled(self.view.has_image)
 
     def _selected(self, x, y, width, height):
+        if self._waiting_channel or self._fresh_channel_frame:
+            return
         self.coordinates.setText(tr("camera.roi_coordinates", x=x, y=y, width=width, height=height))
         self.next_button.setEnabled(True)
 
@@ -129,7 +139,7 @@ class RecipeROIDialog(QDialog):
         self.view.begin_roi_selection()
 
     def _next(self):
-        if self.view.roi is None or self.view.roi_selection_mode:
+        if self._waiting_channel or self._fresh_channel_frame or self.view.roi is None or self.view.roi_selection_mode:
             return
         self.rois[self.channels[self._index]] = self.view.roi
         if self._index == len(self.channels) - 1:
@@ -139,4 +149,23 @@ class RecipeROIDialog(QDialog):
         self._index += 1
         self.view.clear_roi()
         self._prompt()
-        self.view.begin_roi_selection()
+        if self._excitation_required:
+            self._waiting_channel = True
+            self._fresh_channel_frame = True
+            self._preview_timer.stop()
+            self._pending_image = None
+            self._frame_timer.stop()
+            self.view.setEnabled(False)
+            self.redraw.setEnabled(False)
+            self.coordinates.setText(tr("recipe.roi_preparing"))
+            self.channel_requested.emit(self.channels[self._index])
+        else:
+            self.view.begin_roi_selection()
+
+    def channel_ready(self, channel, condition):
+        if self._closed or channel != self.channels[self._index]:
+            return
+        self._waiting_channel = False
+        self._fresh_channel_frame = True
+        self.coordinates.setText(tr("recipe.roi_el_ready", channel=channel, condition=condition))
+        self._frame_timer.start()

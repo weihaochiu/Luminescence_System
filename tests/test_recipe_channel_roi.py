@@ -200,19 +200,19 @@ class RecipeROIPreparationTests(unittest.TestCase):
         return owner
 
     def prepare(self, owner, *, accepted=True, dialog_error=""):
-        dialog = Mock(rois=ROIS, error=dialog_error)
-        dialog.exec.return_value = QDialog.DialogCode.Accepted if accepted else QDialog.DialogCode.Rejected
-        with patch("gui.main_window_measurement.RecipeROIDialog", return_value=dialog), \
+        with patch("gui.main_window_measurement.run_el_roi_selection",
+                   return_value=ROIS if accepted else None,
+                   side_effect=RuntimeError(dialog_error) if dialog_error else None), \
              patch("gui.main_window_measurement._set_measurement_controls_locked"), \
              patch("gui.main_window_measurement.report_error") as reported:
             result = _select_recipe_rois(owner, recipe_for())
         return result, reported
 
-    def test_white_light_cleanup_and_owned_smu_off_before_return(self):
+    def test_el_selection_never_turns_white_light_on_and_cleans_up(self):
         owner = self.owner()
         result, reported = self.prepare(owner)
         self.assertEqual(ROIS, result)
-        owner.relay_service.group_on.assert_called_once_with("white_light", "recipe_roi")
+        owner.relay_service.group_on.assert_not_called()
         owner.relay_service.safe_white_light_off.assert_called_once()
         owner.smu_manager.control.safe_shutdown.assert_called_once_with(SMUOwnership.RECIPE)
         owner.controller.restore_exposure_state.assert_called_once()
@@ -252,10 +252,9 @@ class RecipeROIPreparationTests(unittest.TestCase):
         owner.relay_service.safe_white_light_off.assert_called_once()
         reported.assert_called_once()
 
-    def test_white_light_on_failure_still_cleans_up(self):
+    def test_el_preparation_failure_still_cleans_up(self):
         owner = self.owner()
-        owner.relay_service.group_on.side_effect = RuntimeError("light failure")
-        result, reported = self.prepare(owner)
+        result, reported = self.prepare(owner, dialog_error="EL preparation failed")
         self.assertIsNone(result)
         owner.relay_service.safe_white_light_off.assert_called_once()
         owner.smu_manager.control.safe_shutdown.assert_called_once()

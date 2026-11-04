@@ -73,6 +73,8 @@ class ELMatrixRecipe:
     """One shared matrix executed for every enabled logical channel."""
 
     output_mode: str = "current_density"
+    roi_current_density_ma_cm2: float = 2.0
+    roi_voltage_v: float = 0.8
     current_density_ma_cm2: list[float] = field(
         default_factory=lambda: [2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
     )
@@ -350,6 +352,8 @@ class Recipe:
                 errors.append(tr("recipe.validation.channel_area", channel=channel.channel))
 
         matrix = self.el_matrix
+        from .recipe_roi_excitation import validate_roi_excitation
+        errors.extend(validate_roi_excitation(self, global_safety))
         if matrix.output_mode not in {"current_density", "voltage"}:
             errors.append(tr("recipe.validation.output_mode"))
         elif matrix.output_mode == "current_density":
@@ -775,7 +779,7 @@ class Recipe:
 class RecipeStore:
     """JSON-backed Recipe repository stored in the user's application-data folder."""
 
-    schema_version = 13
+    schema_version = 14
 
     def __init__(self, path: Path) -> None:
         self.path = path

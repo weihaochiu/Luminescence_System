@@ -229,6 +229,7 @@ class ELMatrixRunner:
         global_safety: Any | None = None,
         max_recipe_time_s: float = 1800.0,
         max_output_time_s: float = 600.0,
+        prepared_polarity_results: Mapping[str, Any] | None = None,
     ) -> None:
         supplied_sample_ids = dict(sample_ids or {})
         self.sample_ids = {
@@ -239,6 +240,7 @@ class ELMatrixRunner:
         self.global_safety = global_safety
         self.max_recipe_time_s = float(max_recipe_time_s)
         self.max_output_time_s = float(max_output_time_s)
+        self._prepared_polarities = dict(prepared_polarity_results or {})
         if measurement_snapshot is None:
             isolated = Recipe.from_dict(recipe.to_dict())
             measurement_snapshot = build_el_matrix_snapshot(
@@ -416,7 +418,8 @@ class ELMatrixRunner:
             self._route(channel, index, "Polarity Routing")
             self._phase("Polarity Check", channel.channel, channel, index)
             self._eta.begin_fixed(self.plan.matrix.estimated_polarity_duration_s)
-            result = self.hardware.run_polarity(channel, self.check_cancel)
+            result = (self._prepared_polarities.get(channel.channel)
+                      or self.hardware.run_polarity(channel, self.check_cancel))
             factor = result.get("polarity_factor")
             if result.get("polarity_check_status") != "COMPLETED" or factor not in (-1, 1):
                 raise RuntimeError(f"{channel.channel} polarity could not be reliably determined")

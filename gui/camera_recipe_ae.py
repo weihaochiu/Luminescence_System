@@ -246,7 +246,10 @@ def restore_recipe_ae(controller: Any, state: dict[str, Any]) -> None:
     controller._auto_exposure_range = (raw[1], raw[0], raw[3], raw[2])
 
 
-def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, Any]) -> None:
+def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, Any],
+                    *, mode: SDKAutoExposureMode = SDKAutoExposureMode.ONCE) -> None:
+    if mode not in {SDKAutoExposureMode.ONCE, SDKAutoExposureMode.CONTINUOUS}:
+        raise ValueError("Recipe AE requires Once or Continuous mode")
     camera = controller._camera
     if camera is None or controller.ae_calibration_running:
         raise RuntimeError("Recipe AE requires a connected, available camera")
@@ -341,4 +344,4 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
     }
     verify_recipe_ae_configuration(controller, state["result_metadata"])
     state["started_at"] = monotonic()
-    controller._enable_sdk_auto_exposure(SDKAutoExposureMode.ONCE)
+    controller._enable_sdk_auto_exposure(mode)

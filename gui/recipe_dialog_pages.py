@@ -233,6 +233,18 @@ class RecipeDialogPagesMixin:
         self.matrix_voltage_label = QLabel(tr("recipe.voltage_list"))
         form.addRow(self.matrix_current_density_label, self.matrix_current_density_edit)
         form.addRow(self.matrix_voltage_label, self.matrix_voltage_edit)
+        roi_group = QGroupBox(tr("recipe.roi_el_settings"))
+        roi_form = QFormLayout(roi_group)
+        self.roi_current_density_spin = _double_spin(0.000001, 100000, 2, " mA/cm²", 6)
+        self.roi_voltage_spin = _double_spin(0.000001, 210, 0.8, " V", 6)
+        self.roi_current_density_label = QLabel(tr("recipe.roi_current_density"))
+        self.roi_voltage_label = QLabel(tr("recipe.roi_voltage"))
+        roi_form.addRow(self.roi_current_density_label, self.roi_current_density_spin)
+        roi_form.addRow(self.roi_voltage_label, self.roi_voltage_spin)
+        roi_note = QLabel(tr("recipe.roi_el_note"))
+        roi_note.setWordWrap(True)
+        roi_form.addRow(roi_note)
+        form.addRow(roi_group)
         form.addRow(tr("recipe.exposure_mode"), self.exposure_mode_combo)
         self.manual_exposure_group = QGroupBox(tr("recipe.manual_exposure"))
         manual_form = QFormLayout(self.manual_exposure_group)
@@ -294,6 +306,7 @@ class RecipeDialogPagesMixin:
         voltage_mode = self.matrix_output_mode_combo.currentData() == "voltage"
         for widget in (
             self.matrix_voltage_label,
+            self.roi_voltage_label, self.roi_voltage_spin,
             self.matrix_voltage_edit,
             self.matrix_current_compliance_label,
             self.matrix_current_compliance_spin,
@@ -301,6 +314,7 @@ class RecipeDialogPagesMixin:
             widget.setVisible(voltage_mode)
         for widget in (
             self.matrix_current_density_label,
+            self.roi_current_density_label, self.roi_current_density_spin,
             self.matrix_current_density_edit,
             self.matrix_voltage_compliance_label,
             self.matrix_voltage_compliance_spin,

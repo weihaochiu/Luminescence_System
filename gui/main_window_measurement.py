@@ -40,7 +40,7 @@ from .pixel_csv_postprocessor import (
 from .polarity_settings import PolarityMeasurementSettings
 from .recipe_store import Recipe
 from .recipe_roi import validate_channel_rois
-from .recipe_roi_dialog import RecipeROIDialog
+from .recipe_roi_excitation import run_el_roi_selection
 from .numeric import format_voltage_number
 from .smu_control import SMUInterlockError, SMUOwnership
 
@@ -445,7 +445,7 @@ def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
 
 
 def _select_recipe_rois(self: Any, recipe: Recipe) -> dict | None:
-    """Own the instruments while the operator selects under relay white light."""
+    """Own the instruments for polarity-checked EL ROI preparation."""
     control = self.smu_manager.control
     rois = None
     error = None
@@ -453,7 +453,6 @@ def _select_recipe_rois(self: Any, recipe: Recipe) -> dict | None:
     old_roi = self.controller.auto_exposure_roi
     state = dict(self.controller.capture_metadata())
     self._measurement_starting = True
-    dialog = None
     try:
         if control.ownership is SMUOwnership.MANUAL:
             answer = QMessageBox.question(
@@ -476,28 +475,11 @@ def _select_recipe_rois(self: Any, recipe: Recipe) -> dict | None:
             raise RuntimeError(tr("recipe.roi_routing_failed"))
         if not self.controller.reset_auto_exposure_roi():
             raise RuntimeError(tr("camera.roi_sdk_verification_failed"))
-        self.relay_service.group_on("white_light", "recipe_roi")
-        if self.emergency_manager.is_active:
-            return None
-        dialog = RecipeROIDialog(self.controller,
-                                 [channel.channel for channel in recipe.enabled_channels()],
-                                 parent=self)
-        emergency_slot = lambda *_args: dialog.reject()
-        self.emergency_manager.triggered.connect(emergency_slot)
-        try:
-            if not self.controller.enable_continuous_auto_exposure():
-                raise RuntimeError(tr("camera.roi_sdk_verification_failed"))
-            if dialog.error or not self.controller.is_open or self.emergency_manager.is_active:
-                raise RuntimeError(dialog.error or tr("preflight.camera_disconnected"))
-            accepted = dialog.exec() == QDialog.DialogCode.Accepted
-        finally:
-            self.emergency_manager.triggered.disconnect(emergency_slot)
-        if dialog.error:
-            raise RuntimeError(dialog.error)
-        if accepted and not self.emergency_manager.is_active:
+        rois = run_el_roi_selection(self, recipe)
+        if rois is not None and not self.emergency_manager.is_active:
             current = self.controller.capture_metadata()
             rois = validate_channel_rois(
-                dialog.rois, [channel.channel for channel in recipe.enabled_channels()],
+                rois, [channel.channel for channel in recipe.enabled_channels()],
                 int(current["ImageWidth"]), int(current["ImageHeight"]),
             )
     except Exception as exc:
@@ -507,7 +489,7 @@ def _select_recipe_rois(self: Any, recipe: Recipe) -> dict | None:
             if not self.relay_service.safe_white_light_off("recipe_roi_cleanup"):
                 raise RuntimeError(tr("recipe.roi_light_off_failed"))
         except Exception as exc:
-            error = str(exc)
+            error = "; ".join(filter(None, (error, str(exc))))
             rois = None
         try:
             if self.controller.is_open and not self.emergency_manager.is_active:
@@ -537,8 +519,6 @@ def _select_recipe_rois(self: Any, recipe: Recipe) -> dict | None:
                 _set_measurement_controls_locked(self, False)
             self._measurement_starting = False
             self._update_white_light_control()
-            if dialog is not None:
-                dialog.deleteLater()
     if error:
         report_error(self, "MEAS-101", context={"operation": "recipe_roi", "actual": error})
     return rois
@@ -671,6 +651,7 @@ def begin_el_matrix_measurement(self: Any) -> None:
     if channel_rois is None:
         return
     camera_snapshot["ChannelROIs"] = channel_rois
+    camera_snapshot["ROISelection"] = getattr(self, "_recipe_roi_preparation", {})
     # Rebuild the immutable snapshot so selected source geometry is covered by
     # its hash and cannot change while a measurement is running.
     snapshot = build_el_matrix_snapshot(
@@ -720,6 +701,7 @@ def begin_el_matrix_measurement(self: Any) -> None:
     elif recipe.dark_iv.enabled:
         self._dark_iv_progress_dialog = DarkIVChartDialog(self)
     dialog.show()
+    prepared_polarities = snapshot_payload(snapshot).get("camera", {}).get("ROISelection", {}).get("polarity", {})
     def run(progress: Any, cancelled: Any) -> object:
         runner = ELMatrixRunner(
             recipe,
@@ -732,6 +714,7 @@ def begin_el_matrix_measurement(self: Any) -> None:
             global_safety=self.smu_manager.control.safety.limits,
             max_recipe_time_s=self.max_recipe_time_s,
             max_output_time_s=self.max_output_time_s,
+            prepared_polarity_results=prepared_polarities,
         )
         result = runner.run()
         if not verified_safe_shutdown(result.get("safe_shutdown")):

@@ -338,6 +338,7 @@ class RelayService:
         self.settings_store = settings_store
         self.log_entries: list[RelayLogEntry] = []
         self._operation_lock = RLock()
+        self._white_light_inhibitors: set[str] = set()
         self._routing_fault_handler: Callable[[str], None] | None = None
 
     def set_routing_fault_handler(self, handler: Callable[[str], None] | None) -> None:
@@ -368,10 +369,16 @@ class RelayService:
         LOG.info("Relay | %s | %s | %s | %s", target, operation, result, source)
 
     def channel_on(self, channel: int, source: str = "manual_channel") -> None:
-        self._channel(channel, True, source)
+        with self._operation_lock:
+            white = self.settings_store.settings.group("white_light")
+            protected = {1, 2} | (set(white.members) if white is not None else set())
+            if self._white_light_inhibitors and channel in protected:
+                raise RelayError(tr("recipe.roi_white_light_blocked"))
+            self._channel(channel, True, source)
 
     def channel_off(self, channel: int, source: str = "manual_channel") -> None:
-        self._channel(channel, False, source)
+        with self._operation_lock:
+            self._channel(channel, False, source)
 
     def _channel(self, channel: int, state: bool, source: str) -> None:
         if channel in self.settings_store.settings.smu_output_channels.values():
@@ -391,6 +398,10 @@ class RelayService:
 
     def _group_on_unlocked(self, group_id: str, source: str, group: RelayGroup | None) -> None:
         selected = group or self._enabled_group(group_id)
+        white = self.settings_store.settings.group("white_light")
+        protected = {1, 2} | (set(white.members) if white is not None else set())
+        if self._white_light_inhibitors and (selected.group_id == "white_light" or set(selected.members) & protected):
+            raise RelayError(tr("recipe.roi_white_light_blocked"))
         routing_relays = set(self.settings_store.settings.smu_output_channels.values())
         if routing_relays & set(selected.members):
             raise RelayError(tr("relay.routing_group_on_protected", group=selected.display_name))
@@ -455,6 +466,19 @@ class RelayService:
 
         with self._operation_lock:
             return self._safe_white_light_off_unlocked(source)
+
+    def set_white_light_inhibited(self, owner: str, inhibited: bool) -> None:
+        with self._operation_lock:
+            if inhibited:
+                self._white_light_inhibitors.add(owner)
+            else:
+                self._white_light_inhibitors.discard(owner)
+
+    def verify_white_light_off(self) -> bool:
+        with self._operation_lock:
+            white = self.settings_store.settings.group("white_light")
+            channels = {1, 2} | (set(white.members) if white is not None else set())
+            return not bool(self.controller.refresh_hardware_state() & sum(1 << (ch - 1) for ch in channels))
 
     def _safe_white_light_off_unlocked(self, source: str) -> bool:
         if not self.controller.connected:

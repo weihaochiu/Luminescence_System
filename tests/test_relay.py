@@ -112,6 +112,32 @@ class RelayTests(unittest.TestCase):
         self.controller.disconnect()
         self.tmp.cleanup()
 
+    def test_el_roi_inhibition_blocks_white_light_groups_and_individual_channels(self):
+        self.service.set_white_light_inhibited("roi", True)
+        self.service.set_white_light_inhibited("other", True)
+        self.service.set_white_light_inhibited("roi", False)
+        before = len(self.transport.writes)
+        for action in (lambda: self.service.group_on("white_light"),
+                       lambda: self.service.channel_on(1), lambda: self.service.channel_on(2)):
+            with self.assertRaises(RelayError):
+                action()
+        self.assertEqual(before, len(self.transport.writes))
+        self.assertTrue(self.service.safe_white_light_off("test"))
+        self.service.set_white_light_inhibited("other", False)
+        self.service.group_on("white_light")
+        self.assertFalse(self.service.verify_white_light_off())
+        self.service.safe_white_light_off()
+        self.assertTrue(self.service.verify_white_light_off())
+
+    def test_el_roi_white_light_verification_reads_hardware_and_propagates_failure(self):
+        self.transport.bitmask = 1
+        self.assertFalse(self.service.verify_white_light_off())
+        self.transport.bitmask = 0
+        self.assertTrue(self.service.verify_white_light_off())
+        self.transport.fail_read = True
+        with self.assertRaises(RelayError):
+            self.service.verify_white_light_off()
+
     def test_hardware_verified_ch1_ch2_command_bytes(self) -> None:
         self.service.channel_on(1)
         self.service.channel_off(1)

@@ -1,10 +1,16 @@
 # Recipe 各 Channel ROI
 
-Recipe 正式量測前會開啟既有 Relay 白光，在獨立的 Live View 視窗依啟用的 CH1～CH4 逐一框選。CH1 固定使用 ROI1，依此類推；只啟用 CH2／CH4 時只需設定 ROI2／ROI4。每次開始量測重新選取，不寫入 Recipe 預設值。
+Recipe 正式量測前以元件的 **EL 發光** 定位，在獨立 Live View 視窗依啟用的 CH1～CH4 逐一框選。CH1 固定使用 ROI1，依此類推；只啟用 CH2／CH4 時只需設定 ROI2／ROI4。每次開始量測重新選取，座標不寫入 Recipe 預設值。
 
-選框採原始 image-pixel `(x, y, width, height)`；縮放與平移只影響顯示。按確認後進入下一個啟用 channel，最後一次確認後先驗證白光 OFF，再進行正式量測。此流程適用手動曝光與自動曝光 Recipe；手動模式仍依指定曝光／Gain 拍攝。
+在 Recipe「3 EL Matrix → ROI 定位（EL 發光）」設定選取 ROI 的電流密度或電壓；輸出模式跟隨同頁的定電流密度／定電壓，Compliance 沿用同頁設定。電流密度乘各通道面積換算實際電流。schema 14 保存 `roi_current_density_ma_cm2`、`roi_voltage_v`；舊檔缺少時預設 2 mA/cm²／0.8 V，仍須通過全域安全限制。兩個欄位皆保留，僅執行及驗證目前輸出模式所選的值。
 
-框選期間 SMU OUTPUT 與所有 SMU routing 必須確認 OFF，保留 Recipe ownership 並鎖定主視窗量測控制。白光預覽暫時使用全圖 SDK continuous AE；完成或取消時停用預覽 AE、恢復先前的手動曝光／Gain 與 Live View 測光範圍。相機錯誤、斷線、影格逾時、解析度變更或 Emergency 會取消準備；白光 OFF 無法確認時禁止正式量測。白光、相機及 SMU 清理分別執行，單項清理失敗不跳過其他清理。
+每個通道依序：確認 SMU OUTPUT OFF → 切換 routing → 判斷極性 → 確認 OUTPUT OFF 及白光 OFF → 套用極性 → 以定位條件點亮 EL → 穩定等待／讀回 → 等待新相機影像 → 開放框選。極性量測可能在前置階段使用白光；此時禁止框選。真正框選期間白光必須保持 OFF，Relay service 同時阻擋白光群組與個別白光通道的 ON 命令。停用極性確認時使用基本資料指定的正向極性；無法可靠確認極性時不點亮 EL。
+
+按確認後先關閉並核對輸出，再準備下一個通道。新通道未完成上述流程或沒有新的影像時，不接受舊影像／舊 ROI。最後確認、取消、斷線、相機錯誤、解析度變更或 Emergency 都先清理硬體；SMU OUTPUT OFF、routing OFF、白光 OFF、ownership release 任一未確認，均禁止正式量測。背景 worker 持續檢查白光狀態、SMU Compliance 與全域單次輸出／流程時間上限，避免視窗等待期間無限制通電。
+
+定位預覽使用全圖 SDK continuous AE、20% 目標，暫時擴大到硬體及原生 SDK 允許的最多 5 s，Gain 保留原有 AE 範圍。這只用於定位，並不把未收斂預覽視為正式 AE 成功。定位結束恢復原範圍、ROI、手動曝光與 Gain；正式 Recipe 仍依各 Channel ROI 執行自己的 AE 或手動拍攝。定位不產生正式影像／EL 資料列。
+
+選框採原始 image-pixel `(x, y, width, height)`；縮放與平移只影響顯示。不可變 snapshot 的 `camera.ROISelection` 保存定位條件、面積、極性結果、實際電流／電壓及清理結果。已在本次定位完成的極性結果會傳給正式 runner 保存及使用，避免框選後再次開啟白光重做極性量測。
 
 ## 正式量測
 
@@ -35,6 +41,8 @@ colorbar 位於原圖右側的新增白色畫布，上方最大值／白色，�
 ## 驗證
 
 `tests/test_recipe_channel_roi.py` 涵蓋啟用 1～4 channel、非連續 channel、取消／錯誤／斷線／解析度變更、白光與 SMU 清理失敗、Qt owner thread ROI 設定、AE 切換、各格式裁切、Shared Dark 像素配對與 footer 尺寸／像素完整性。實際白光、RisingCam AE 收斂與實體量測仍需硬體驗收。
+
+EL 定位回歸：`tests/test_recipe_roi_excitation.py` 包含面積／電流換算、定電壓、正負極性、極性失敗、白光或 Compliance 異常、取消、Emergency、逾時、實際 Qt dialog 與背景 thread 的通道切換、影格門檻、Recipe 保存及 UI 切換。`tests/test_relay.py` 驗證白光 inhibit 及硬體讀回；實體 EL 可見度、實際接線及收斂仍需設備驗收。
 
 2026-11-04 軟體驗證：本次新增 23／23 測試通過；完整 `python -m unittest discover -s tests -v` 846 項中 845 通過，唯一失敗為既有光源工具 `test_cancelling_lux_measurement_turns_off_light_through_worker` worker 等待逾時。編譯檢查與 `git diff --check` 通過。已檢視離線渲染的 CH2／ROI2 視窗，以及 640×480、160×900、900×80、160×160 的 footer 圖片。
 

@@ -13,7 +13,7 @@
 
 先前自動曝光階段的 14 情境模擬、逐步紀錄及流程圖，見 [流程模擬報告](RECIPE_AUTO_EXPOSURE_SIMULATION.md)。該階段相關回歸 152／152 通過；模擬階段未再變更正式硬體控制程式。
 
-本次整合加入 [各 Channel ROI](RECIPE_CHANNEL_ROI.md)：正式量測前開啟白光，依啟用 channel 設定 CH1→ROI1 至 CH4→ROI4。後續每個 channel 的 AE 都使用對應 ROI；TIFF、衍生影像及 Pixel CSV 只儲存該範圍，Shared Dark 從同一次拍攝分別裁出各 channel 的 ROI。測光設定必須完成 SDK readback 驗證。
+本次整合加入 [各 Channel ROI](RECIPE_CHANNEL_ROI.md)：正式量測前依啟用 channel 先確認極性，再關閉白光、以 Recipe 的 ROI 定位電流密度／電壓點亮 EL，設定 CH1→ROI1 至 CH4→ROI4。框選時禁止開啟白光。後續每個 channel 的 AE 都使用對應 ROI；TIFF、衍生影像及 Pixel CSV 只儲存該範圍，Shared Dark 從同一次拍攝分別裁出各 channel 的 ROI。測光設定必須完成 SDK readback 驗證。
 
 2026-11-04 整合推送前驗證：相關回歸 **179／179**、完整 `unittest discover -s tests -v` **846／846 通過**（0 failed、0 errors、0 skipped），編譯與差異檢查通過。先前光源 GUI worker 逾時在未修改該工具／測試下重跑通過；文件內先前失敗數量保留為歷史紀錄。
 

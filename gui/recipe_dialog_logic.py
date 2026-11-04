@@ -155,6 +155,8 @@ class RecipeDialogLogicMixin:
         self._set_dark_iv_widgets_enabled(recipe.dark_iv.enabled)
 
         matrix = recipe.el_matrix
+        self.roi_current_density_spin.setValue(matrix.roi_current_density_ma_cm2)
+        self.roi_voltage_spin.setValue(matrix.roi_voltage_v)
         self._set_combo_data(self.exposure_mode_combo, matrix.exposure_mode)
         self._set_combo_data(self.auto_gain_mode_combo, matrix.auto_gain_mode)
         self.auto_gain_spin.setValue(matrix.auto_gain_percent)
@@ -265,6 +267,8 @@ class RecipeDialogLogicMixin:
                 field_name="Voltage List",
             )
         recipe.el_matrix.exposure_mode = str(self.exposure_mode_combo.currentData())
+        recipe.el_matrix.roi_current_density_ma_cm2 = self.roi_current_density_spin.value()
+        recipe.el_matrix.roi_voltage_v = self.roi_voltage_spin.value()
         recipe.el_matrix.auto_gain_mode = str(self.auto_gain_mode_combo.currentData())
         recipe.el_matrix.auto_gain_percent = self.auto_gain_spin.value()
         recipe.el_matrix.auto_target_percent = int(self.auto_target_combo.currentData())
@@ -362,6 +366,7 @@ class RecipeDialogLogicMixin:
             self.dark_inter_delay_spin, self.dark_frame_enabled_check,
             self.matrix_output_mode_combo, self.matrix_current_density_edit,
             self.matrix_voltage_edit,
+            self.roi_current_density_spin, self.roi_voltage_spin,
             self.matrix_gain_edit, self.matrix_exposure_edit, self.matrix_repeat_spin,
             self.exposure_mode_combo,
             self.auto_gain_mode_combo, self.auto_gain_spin, self.auto_target_combo,
