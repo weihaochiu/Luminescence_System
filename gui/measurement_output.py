@@ -20,6 +20,7 @@ from PySide6.QtGui import QImage
 from core.i18n import tr
 
 from .scientific_dn import effective_dn_to_uint8
+from .image_colorbar import GrayscaleColorbar
 from .numeric import format_voltage_number
 
 
@@ -177,15 +178,18 @@ def footer_layout(width: int, height: int, lines: Iterable[str]):
     return font, visible, padding, line_height, line_gap, footer_height
 
 
-def annotated_jpeg_image(raw: Image.Image, lines: Iterable[str]) -> Image.Image:
+def annotated_jpeg_image(
+    raw: Image.Image, lines: Iterable[str], *, colorbar: GrayscaleColorbar | None = None,
+) -> Image.Image:
     source = raw.copy()
+    display = colorbar.append_to(source) if colorbar is not None else source
     font, visible, padding, line_height, line_gap, footer_height = footer_layout(
-        source.width, source.height, lines,
+        display.width, source.height, lines,
     )
-    annotated = Image.new("RGB", (source.width, source.height + footer_height), (88, 88, 88))
-    annotated.paste(source, (0, 0))
+    annotated = Image.new("RGB", (display.width, display.height + footer_height), (88, 88, 88))
+    annotated.paste(display, (0, 0))
     draw = ImageDraw.Draw(annotated)
-    y = source.height + padding
+    y = display.height + padding
     for line in visible:
         box = draw.textbbox((0, 0), line, font=font)
         draw.text((padding - box[0], y - box[1]), line, fill=(255, 255, 255), font=font)
@@ -386,13 +390,21 @@ def save_matrix_capture(
     if jpeg_path is not None:
         preview.convert("RGB").save(jpeg_path, quality=95, subsampling=0)
     annotated: Image.Image | None = None
+    colorbar = None
     if footer_path is not None:
+        if scientific.ndim == 2:
+            alignment = str(metadata.get("RawValueAlignment", "unknown")).strip().lower()
+            # Unknown alignment uses the same container-domain fallback as the image.
+            colorbar = GrayscaleColorbar(
+                (1 << int(sensor_bit_depth)) - 1 if alignment != "unknown" else 65535,
+                "Effective DN" if alignment != "unknown" else "Container DN",
+            )
         lines = (
             format_dark_footer(metadata)
             if metadata["MeasurementType"] == "DARK"
             else format_el_footer(metadata)
         )
-        annotated = annotated_jpeg_image(preview.convert("RGB"), lines)
+        annotated = annotated_jpeg_image(preview.convert("RGB"), lines, colorbar=colorbar)
         annotated.save(footer_path, quality=95, subsampling=0)
     if not np.array_equal(scientific, scientific_before):
         raise RuntimeError("Derived output generation modified the scientific source buffer")
@@ -403,6 +415,7 @@ def save_matrix_capture(
         "JpegPath": str(jpeg_path) if jpeg_path else None,
         "FooterJpegPath": str(footer_path) if footer_path else None,
         "AnnotatedJpegPath": str(footer_path) if footer_path else None,
+        "FooterColorbar": colorbar.describe(preview.size) if colorbar is not None else None,
         "MetadataJsonPath": str(metadata_path),
         "ScientificDtype": str(scientific.dtype),
         "ScientificShape": list(scientific.shape),

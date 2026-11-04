@@ -1353,8 +1353,9 @@ class MatrixImageOutputTests(unittest.TestCase):
             tiff = tifffile.imread(saved.tiff_path)
             np.testing.assert_array_equal(before, tiff)
             with Image.open(saved.footer_jpeg_path) as jpeg:
-                self.assertEqual(8, jpeg.width)
+                self.assertGreater(jpeg.width, 8)  # External right-side colorbar.
                 self.assertGreater(jpeg.height, 6)
+                self.assertEqual(jpeg.size, (payload["AnnotatedJpegWidth"], payload["AnnotatedJpegHeight"]))
         np.testing.assert_array_equal(before, raw)
 
     def test_uncompressed_annotated_buffer_preserves_the_complete_source_region(self) -> None:

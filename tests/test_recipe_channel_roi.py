@@ -340,9 +340,13 @@ class RecipeROIRunnerTests(unittest.TestCase):
                 np.testing.assert_array_equal(expected, tifffile.imread(item["RawTiffPath"]))
                 for key in ("PngPath", "JpegPath", "FooterJpegPath"):
                     with Image.open(item[key]) as image:
-                        self.assertEqual(2, image.width)
                         if key != "FooterJpegPath":
+                            self.assertEqual(2, image.width)
                             self.assertEqual(2, image.height)
+                        else:
+                            self.assertGreater(image.width, 2)
+                            self.assertEqual({"X": 0, "Y": 0, "Width": 2, "Height": 2},
+                                             item["FooterColorbar"]["SourceImageRect"])
             status = PixelCSVPostprocessor(directory, result["safe_shutdown"]).run()
             self.assertEqual("completed", status["status"])
             for path in directory.rglob("*_pixels_dark_corrected.csv"):

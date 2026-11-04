@@ -1,5 +1,14 @@
 # Requirements Log
 
+## OUTPUT-COLORBAR-001 — 右側直式灰階色階條（2026-11-04）
+
+- 使用者確認需求是像素數值對應顏色的 colorbar，選擇右側直式、沿用目前灰階；以不遮擋影像為原則，不是實體長度比例尺。
+- EL／Dark 單色 Footer JPG 在右側增加獨立白色圖例區，上白下黑，刻度對應現有顯示映射；完整 ROI 放在 `(0, 0)`，不縮放、不遮擋。極小 ROI 只增加外部留白，下方保留量測資訊。
+- 已知 alignment 使用 Effective DN 與 sensor 完整範圍；未知 alignment 明確標為 Container DN，與原有 16-bit container fallback 一致。各張不依亮度自動拉伸；TIFF、一般 PNG／JPG、Pixel CSV 與量測硬體流程不變。
+- `FooterColorbar` 記錄數值域、映射、刻度與幾何資訊；RGB 不套用單一灰階圖例。JPEG 灰階為 8-bit 顯示副本，精確數值保留於 scientific TIFF／CSV。
+- 詳細規格見 [Recipe 各 Channel ROI](docs/RECIPE_CHANNEL_ROI.md)。使用者後續授權再次驗證並推送至 GitHub main；只提交本次色階條的 7 個檔案，既有 HDR 工具列隱藏的 5 個 staged 修改保留且不納入提交。推送前依規則備份最新 origin/main。
+- 驗證：新增色階條測試 8／8、相關回歸 114／114、完整 `.venv\Scripts\python.exe -m unittest discover -s tests -v` 854／854 通過（0 failures、0 errors、0 skipped）。編譯與 `git diff --check` 通過；已檢視正式輸出函式生成的 640×480、160×900、900×80、2×2 synthetic ROI 圖片，原圖區與外部圖例不重疊。未進行硬體拍攝驗收。
+
 ## RECIPE-RELEASE-001 — ROI 與自動曝光整合推送前驗證（2026-11-04）
 
 - 使用者授權將 Recipe 自動曝光／Gain／Stop 與各 Channel ROI 一併更新至 GitHub main；既有 HDR 工具列隱藏的 5 個暫存修改不納入本次提交，保留內容與原暫存狀態。
