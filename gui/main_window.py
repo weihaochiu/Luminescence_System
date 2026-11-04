@@ -22,6 +22,7 @@ from .camera_temperature_monitor import CameraTemperatureMonitor
 from .emergency_manager import EmergencyManager
 from .general_settings_dialog import GeneralSettingsDialog
 from .instrument_state_manager import InstrumentStateManager
+from .log_export import LogExportController
 from .main_window_devices import MainWindowDeviceMixin
 from .main_window_ui import MainWindowUIMixin
 from .main_window_measurement import attach_measurement_handlers
@@ -124,6 +125,7 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
 
         self._build_actions()
         self._build_menu_and_toolbar()
+        self.log_export = LogExportController(self, application_directory / "logs")
         self._build_central_ui()
         self._build_status_bar()
         self._connect_signals()
