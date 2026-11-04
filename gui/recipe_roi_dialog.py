@@ -29,13 +29,16 @@ class RecipeROIDialog(QDialog):
         self.prompt.setWordWrap(True)
         self.coordinates = QLabel(tr("camera.roi_not_set"))
         self.view = ImageView()
-        self.redraw = QPushButton(tr("camera.select_dn_roi"))
+        self.redraw = QPushButton(tr("recipe.roi_redraw"))
+        self.redraw.setToolTip(tr("recipe.roi_redraw_tooltip"))
         self.redraw.clicked.connect(self._redraw)
         fit = QPushButton(tr("recipe.roi_fit"))
+        fit.setToolTip(tr("recipe.roi_fit_tooltip"))
         fit.clicked.connect(self.view.fit_to_window)
         self.next_button = QPushButton()
         self.next_button.clicked.connect(self._next)
-        cancel = QPushButton(tr("common.cancel"))
+        cancel = QPushButton(tr("recipe.roi_cancel"))
+        cancel.setToolTip(tr("recipe.roi_cancel_tooltip"))
         cancel.clicked.connect(self.reject)
         buttons = QHBoxLayout()
         for widget in (self.redraw, fit, self.next_button, cancel):
@@ -111,6 +114,9 @@ class RecipeROIDialog(QDialog):
         self.coordinates.setText(tr("camera.roi_not_set"))
         self.next_button.setText(tr("recipe.roi_finish") if self._index == len(self.channels) - 1
                                  else tr("recipe.roi_next"))
+        self.next_button.setToolTip(tr("recipe.roi_finish_tooltip")
+                                   if self._index == len(self.channels) - 1
+                                   else tr("recipe.roi_next_tooltip"))
         self.next_button.setEnabled(False)
         self.redraw.setEnabled(self.view.has_image)
 
