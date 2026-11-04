@@ -80,6 +80,13 @@ class ELMatrixRecipe:
         default_factory=lambda: [0.8, 1.0, 1.1, 1.2]
     )
     gains_percent: list[int] = field(default_factory=lambda: [100, 200, 300, 400, 500])
+    exposure_mode: str = "manual"
+    auto_gain_mode: str = "auto"
+    auto_gain_percent: int = 100
+    auto_target_percent: int = 50
+    auto_max_exposure_ms: float = 15000.0
+    auto_timeout_s: float = 60.0
+    auto_exposure_stops: list[float] = field(default_factory=lambda: [0.0])
     exposures_ms: list[float] = field(
         default_factory=lambda: [
             0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0,
@@ -244,6 +251,9 @@ class Recipe:
     def dark_profiles(self) -> list[dict[str, Any]]:
         """Return the Shared Dark profiles required by the Matrix capture axes."""
 
+        if self.el_matrix.exposure_mode == "auto":
+            # Profiles are discovered from locked AE results during the run.
+            return []
         profiles: dict[tuple[Any, ...], dict[str, Any]] = {}
         for gain in self.el_matrix.gains_percent:
             for exposure in self.el_matrix.exposures_ms:
@@ -307,6 +317,8 @@ class Recipe:
 
     def validation_warnings(self) -> list[str]:
         warnings: list[str] = []
+        if self.el_matrix.exposure_mode == "auto":
+            return [tr("recipe.ae_warning")]
         if len(self.el_matrix.gains_percent) > 1 or len(self.el_matrix.exposures_ms) > 1:
             if len(self.el_matrix.gains_percent) > 1:
                 warnings.append(tr("recipe.validation.multiple_gains_warning"))
@@ -351,12 +363,46 @@ class Recipe:
             for value in matrix.voltage_v
         ):
             errors.append(tr("recipe.validation.voltage_values"))
-        if not matrix.exposures_ms or any(
+        if matrix.exposure_mode not in {"manual", "auto"}:
+            errors.append(tr("recipe.validation.exposure_mode"))
+        if matrix.exposure_mode == "auto":
+            from .recipe_ae_stops import baseline_range_us, bracket_exposures_us
+            try:
+                _minimum, maximum = baseline_range_us(matrix.auto_exposure_stops, matrix.auto_max_exposure_ms)
+                bracket_exposures_us(maximum, matrix.auto_exposure_stops)
+            except (TypeError, ValueError, OverflowError):
+                errors.append(tr("recipe.validation.auto_stops"))
+            if matrix.auto_gain_mode not in {"auto", "fixed"}:
+                errors.append(tr("recipe.validation.auto_gain_mode"))
+            if matrix.auto_gain_mode == "fixed" and (
+                not isinstance(matrix.auto_gain_percent, int)
+                or isinstance(matrix.auto_gain_percent, bool)
+                or not 100 <= matrix.auto_gain_percent <= 65535
+            ):
+                errors.append(tr("recipe.validation.auto_gain"))
+            if (not isinstance(matrix.auto_target_percent, int)
+                    or isinstance(matrix.auto_target_percent, bool)
+                    or matrix.auto_target_percent not in (20, 30, 40, 50, 60, 70, 80)):
+                errors.append(tr("recipe.validation.auto_target"))
+            if (not isinstance(matrix.auto_max_exposure_ms, (float, int))
+                    or isinstance(matrix.auto_max_exposure_ms, bool)
+                    or not math.isfinite(matrix.auto_max_exposure_ms)
+                    or not OFFICIAL_EXPOSURE_MIN_US <= matrix.auto_max_exposure_ms * 1000
+                    <= OFFICIAL_EXPOSURE_MAX_US):
+                errors.append(tr("recipe.validation.auto_max_exposure"))
+            if (not isinstance(matrix.auto_timeout_s, (float, int))
+                    or isinstance(matrix.auto_timeout_s, bool)
+                    or not math.isfinite(matrix.auto_timeout_s)
+                    or matrix.auto_timeout_s <= 0
+                    or (isinstance(matrix.auto_max_exposure_ms, (float, int))
+                        and matrix.auto_timeout_s <= matrix.auto_max_exposure_ms / 1000)):
+                errors.append(tr("recipe.validation.auto_timeout"))
+        if matrix.exposure_mode == "manual" and (not matrix.exposures_ms or any(
             not math.isfinite(float(value)) or float(value) <= 0
             for value in matrix.exposures_ms
-        ):
+        )):
             errors.append(tr("recipe.validation.exposure_values"))
-        elif any(
+        elif matrix.exposure_mode == "manual" and any(
             not OFFICIAL_EXPOSURE_MIN_US
             <= float(value) * 1000.0
             <= OFFICIAL_EXPOSURE_MAX_US
@@ -369,7 +415,7 @@ class Recipe:
                     high=f"{OFFICIAL_EXPOSURE_MAX_US / 1000:g}",
                 )
             )
-        if not matrix.gains_percent or any(int(value) < 0 for value in matrix.gains_percent):
+        if matrix.exposure_mode == "manual" and (not matrix.gains_percent or any(int(value) < 0 for value in matrix.gains_percent)):
             errors.append(tr("recipe.validation.gain_values"))
         if matrix.repeat < 1:
             errors.append(tr("recipe.validation.repeat"))
@@ -379,6 +425,9 @@ class Recipe:
             errors.append(tr("recipe.validation.capture_timeout_positive"))
         longest_exposure_s = max(
             (float(value) / 1000.0 for value in matrix.exposures_ms), default=0.0
+        ) if matrix.exposure_mode == "manual" else (
+            matrix.auto_max_exposure_ms / 1000.0
+            if isinstance(matrix.auto_max_exposure_ms, (float, int)) else 0.0
         )
         if matrix.capture_timeout_s < longest_exposure_s:
             errors.append(tr("recipe.validation.capture_timeout_exposure"))
@@ -475,6 +524,13 @@ class Recipe:
         return self.matrix_estimated_time_s()
 
     def matrix_capture_counts(self) -> dict[str, int]:
+        if self.el_matrix.exposure_mode == "auto":
+            per_channel = (len(self.el_matrix.active_electrical_setpoints()) * self.el_matrix.repeat
+                           * len(self.el_matrix.auto_exposure_stops))
+            total_el = len(self.enabled_channels()) * per_channel
+            dark = total_el if self.el_matrix.dark_frame_enabled else 0
+            return {"shared_dark": dark, "el_per_channel": per_channel,
+                    "total_el": total_el, "overall": dark + total_el}
         from .measurement_execution_plan import effective_matrix_capture_axes
 
         matrix = self.el_matrix
@@ -719,7 +775,7 @@ class Recipe:
 class RecipeStore:
     """JSON-backed Recipe repository stored in the user's application-data folder."""
 
-    schema_version = 11
+    schema_version = 13
 
     def __init__(self, path: Path) -> None:
         self.path = path

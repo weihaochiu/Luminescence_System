@@ -63,6 +63,9 @@ class MeasurementProgressDialog(QDialog):
         self.remaining_value = QLabel("—")
         self.remaining_time_value = QLabel("—")
         self.finish_value = QLabel("—")
+        self.estimate_basis_value = QLabel(tr("recipe.estimate_manual"))
+        self.estimate_basis_value.setWordWrap(True)
+        self.estimate_basis_value.setToolTip(tr("recipe.estimate_scope"))
         form = QFormLayout()
         form.addRow(tr("recipe.title"), self.recipe_value)
         form.addRow(tr("progress.stage"), self.stage_value)
@@ -76,6 +79,7 @@ class MeasurementProgressDialog(QDialog):
         form.addRow(tr("progress.remaining_count"), self.remaining_value)
         form.addRow(tr("progress.remaining_time"), self.remaining_time_value)
         form.addRow(tr("progress.estimated_finish"), self.finish_value)
+        form.addRow(tr("progress.estimate_basis"), self.estimate_basis_value)
         self.progress_bar = QProgressBar()
         self.stop_button = QPushButton(tr("progress.stop_safe_shutdown"))
         self.stop_button.clicked.connect(self._on_action_clicked)
@@ -146,6 +150,13 @@ class MeasurementProgressDialog(QDialog):
             label.setText(value)
 
     def update_progress(self, progress: MatrixRuntimeProgress) -> None:
+        if progress.estimate_mode == "auto_upper_bound":
+            basis = tr("progress.estimate_auto_pending", count=progress.remaining_ae_conditions)
+        elif progress.estimate_mode == "auto_resolved":
+            basis = tr("progress.estimate_auto_resolved")
+        else:
+            basis = tr("recipe.estimate_manual")
+        self.estimate_basis_value.setText(basis)
         self.stage_value.setText(tr("progress.hardware_measurement"))
         self.phase_value.setText(progress.phase)
         self.channel_value.setText(
@@ -190,6 +201,7 @@ class MeasurementProgressDialog(QDialog):
         self._remember_measurement_fields()
 
     def update_postprocess_progress(self, progress: PixelCSVProgress) -> None:
+        self.estimate_basis_value.setText(tr("progress.estimate_pixel_csv"))
         self._postprocessing = True
         self.stage_value.setText(tr("progress.pixel_csv_postprocess"))
         self.phase_value.setText(tr("progress.pixel_csv_postprocess"))

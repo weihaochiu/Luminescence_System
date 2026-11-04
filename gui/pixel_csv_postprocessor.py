@@ -72,7 +72,7 @@ def _atomic_csv(path: Path, fieldnames: list[str], rows: list[Mapping[str, Any]]
         temporary.unlink(missing_ok=True)
 
 
-def _key(metadata: Mapping[str, Any]) -> tuple[int, str, int, str, tuple[int, ...]]:
+def _key(metadata: Mapping[str, Any]) -> tuple[Any, ...]:
     exposure = format(float(metadata["Exposure"]), ".12g")
     shape = metadata.get("ScientificShape")
     if not isinstance(shape, (list, tuple)):
@@ -85,6 +85,8 @@ def _key(metadata: Mapping[str, Any]) -> tuple[int, str, int, str, tuple[int, ..
         int(metadata["RepeatIndex"]),
         str(metadata.get("Resolution", "")),
         tuple(int(value) for value in shape),
+        tuple(int(value) for value in metadata.get("ChannelROI", ())),
+        str(metadata.get("Channel", "")) if "ChannelROI" in metadata else "",
     )
 
 
@@ -233,7 +235,7 @@ class PixelCSVPostprocessor:
         self,
         metadata_items: list[tuple[Path, dict[str, Any]]],
         dark_by_key: Mapping[
-            tuple[int, str, int, str, tuple[int, ...]], tuple[Path, dict[str, Any]]
+            tuple[Any, ...], tuple[Path, dict[str, Any]]
         ],
         options: Mapping[str, Any],
     ) -> list[dict[str, Any]]:

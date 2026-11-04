@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from time import monotonic, sleep
@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import numpy as np
 from PySide6.QtGui import QImage
+from core.i18n import tr
 
 from .el_matrix_plan import ELMatrixPlan, MatrixCapture
 from .measurement_output import (
@@ -22,6 +23,7 @@ from .measurement_output import (
     save_matrix_capture,
     sha256_file,
 )
+from .recipe_roi import crop_channel_frame, validate_channel_rois
 from .measurement_execution_plan import build_measurement_execution_plan
 from .measurement_snapshot import (
     build_el_matrix_snapshot,
@@ -64,6 +66,8 @@ class MatrixRuntimeProgress:
     remaining_captures: int = 0
     remaining_time_s: float = 0.0
     estimated_finish: datetime | None = None
+    estimate_mode: str = "matrix"
+    remaining_ae_conditions: int = 0
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,7 @@ class DarkIVScanCompleted:
 
 
 class ELMatrixHardware(Protocol):
+    def set_channel_roi(self, roi: tuple[int, int, int, int], check_cancel: Callable[[], None]) -> None: ...
     def prepare_shared_dark(self) -> None: ...
     def route_channel(self, logical_channel: str, check_cancel: Callable[[], None]) -> None: ...
     def run_polarity(self, channel: ChannelRecipe, check_cancel: Callable[[], None]) -> dict[str, Any]: ...
@@ -100,6 +105,7 @@ class ELMatrixHardware(Protocol):
     def readback(self) -> Any: ...
     def capture(self, exposure_ms: float, gain_percent: int, timeout_s: float,
                 check_cancel: Callable[[], None]) -> CapturedFrame: ...
+    def auto_exposure(self, settings: Any, check_cancel: Callable[[], None]) -> dict[str, Any]: ...
     def output_off(self) -> None: ...
     def clear_routing(self) -> None: ...
     def safe_shutdown(self) -> Mapping[str, bool]: ...
@@ -116,8 +122,11 @@ def interruptible_wait(seconds: float, check_cancel: Callable[[], None]) -> None
 
 
 class _RuntimeETA:
-    def __init__(self, plan: ELMatrixPlan) -> None:
+    def __init__(self, plan: ELMatrixPlan, *, clock: Callable[[], float] | None = None) -> None:
         self.plan = plan
+        self.clock = clock or monotonic
+        self.active_started: float | None = None
+        self.active_budget_s = 0.0
         self.remaining_exposure_s = sum(plan.exposure_sequence_after(0))
         self.remaining_captures = plan.estimate().overall_captures
         self.observed_overhead_s = plan.matrix.estimated_capture_overhead_s
@@ -126,8 +135,54 @@ class _RuntimeETA:
             0.0, plan.estimate().total_time_s - self.remaining_exposure_s
             - self.remaining_captures * self.observed_overhead_s,
         )
+        self.unresolved_conditions = plan.auto_unresolved_conditions
+        self._dark_count = plan.capture_counts()["shared_dark"]
+        self._condition_bound_s = sum(plan.exposures_ms) / 1000.0
+        self._dark_exposure_s = (self._dark_count * self._condition_bound_s / len(plan.exposures_ms)
+                                 if plan.matrix.exposure_mode == "auto" else 0.0)
+
+    @property
+    def estimate_mode(self) -> str:
+        if self.plan.matrix.exposure_mode != "auto":
+            return "matrix"
+        return "auto_upper_bound" if self.unresolved_conditions else "auto_resolved"
+
+    def begin_fixed(self, seconds: float) -> None:
+        self.active_started = self.clock()
+        self.active_budget_s = max(0.0, seconds)
+
+    def finish_fixed(self) -> None:
+        self.consume_fixed(self.active_budget_s)
+        self.active_started = None
+        self.active_budget_s = 0.0
+
+    def begin_capture(self, exposure_s: float) -> None:
+        self.begin_fixed(exposure_s + self.observed_overhead_s)
+
+    def resolve_auto_exposure(self, exposure_s: float,
+                              profiles: Mapping[tuple[int, float], Any]) -> None:
+        """Replace this condition's EL/Dark bounds as soon as AE resolves."""
+        self.unresolved_conditions = max(0, self.unresolved_conditions - 1)
+        self.plan.auto_dark_profiles = tuple(profiles)
+        self.plan.auto_unresolved_conditions = self.unresolved_conditions
+        maximum_s = self._condition_bound_s
+        dark_count = dark_exposure_s = 0
+        if self.plan.matrix.dark_frame_enabled:
+            dark_count = (self.unresolved_conditions * len(self.plan.exposures_ms)
+                          + len(profiles)) * self.plan.repeat
+            dark_exposure_s = self.plan.repeat * (
+                self.unresolved_conditions * maximum_s
+                + sum(exposure / 1000.0 for _gain, exposure in profiles)
+            )
+        self.remaining_captures += dark_count - self._dark_count
+        self.remaining_exposure_s = max(0.0,
+            self.remaining_exposure_s + dark_exposure_s - self._dark_exposure_s
+            - self.plan.repeat * (maximum_s - exposure_s))
+        self._dark_count, self._dark_exposure_s = dark_count, dark_exposure_s
 
     def complete_capture(self, exposure_s: float, elapsed_s: float) -> None:
+        self.active_started = None
+        self.active_budget_s = 0.0
         overhead = max(0.0, elapsed_s - exposure_s)
         self.samples += 1
         alpha = 1.0 / min(self.samples, 20)
@@ -139,11 +194,13 @@ class _RuntimeETA:
         self.remaining_fixed_s = max(0.0, self.remaining_fixed_s - max(0.0, seconds))
 
     def remaining_s(self) -> float:
-        return (
+        active_elapsed_s = (max(0.0, self.clock() - self.active_started)
+                            if self.active_started is not None else 0.0)
+        return max(0.0, (
             self.remaining_exposure_s
             + self.remaining_captures * self.observed_overhead_s
             + self.remaining_fixed_s
-        )
+        ) - min(active_elapsed_s, self.active_budget_s))
 
 
 def _execution_order(recipe: Recipe) -> list[dict[str, Any]]:
@@ -191,6 +248,14 @@ class ELMatrixRunner:
             )
         self.snapshot = measurement_snapshot
         self.recipe = isolated
+        camera = snapshot_payload(self.snapshot).get("camera", {})
+        self.channel_rois = None
+        if "ChannelROIs" in camera:
+            self.channel_rois = validate_channel_rois(
+                camera["ChannelROIs"], [item.channel for item in isolated.enabled_channels()],
+                int(camera["ImageWidth"]), int(camera["ImageHeight"]),
+            )
+        self._roi_source_size = (camera.get("ImageWidth"), camera.get("ImageHeight"))
         self.plan = ELMatrixPlan(
             isolated,
             sample_ids=self.sample_ids,
@@ -218,9 +283,11 @@ class ELMatrixRunner:
         self._polarity: dict[str, dict[str, Any]] = {}
         self._run_started = 0.0
         self._output_started: float | None = None
-        self._last_remaining = self.plan.estimate().total_time_s
-        self._last_finish: datetime | None = None
+        self._last_progress: MatrixRuntimeProgress | None = None
+        self._last_progress_at = monotonic()
         self._shared_dark_frames: dict[tuple[int, float], list[np.ndarray]] = {}
+        self._auto_dark_profiles: dict[tuple[int, float], dict[str, Any]] = {}
+        self._active_ae_metadata: dict[str, Any] = {}
 
     def check_cancel(self) -> None:
         if self.is_cancel_requested():
@@ -235,6 +302,11 @@ class ELMatrixRunner:
             raise RuntimeError(
                 "Runtime watchdog: max_output_time_s exceeded for electrical setpoint"
             )
+        if self._last_progress is not None and monotonic() - self._last_progress_at >= 1.0:
+            remaining, finish = self._progress_time()
+            self._report_runtime_progress(replace(
+                self._last_progress, remaining_time_s=remaining, estimated_finish=finish,
+            ))
 
     def run(self) -> dict[str, Any]:
         self.run_directory.mkdir(parents=True, exist_ok=False)
@@ -249,10 +321,17 @@ class ELMatrixRunner:
             else:
                 self._configure_recipe_polarity()
             if "dark_frame" in self.execution_plan.keys:
+                self._eta.begin_fixed(self.plan.matrix.estimated_shared_dark_overhead_s)
                 self.hardware.prepare_shared_dark()
+                self._eta.finish_fixed()
                 self._run_shared_dark_once()
             for channel_index, channel in enumerate(self.plan.channels, start=1):
                 self._run_channel(channel, channel_index)
+            if "auto_dark_frame" in self.execution_plan.keys:
+                self._eta.begin_fixed(self.plan.matrix.estimated_shared_dark_overhead_s)
+                self.hardware.prepare_shared_dark()
+                self._eta.finish_fixed()
+                self._run_shared_dark_once()
             self.check_cancel()
             final_manifest = self._write_final_files_manifest()
             result = {
@@ -285,22 +364,22 @@ class ELMatrixRunner:
         self._phase(phase, f"Routing {channel.channel}", channel, channel_index)
         self.hardware.output_off()
         self.hardware.clear_routing()
-        started = monotonic()
+        self._eta.begin_fixed(self.plan.matrix.estimated_routing_transition_s)
         self.hardware.route_channel(channel.channel, self.check_cancel)
-        self._eta.consume_fixed(monotonic() - started)
+        self._eta.finish_fixed()
 
     def _run_all_polarities(self) -> None:
         for index, channel in enumerate(self.plan.channels, start=1):
             self._route(channel, index, "Polarity Routing")
             self._phase("Polarity Check", channel.channel, channel, index)
-            started = monotonic()
+            self._eta.begin_fixed(self.plan.matrix.estimated_polarity_duration_s)
             result = self.hardware.run_polarity(channel, self.check_cancel)
             factor = result.get("polarity_factor")
             if result.get("polarity_check_status") != "COMPLETED" or factor not in (-1, 1):
                 raise RuntimeError(f"{channel.channel} polarity could not be reliably determined")
             self._polarity[channel.channel] = dict(result)
             self._save_polarity(channel, result)
-            self._eta.consume_fixed(monotonic() - started)
+            self._eta.finish_fixed()
         self.hardware.output_off()
         self.hardware.clear_routing()
 
@@ -334,41 +413,49 @@ class ELMatrixRunner:
         applicable = [channel.channel for channel in self.plan.channels]
         dark_total = self.plan.estimate().shared_dark_captures
         dark_index = 0
-        for gain in self.plan.gains_percent:
-            for exposure in self.plan.exposures_ms:
-                for repeat_index in range(1, self.plan.repeat + 1):
-                    dark_index += 1
-                    capture = MatrixCapture(
-                        measurement_type="DARK",
-                        channel="SHARED",
-                        sample_id=", ".join(applicable),
-                        area_cm2=None,
-                        output_mode=None,
-                        current_density_ma_cm2=None,
-                        commanded_voltage_v=None,
-                        commanded_physical_current_a=None,
-                        commanded_physical_voltage_v=None,
-                        gain_percent=gain,
-                        exposure_ms=exposure,
-                        repeat_index=repeat_index,
-                        repeat_total=self.plan.repeat,
-                        channel_capture_index=dark_index,
-                        channel_capture_total=dark_total,
-                        overall_index=self._completed + 1,
-                        overall_total=self.plan.estimate().overall_captures,
-                    )
-                    self._capture_and_save(capture, None, applicable)
+        profiles = (tuple(self._auto_dark_profiles) if self.plan.matrix.exposure_mode == "auto"
+                    else tuple((gain, exposure) for gain in self.plan.gains_percent
+                               for exposure in self.plan.exposures_ms))
+        for gain, exposure in profiles:
+            self._active_ae_metadata = self._auto_dark_profiles.get((gain, exposure), {})
+            for repeat_index in range(1, self.plan.repeat + 1):
+                dark_index += 1
+                capture = MatrixCapture(
+                    measurement_type="DARK",
+                    channel="SHARED",
+                    sample_id=", ".join(applicable),
+                    area_cm2=None,
+                    output_mode=None,
+                    current_density_ma_cm2=None,
+                    commanded_voltage_v=None,
+                    commanded_physical_current_a=None,
+                    commanded_physical_voltage_v=None,
+                    gain_percent=gain,
+                    exposure_ms=exposure,
+                    repeat_index=repeat_index,
+                    repeat_total=self.plan.repeat,
+                    channel_capture_index=dark_index,
+                    channel_capture_total=dark_total,
+                    overall_index=self._completed + 1,
+                    overall_total=self.plan.estimate().overall_captures,
+                )
+                self._capture_and_save(capture, None, applicable)
 
     def _run_channel(self, channel: ChannelRecipe, channel_index: int) -> None:
+        if self.channel_rois is not None:
+            self.check_cancel()
+            self.hardware.set_channel_roi(self.channel_rois[channel.channel], self.check_cancel)
         self._route(channel, channel_index, "Channel Switching")
         polarity = self._polarity[channel.channel]
         self.hardware.apply_polarity_factor(int(polarity["polarity_factor"]))
         if self.recipe.dark_iv.enabled:
             self.hardware.prepare_channel_dark()
             self._phase("Dark Stabilization", channel.channel, channel, channel_index)
-            started = monotonic()
+            self._eta.begin_fixed(self.recipe.dark_iv.dark_stabilization_s)
             interruptible_wait(self.recipe.dark_iv.dark_stabilization_s, self.check_cancel)
-            self._eta.consume_fixed(monotonic() - started)
+            self._eta.finish_fixed()
+            self._eta.begin_fixed(max(0.0, self.recipe.dark_iv_estimated_time_s()
+                                     - self.recipe.dark_iv.dark_stabilization_s))
             self._phase("Dark I-V", channel.channel, channel, channel_index)
             self._output_started = monotonic()
             repeat_total = max(1, int(self.recipe.dark_iv.repeat_count))
@@ -395,6 +482,7 @@ class ELMatrixRunner:
                 )
             finally:
                 self._output_started = None
+            self._eta.finish_fixed()
             png_path = self._save_dark_iv(channel, rows)
             self.report_progress(DarkIVScanCompleted(
                 channel=channel.channel,
@@ -429,6 +517,7 @@ class ELMatrixRunner:
                     ))
                     condition = f"J={density:g} mA/cm²"
                 self._output_started = monotonic()
+                self._eta.begin_fixed(self.plan.matrix.stabilization_ms / 1000.0)
                 self._phase(
                     "Output Stabilization",
                     f"{channel.channel} — {condition}",
@@ -436,32 +525,67 @@ class ELMatrixRunner:
                     channel_index,
                 )
                 interruptible_wait(self.plan.matrix.stabilization_ms / 1000.0, self.check_cancel)
-                for gain in self.plan.gains_percent:
-                    for exposure in self.plan.exposures_ms:
-                        for repeat_index in range(1, self.plan.repeat + 1):
-                            channel_completed += 1
-                            capture = MatrixCapture(
-                                measurement_type="EL",
-                                channel=channel.channel,
-                                sample_id=self.sample_ids[channel.channel],
-                                area_cm2=channel.area_cm2,
-                                output_mode=self.plan.matrix.output_mode,
-                                current_density_ma_cm2=density,
-                                commanded_voltage_v=voltage,
-                                commanded_physical_current_a=physical_current_a,
-                                commanded_physical_voltage_v=physical_voltage_v,
-                                gain_percent=gain,
-                                exposure_ms=exposure,
-                                repeat_index=repeat_index,
-                                repeat_total=self.plan.repeat,
-                                channel_index=channel_index,
-                                channel_total=len(self.plan.channels),
-                                channel_capture_index=channel_completed,
-                                channel_capture_total=channel_capture_total,
-                                overall_index=self._completed + 1,
-                                overall_total=self.plan.estimate().overall_captures,
-                            )
-                            self._capture_and_save(capture, channel, None)
+                self._eta.finish_fixed()
+                if self.plan.matrix.exposure_mode == "auto":
+                    self._eta.begin_fixed(self.plan.matrix.auto_timeout_s)
+                    self._phase("Auto Exposure", f"{channel.channel} — {condition}", channel, channel_index)
+                    result = self.hardware.auto_exposure(self.plan.matrix, self.check_cancel)
+                    self.check_cancel()
+                    gain = int(result["gain_percent"])
+                    exposure = int(result["exposure_us"]) / 1000.0
+                    if (not 0 < exposure <= self.plan.matrix.auto_max_exposure_ms
+                            or gain < 100
+                            or (self.plan.matrix.auto_gain_mode == "fixed"
+                                and gain != self.plan.matrix.auto_gain_percent)):
+                        raise RuntimeError("Recipe AE returned invalid Exposure/Gain")
+                    from .recipe_ae_stops import baseline_range_us, bracket_exposures_us
+                    minimum, maximum = baseline_range_us(
+                        self.plan.matrix.auto_exposure_stops, self.plan.matrix.auto_max_exposure_ms)
+                    baseline_us = int(result["exposure_us"])
+                    if not minimum <= baseline_us <= maximum:
+                        raise RuntimeError("Recipe AE baseline cannot accommodate the requested Stop list")
+                    bracket_us = bracket_exposures_us(baseline_us, self.plan.matrix.auto_exposure_stops)
+                    profiles = tuple((gain, value / 1000.0) for value in bracket_us)
+                    condition_metadata = {
+                        profile: {**result["metadata"],
+                                  "RecipeAEBaselineExposureUs": baseline_us,
+                                  "RecipeAEStop": stop}
+                        for profile, stop in zip(profiles, self.plan.matrix.auto_exposure_stops)
+                    }
+                    self._auto_dark_profiles.update(condition_metadata)
+                    self._eta.finish_fixed()
+                    self._eta.resolve_auto_exposure(sum(bracket_us) / 1_000_000.0, self._auto_dark_profiles)
+                    self._phase("Auto Exposure", tr("recipe.estimate_ae_locked"), channel, channel_index)
+                else:
+                    profiles = tuple((gain, exposure) for gain in self.plan.gains_percent
+                                     for exposure in self.plan.exposures_ms)
+                for gain, exposure in profiles:
+                    if self.plan.matrix.exposure_mode == "auto":
+                        self._active_ae_metadata = condition_metadata[(gain, exposure)]
+                    for repeat_index in range(1, self.plan.repeat + 1):
+                        channel_completed += 1
+                        capture = MatrixCapture(
+                            measurement_type="EL",
+                            channel=channel.channel,
+                            sample_id=self.sample_ids[channel.channel],
+                            area_cm2=channel.area_cm2,
+                            output_mode=self.plan.matrix.output_mode,
+                            current_density_ma_cm2=density,
+                            commanded_voltage_v=voltage,
+                            commanded_physical_current_a=physical_current_a,
+                            commanded_physical_voltage_v=physical_voltage_v,
+                            gain_percent=gain,
+                            exposure_ms=exposure,
+                            repeat_index=repeat_index,
+                            repeat_total=self.plan.repeat,
+                            channel_index=channel_index,
+                            channel_total=len(self.plan.channels),
+                            channel_capture_index=channel_completed,
+                            channel_capture_total=channel_capture_total,
+                            overall_index=self._completed + 1,
+                            overall_total=self.plan.estimate().overall_captures,
+                        )
+                        self._capture_and_save(capture, channel, None)
                 self.check_cancel()
                 self.hardware.output_off()
                 self._output_started = None
@@ -556,6 +680,8 @@ class ELMatrixRunner:
                           applicable_channels: list[str] | None) -> np.ndarray:
         self.check_cancel()
         started = monotonic()
+        self._eta.begin_capture(capture.exposure_ms / 1000.0)
+        self._emit_capture_progress(capture, channel, in_progress=True)
         frame = self.hardware.capture(
             capture.exposure_ms, capture.gain_percent,
             self.recipe.el_matrix.capture_timeout_s, self.check_cancel,
@@ -573,21 +699,40 @@ class ELMatrixRunner:
         metadata["PixelCsvPostprocessStatus"] = (
             "pending" if self.recipe.output.export_pixel_csv else "not_requested"
         )
-        saved = save_matrix_capture(
-            frame.scientific_image,
-            frame.image,
-            output_stem,
-            metadata,
-            self.recipe.output,
-        )
-        metadata.update(saved.file_hashes)
-        append_manifest(self.run_directory / "measurement_manifest.csv", metadata)
+        source = np.asarray(frame.scientific_image)
+        if self.channel_rois is None:
+            products = [(None, source, output_stem)]
+        else:
+            if source.ndim != 2 or (source.shape[1], source.shape[0]) != self._roi_source_size:
+                raise RuntimeError("Recipe ROI source resolution changed during measurement")
+            targets = ([capture.channel] if channel is not None else list(self.channel_rois))
+            products = [
+                (name, crop_channel_frame(source, self.channel_rois[name]),
+                 output_stem if channel is not None else
+                 output_stem.parent / name / (output_stem.name + "_" + name + "_ROI" + name[2:]))
+                for name in targets
+            ]
+        for name, pixels, target in products:
+            self.check_cancel()
+            product_metadata = dict(metadata)
+            if name is not None:
+                product_metadata.update({
+                    "Channel": name, "SampleID": self.sample_ids[name],
+                    "ROIId": "ROI" + name[2:], "ChannelROI": list(self.channel_rois[name]),
+                    "SourceImageWidth": source.shape[1], "SourceImageHeight": source.shape[0],
+                    "ImageWidth": pixels.shape[1], "ImageHeight": pixels.shape[0],
+                    "ScientificShape": list(pixels.shape),
+                })
+                if capture.measurement_type == "DARK":
+                    product_metadata.update({"ApplicableChannels": [name], "DarkScope": "CHANNEL_ROI"})
+            saved = save_matrix_capture(pixels, frame.image, target, product_metadata, self.recipe.output)
+            product_metadata.update(saved.file_hashes)
+            append_manifest(self.run_directory / "measurement_manifest.csv", product_metadata)
         elapsed = monotonic() - started
         self._completed += 1
         self._eta.complete_capture(capture.exposure_ms / 1000.0, elapsed)
         self._emit_capture_progress(capture, channel)
-        source = np.asarray(frame.scientific_image)
-        if capture.measurement_type == "DARK":
+        if capture.measurement_type == "DARK" and self.channel_rois is None:
             self._shared_dark_frames.setdefault(
                 (int(capture.gain_percent), float(capture.exposure_ms)), []
             ).append(source.copy())
@@ -667,6 +812,11 @@ class ELMatrixRunner:
             "Polarity": None, "PolarityFactor": None, "Jsc": None, "Voc": None,
             "PolarityTimestamp": None, "SnapshotSha256": self.snapshot["snapshot_sha256"],
             **frame.camera_metadata,
+            "RecipeExposureMode": self.plan.matrix.exposure_mode,
+            "RecipeAEGainMode": (self.plan.matrix.auto_gain_mode
+                                 if self.plan.matrix.exposure_mode == "auto" else None),
+            "RecipeAEConverged": (True if self.plan.matrix.exposure_mode == "auto" else None),
+            **self._active_ae_metadata,
         }
         if capture.measurement_type == "DARK":
             metadata.update({"DarkScope": "SHARED_SUBSTRATE", "SharedDark": True,
@@ -715,19 +865,22 @@ class ELMatrixRunner:
         return target
 
     def _progress_time(self) -> tuple[float, datetime]:
-        remaining = min(self._last_remaining, max(0.0, self._eta.remaining_s()))
+        remaining = self._eta.remaining_s()
         finish = self.now() + timedelta(seconds=remaining)
-        if self._last_finish is not None and finish > self._last_finish:
-            finish = self._last_finish
-            remaining = max(0.0, (finish - self.now()).total_seconds())
-        self._last_remaining = remaining
-        self._last_finish = finish
         return remaining, finish
 
+    def _report_runtime_progress(self, progress: MatrixRuntimeProgress) -> None:
+        progress = replace(progress, estimate_mode=self._eta.estimate_mode,
+                           remaining_ae_conditions=(self._eta.unresolved_conditions
+                               if self.plan.matrix.exposure_mode == "auto" else 0))
+        self._last_progress = progress
+        self._last_progress_at = monotonic()
+        self.report_progress(progress)
+
     def _emit_capture_progress(self, capture: MatrixCapture,
-                               channel: ChannelRecipe | None) -> None:
+                               channel: ChannelRecipe | None, *, in_progress: bool = False) -> None:
         remaining_s, finish = self._progress_time()
-        self.report_progress(MatrixRuntimeProgress(
+        self._report_runtime_progress(MatrixRuntimeProgress(
             phase="Shared Dark" if channel is None else "EL", current=self._completed,
             total=self.plan.estimate().overall_captures, channel=capture.channel,
             sample_id=capture.sample_id, channel_index=capture.channel_index,
@@ -737,7 +890,7 @@ class ELMatrixRunner:
             commanded_voltage_v=capture.commanded_voltage_v,
             gain_percent=capture.gain_percent, exposure_ms=capture.exposure_ms,
             repeat_index=capture.repeat_index, repeat_total=capture.repeat_total,
-            channel_completed=capture.channel_capture_index,
+            channel_completed=max(0, capture.channel_capture_index - int(in_progress)),
             channel_capture_total=capture.channel_capture_total,
             remaining_captures=self.plan.estimate().overall_captures - self._completed,
             remaining_time_s=remaining_s, estimated_finish=finish,
@@ -747,7 +900,7 @@ class ELMatrixRunner:
                channel_index: int = 0) -> None:
         remaining_s, finish = self._progress_time()
         total = self.plan.estimate().overall_captures
-        self.report_progress(MatrixRuntimeProgress(
+        self._report_runtime_progress(MatrixRuntimeProgress(
             phase=phase, current=self._completed, total=total, message=message,
             channel="" if channel is None else channel.channel,
             sample_id="" if channel is None else self.sample_ids[channel.channel],

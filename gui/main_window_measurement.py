@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QThread
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QDialog, QMessageBox
 
 from core.i18n import tr
 
@@ -39,6 +39,8 @@ from .pixel_csv_postprocessor import (
 )
 from .polarity_settings import PolarityMeasurementSettings
 from .recipe_store import Recipe
+from .recipe_roi import validate_channel_rois
+from .recipe_roi_dialog import RecipeROIDialog
 from .numeric import format_voltage_number
 from .smu_control import SMUInterlockError, SMUOwnership
 
@@ -124,10 +126,12 @@ def _set_measurement_controls_locked(self: Any, locked: bool) -> None:
     names = (
         "white_light_button", "relay_settings_action", "recipe_manager_action",
         "polarity_settings_action", "resolution_combo",
+        "camera_auto_exposure_settings_action",
         "exposure_mode_combo", "exposure_spin", "gain_spin", "apply_manual_button",
         "capture_button", "auto_capture_button", "capture_action", "auto_capture_action",
         "connect_action", "manual_smu_panel", "device_panel", "measurement_path_button",
         "measurement_path_edit",
+        "select_dn_roi_button", "clear_dn_roi_button",
     )
     if locked:
         states: list[tuple[Any, bool]] = []
@@ -347,16 +351,26 @@ def _validate_camera_matrix(self: Any) -> list[str]:
     if recipe is None:
         return [tr("measurement.recipe_not_selected")]
     errors = recipe.validate(self.smu_manager.control.safety.limits)
+    if errors:
+        return errors
     exposure_range = self.camera_info.get("exposure_range_us")
     gain_range = self.camera_info.get("gain_range")
     axes = effective_matrix_capture_axes(recipe)
-    if not axes.exposures_ms or not axes.gains_percent or axes.repeat < 1:
+    if (not axes.exposures_ms or axes.repeat < 1
+            or (recipe.el_matrix.exposure_mode == "manual" and not axes.gains_percent)):
         errors.append(tr("measurement.validation.capture_conditions_empty"))
     elif max(axes.exposures_ms) / 1000.0 > recipe.el_matrix.capture_timeout_s:
         errors.append(tr("measurement.validation.timeout_exposure"))
     constrained_range = constrained_exposure_range_us(exposure_range)
     if constrained_range:
         low, high = (float(value) for value in constrained_range)
+        if recipe.el_matrix.exposure_mode == "auto":
+            from .recipe_ae_stops import baseline_range_us
+            try:
+                baseline_range_us(recipe.el_matrix.auto_exposure_stops,
+                                  recipe.el_matrix.auto_max_exposure_ms, constrained_range)
+            except ValueError:
+                errors.append(tr("recipe.validation.auto_stops"))
         if any(not low <= value * 1000.0 <= high for value in axes.exposures_ms):
             errors.append(tr("measurement.validation.exposure_range", low=f"{low / 1000:g}", high=f"{high / 1000:g}"))
     else:
@@ -395,15 +409,18 @@ def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
                 f"{value:g}" for value in recipe.el_matrix.current_density_ma_cm2
             ),
         )
-    return tr(
+    summary = tr(
         "measurement.summary",
         order=order,
         channels=" / ".join(channel.channel for channel in plan.channels),
         channel_count=len(plan.channels),
         samples=samples,
         electrical=electrical,
-        gains=", ".join(str(value) for value in plan.gains_percent),
-        exposures=", ".join(f"{value:g}" for value in plan.exposures_ms),
+        gains=(tr("recipe.auto_gain") if recipe.el_matrix.exposure_mode == "auto"
+               and recipe.el_matrix.auto_gain_mode == "auto"
+               else ", ".join(str(value) for value in plan.gains_percent)),
+        exposures=(tr("recipe.auto_exposure") if recipe.el_matrix.exposure_mode == "auto"
+                   else ", ".join(f"{value:g}" for value in plan.exposures_ms)),
         repeat=plan.repeat,
         shared_dark=estimate.shared_dark_captures,
         per_channel=estimate.el_per_channel,
@@ -414,9 +431,119 @@ def _measurement_summary(self: Any, plan: ELMatrixPlan) -> str:
         output_on_time=format_duration(estimate.output_on_per_setpoint_s),
         finish_time=format_finish_time(estimate.estimated_finish),
     )
+    if recipe.el_matrix.exposure_mode == "auto":
+        summary += "\n" + tr("recipe.ae_stops") + ": " + ", ".join(
+            f"{value:+g}" for value in recipe.el_matrix.auto_exposure_stops)
+        summary += "\n\n" + tr("recipe.estimate_auto") + "\n" + tr(
+            "recipe.estimate_auto_budget", duration=format_duration(estimate.auto_exposure_time_s),
+        )
+        summary += "\n\n" + tr("recipe.ae_warning")
+    return summary + "\n\n" + tr("recipe.estimate_scope")
+
+
+def _select_recipe_rois(self: Any, recipe: Recipe) -> dict | None:
+    """Own the instruments while the operator selects under relay white light."""
+    control = self.smu_manager.control
+    rois = None
+    error = None
+    locked = False
+    old_roi = self.controller.auto_exposure_roi
+    state = dict(self.controller.capture_metadata())
+    self._measurement_starting = True
+    dialog = None
+    try:
+        if control.ownership is SMUOwnership.MANUAL:
+            answer = QMessageBox.question(
+                self, tr("measurement.manual_smu_active"),
+                tr("measurement.manual_smu_active_question", detail=""),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return None
+        self.emergency_manager.begin_operator_operation()
+        control.prepare_recipe_start(close_manual=True)
+        _set_measurement_controls_locked(self, True)
+        locked = True
+        if hasattr(self, "light_service") and not self._prepare_light_for_measurement("recipe_roi"):
+            raise RuntimeError(tr("light.dark_unconfirmed"))
+        if not control.confirm_output_off_for_routing():
+            raise RuntimeError(tr("preflight.smu_off_unconfirmed"))
+        if not self.relay_service.safe_smu_output_channels_off("recipe_roi"):
+            raise RuntimeError(tr("recipe.roi_routing_failed"))
+        if not self.controller.reset_auto_exposure_roi():
+            raise RuntimeError(tr("camera.roi_sdk_verification_failed"))
+        self.relay_service.group_on("white_light", "recipe_roi")
+        if self.emergency_manager.is_active:
+            return None
+        dialog = RecipeROIDialog(self.controller,
+                                 [channel.channel for channel in recipe.enabled_channels()],
+                                 parent=self)
+        emergency_slot = lambda *_args: dialog.reject()
+        self.emergency_manager.triggered.connect(emergency_slot)
+        try:
+            if not self.controller.enable_continuous_auto_exposure():
+                raise RuntimeError(tr("camera.roi_sdk_verification_failed"))
+            if dialog.error or not self.controller.is_open or self.emergency_manager.is_active:
+                raise RuntimeError(dialog.error or tr("preflight.camera_disconnected"))
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self.emergency_manager.triggered.disconnect(emergency_slot)
+        if dialog.error:
+            raise RuntimeError(dialog.error)
+        if accepted and not self.emergency_manager.is_active:
+            current = self.controller.capture_metadata()
+            rois = validate_channel_rois(
+                dialog.rois, [channel.channel for channel in recipe.enabled_channels()],
+                int(current["ImageWidth"]), int(current["ImageHeight"]),
+            )
+    except Exception as exc:
+        error = str(exc)
+    finally:
+        try:
+            if not self.relay_service.safe_white_light_off("recipe_roi_cleanup"):
+                raise RuntimeError(tr("recipe.roi_light_off_failed"))
+        except Exception as exc:
+            error = str(exc)
+            rois = None
+        try:
+            if self.controller.is_open and not self.emergency_manager.is_active:
+                if not self.controller.disable_auto_exposure_for_formal_measurement():
+                    raise RuntimeError(tr("camera.roi_sdk_verification_failed"))
+                restored = (self.controller.set_auto_exposure_roi(*old_roi)
+                            if old_roi is not None else self.controller.reset_auto_exposure_roi())
+                if not restored:
+                    raise RuntimeError(tr("camera.roi_sdk_verification_failed"))
+                # Preview AE is temporary. Return to the pre-dialog manual
+                # exposure; formal Recipe steps will own subsequent settings.
+                self.controller.restore_exposure_state({**state, "AutoExposureMode": "manual"})
+        except Exception as exc:
+            error = "; ".join(filter(None, (error, str(exc))))
+            rois = None
+        try:
+            if control.ownership is SMUOwnership.RECIPE:
+                if not control.safe_shutdown(SMUOwnership.RECIPE):
+                    raise RuntimeError(tr("measurement.safe_shutdown_failed"))
+        except Exception as exc:
+            error = "; ".join(filter(None, (error, str(exc))))
+            rois = None
+        finally:
+            if hasattr(self, "light_service"):
+                self.light_service.set_locked("recipe_roi", False)
+            if locked:
+                _set_measurement_controls_locked(self, False)
+            self._measurement_starting = False
+            self._update_white_light_control()
+            if dialog is not None:
+                dialog.deleteLater()
+    if error:
+        report_error(self, "MEAS-101", context={"operation": "recipe_roi", "actual": error})
+    return rois
 
 
 def begin_el_matrix_measurement(self: Any) -> None:
+    if getattr(self, "_measurement_starting", False) or getattr(self, "_measurement_thread", None) is not None:
+        return
     if self.selected_recipe is not None:
         missing = self.measurement_control_bar.missing_sample_channels()
         if missing:
@@ -537,6 +664,36 @@ def begin_el_matrix_measurement(self: Any) -> None:
             context={"operation": "el_matrix_preflight", "actual": preflight},
         )
         return
+    channel_rois = _select_recipe_rois(self, frozen_recipe)
+    if channel_rois is None:
+        return
+    camera_snapshot["ChannelROIs"] = channel_rois
+    # Rebuild the immutable snapshot so selected source geometry is covered by
+    # its hash and cannot change while a measurement is running.
+    snapshot = build_el_matrix_snapshot(
+        snapshot_recipe, execution_order=execution_plan.to_dict()["steps"],
+        camera=camera_snapshot, smu=smu_metadata, relay_mapping=relay_mapping,
+        polarity_settings=self.polarity_settings_store.settings, sample_ids=sample_ids,
+        global_safety=self.smu_manager.control.safety.limits, output_directory=output_root,
+    )
+    # Recheck readiness after the interactive wait; selection can last minutes.
+    current_camera = dict(self.controller.capture_metadata())
+    current_camera.update({
+        "exposure_range_us": self.camera_info.get("exposure_range_us"),
+        "gain_range": self.camera_info.get("gain_range"),
+    })
+    preflight = collect_preflight_errors(
+        frozen_recipe, smu_metadata=self.smu_manager.connection_metadata(
+            selected.visa_address if selected is not None else ""),
+        smu_output_confirmed_off=self.smu_manager.control.confirm_output_off_for_routing(),
+        relay_connected=self.relay_controller.connected,
+        relay_settings=self.relay_settings_store.settings, camera_connected=self.controller.is_open,
+        camera_snapshot=camera_snapshot, current_camera=current_camera, output_root=output_root,
+        global_safety=self.smu_manager.control.safety.limits,
+    )
+    if preflight:
+        report_error(self, "MEAS-101", context={"operation": "post_roi_preflight", "actual": preflight})
+        return
     bridge = getattr(self, "_camera_capture_bridge", None)
     if bridge is None:
         bridge = CameraCaptureBridge(self.controller, self)
@@ -603,7 +760,9 @@ def begin_el_matrix_measurement(self: Any) -> None:
             result["postprocess"] = {"status": "not_requested", "total_files": 0}
         return result
 
+    self._recipe_rois_active = True
     if not start_background_measurement(self, run):
+        self._recipe_rois_active = False
         dialog.set_stopped()
         dialog.close()
 
@@ -652,6 +811,14 @@ def _clear_measurement_worker(self: Any) -> None:
     self._measurement_hardware_active = False
     if hasattr(self, "light_service"):
         self.light_service.set_locked("recipe", False)
+    if getattr(self, "_recipe_rois_active", False):
+        self._recipe_rois_active = False
+        if self.controller.is_open and not self.emergency_manager.is_active:
+            roi = getattr(self, "_live_view_dn_roi", None)
+            if roi is None:
+                self.controller.reset_auto_exposure_roi()
+            else:
+                self.controller.set_auto_exposure_roi(*roi)
     self.stop_measurement_button.setEnabled(False)
     _set_measurement_controls_locked(self, False)
     self._update_measurement_controls()

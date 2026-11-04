@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from threading import Event, Lock
 from time import monotonic
-from typing import Callable
+from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QImage
@@ -36,23 +36,56 @@ class _PendingCapture:
     capture_diagnostics: dict[str, object] | None = None
 
 
+@dataclass
+class _PendingAutoExposure:
+    settings: dict[str, Any]
+    event: Event
+    state: dict[str, Any]
+    result: dict[str, Any] | None = None
+    error: str = ""
+    active: bool = True
+
+
+@dataclass
+class _PendingROI:
+    roi: tuple[int, int, int, int]
+    event: Event
+    active: bool = True
+    error: str = ""
+
+
 class CameraCaptureBridge(QObject):
     """Use the next formal pull-mode frame; never starts a second camera stream."""
 
     configure_requested = Signal(int, int, int)
     restore_requested = Signal(object, object, object)
     cleanup_requested = Signal(object, object)
+    auto_exposure_requested = Signal(object)
+    auto_exposure_cleanup_requested = Signal(object, object, object)
+    roi_requested = Signal(object)
 
     def __init__(self, controller: CameraController, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.controller = controller
         self._lock = Lock()
         self._pending: _PendingCapture | None = None
+        self._pending_ae: _PendingAutoExposure | None = None
+        self._pending_roi: _PendingROI | None = None
         self._token = 0
         self._fallback_sequence = 0
         self.configure_requested.connect(self._configure)
         self.restore_requested.connect(self._restore_state)
         self.cleanup_requested.connect(self._cleanup_trigger_mode)
+        self.auto_exposure_requested.connect(self._begin_auto_exposure)
+        self.auto_exposure_cleanup_requested.connect(self._cleanup_auto_exposure)
+        self.roi_requested.connect(self._set_metering_roi)
+        result_signal = getattr(controller, "auto_exposure_result", None)
+        if result_signal is not None:
+            result_signal.connect(self._on_auto_exposure_result)
+        for signal_name in ("camera_closed", "error_occurred"):
+            signal = getattr(controller, signal_name, None)
+            if signal is not None:
+                signal.connect(self._fail_auto_exposure)
         scientific = getattr(controller, "scientific_frame_ready", None)
         if scientific is not None:
             scientific.connect(self._on_scientific_frame)
@@ -80,7 +113,7 @@ class CameraCaptureBridge(QObject):
     ) -> CapturedFrame:
         settling_frame_count = max(0, int(settling_frames))
         with self._lock:
-            if self._pending is not None:
+            if self._pending is not None or self._pending_ae is not None or self._pending_roi is not None:
                 raise RuntimeError("A camera capture request is already pending")
             self._token += 1
             baseline = int(getattr(self.controller, "frame_sequence", self._fallback_sequence))
@@ -126,6 +159,128 @@ class CameraCaptureBridge(QObject):
                 with self._lock:
                     if self._pending is pending:
                         self._pending = None
+
+    def set_metering_roi(self, roi, check_cancel: Callable[[], None], timeout_s: float = 10.0) -> None:
+        """Apply channel metering on the controller's owner thread, before AE."""
+        check_cancel()
+        pending = _PendingROI(tuple(roi), Event())
+        with self._lock:
+            if self._pending is not None or self._pending_ae is not None or self._pending_roi is not None:
+                raise RuntimeError("A camera request is already pending")
+            self._pending_roi = pending
+        deadline = monotonic() + timeout_s
+        self.roi_requested.emit(pending)
+        try:
+            while not pending.event.wait(0.05):
+                check_cancel()
+                if monotonic() >= deadline:
+                    raise TimeoutError("Channel ROI setting timed out")
+            check_cancel()
+            if pending.error:
+                raise RuntimeError(pending.error)
+        finally:
+            pending.active = False
+            with self._lock:
+                if self._pending_roi is pending:
+                    self._pending_roi = None
+
+    @Slot(object)
+    def _set_metering_roi(self, pending: _PendingROI) -> None:
+        if not pending.active or self._pending_roi is not pending:
+            return
+        try:
+            if not self.controller.set_auto_exposure_roi(*pending.roi):
+                raise RuntimeError("Channel AE ROI readback verification failed")
+        except Exception as exc:
+            pending.error = str(exc)
+        finally:
+            pending.event.set()
+
+    def auto_exposure(
+        self, settings: dict[str, Any], check_cancel: Callable[[], None],
+    ) -> dict[str, Any]:
+        """Run native one-shot AE on the Qt thread; freeze before returning."""
+        check_cancel()
+        pending = _PendingAutoExposure(dict(settings), Event(), {})
+        with self._lock:
+            if self._pending is not None or self._pending_ae is not None or self._pending_roi is not None:
+                raise RuntimeError("A camera request is already pending")
+            self._pending_ae = pending
+        deadline = monotonic() + float(settings["auto_timeout_s"])
+        self.auto_exposure_requested.emit(pending)
+        try:
+            while not pending.event.wait(0.05):
+                check_cancel()
+                if monotonic() >= deadline:
+                    raise TimeoutError("Recipe auto exposure did not converge before timeout")
+            check_cancel()
+            if pending.error:
+                raise RuntimeError(pending.error)
+            if pending.result is None:
+                raise RuntimeError("Recipe AE completed without Exposure/Gain readback")
+            return pending.result
+        finally:
+            pending.active = False
+            completed, response = Event(), {}
+            self.auto_exposure_cleanup_requested.emit(pending, completed, response)
+            try:
+                if not completed.wait(5.0):
+                    raise TimeoutError("Recipe AE cleanup timed out")
+                if response.get("error"):
+                    raise RuntimeError(response["error"])
+            finally:
+                with self._lock:
+                    if self._pending_ae is pending:
+                        self._pending_ae = None
+
+    @Slot(object)
+    def _begin_auto_exposure(self, pending: _PendingAutoExposure) -> None:
+        if not pending.active or self._pending_ae is not pending:
+            return
+        try:
+            from .camera_recipe_ae import begin_recipe_ae
+            begin_recipe_ae(self.controller, pending.settings, pending.state)
+        except Exception as exc:
+            pending.error = str(exc)
+            pending.event.set()
+
+    @Slot(bool, str)
+    def _on_auto_exposure_result(self, success: bool, message: str) -> None:
+        pending = self._pending_ae
+        if pending is None or not pending.active or pending.event.is_set():
+            return
+        try:
+            if not success:
+                raise RuntimeError(message)
+            exposure, gain = self.controller.current_exposure()
+            metadata = dict(pending.state["result_metadata"])
+            if (not metadata["RecipeAEMinExposureMs"] * 1000 <= exposure
+                    <= metadata["RecipeAEMaxExposureMs"] * 1000
+                    or not metadata["RecipeAEMinGain"] <= gain <= metadata["RecipeAEMaxGain"]):
+                raise RuntimeError("Recipe AE result is outside verified limits")
+            pending.result = {"exposure_us": exposure, "gain_percent": gain,
+                              "metadata": metadata}
+        except Exception as exc:
+            pending.error = str(exc)
+        pending.event.set()
+
+    def _fail_auto_exposure(self, message: str = "Camera disconnected during Recipe AE") -> None:
+        pending = self._pending_ae
+        if pending is not None and pending.active and not pending.event.is_set():
+            pending.error = message
+            pending.event.set()
+
+    @Slot(object, object, object)
+    def _cleanup_auto_exposure(self, pending: _PendingAutoExposure,
+                               completed: Event, response: dict) -> None:
+        try:
+            if pending.state:
+                from .camera_recipe_ae import restore_recipe_ae
+                restore_recipe_ae(self.controller, pending.state)
+        except Exception as exc:
+            response["error"] = str(exc)
+        finally:
+            completed.set()
 
     def restore_state(self, state: dict[str, object], timeout_s: float = 5.0) -> None:
         """Synchronously request state restoration on the CameraController owner thread."""

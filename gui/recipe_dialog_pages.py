@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -182,6 +184,36 @@ class RecipeDialogPagesMixin:
         self.matrix_current_density_edit = QLineEdit("2, 4, 6, 8, 10, 12")
         self.matrix_voltage_edit = QLineEdit("0.8, 1.0, 1.1, 1.2")
         self.matrix_gain_edit = QLineEdit("100, 200, 300, 400, 500")
+        self.exposure_mode_combo = QComboBox()
+        self.exposure_mode_combo.addItem(tr("recipe.manual_exposure"), "manual")
+        self.exposure_mode_combo.addItem(tr("recipe.auto_exposure"), "auto")
+        self.auto_exposure_group = QGroupBox(tr("recipe.auto_exposure"))
+        auto_form = QFormLayout(self.auto_exposure_group)
+        self.auto_gain_mode_combo = QComboBox()
+        self.auto_gain_mode_combo.addItem(tr("recipe.auto_gain"), "auto")
+        self.auto_gain_mode_combo.addItem(tr("recipe.fixed_gain"), "fixed")
+        self.auto_gain_spin = QSpinBox()
+        self.auto_gain_spin.setRange(100, 65535)
+        self.auto_gain_spin.setValue(100)
+        self.auto_gain_spin.setSuffix(" %")
+        self.auto_target_combo = QComboBox()
+        for value in (20, 30, 40, 50, 60, 70, 80):
+            self.auto_target_combo.addItem(f"{value} %", value)
+        self.auto_target_combo.setCurrentIndex(3)
+        self.auto_max_exposure_spin = _double_spin(0.03, 15000, 15000, " ms")
+        self.auto_stops_edit = QLineEdit("0")
+        self.auto_stops_edit.setPlaceholderText(tr("recipe.ae_stops_example"))
+        self.auto_stops_edit.setToolTip(tr("recipe.ae_stops_hint"))
+        self.auto_timeout_spin = _double_spin(0.1, 3600, 60, " s")
+        auto_form.addRow(tr("camera.gain"), self.auto_gain_mode_combo)
+        auto_form.addRow(tr("recipe.fixed_gain"), self.auto_gain_spin)
+        auto_form.addRow(tr("camera.auto_exposure_target"), self.auto_target_combo)
+        auto_form.addRow(tr("recipe.ae_max_exposure"), self.auto_max_exposure_spin)
+        auto_form.addRow(tr("recipe.ae_timeout"), self.auto_timeout_spin)
+        auto_form.addRow(tr("recipe.ae_stops"), self.auto_stops_edit)
+        auto_note = QLabel(tr("recipe.ae_note"))
+        auto_note.setWordWrap(True)
+        auto_form.addRow(auto_note)
         self.matrix_exposure_edit = QLineEdit(
             "0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 15000"
         )
@@ -201,8 +233,20 @@ class RecipeDialogPagesMixin:
         self.matrix_voltage_label = QLabel(tr("recipe.voltage_list"))
         form.addRow(self.matrix_current_density_label, self.matrix_current_density_edit)
         form.addRow(self.matrix_voltage_label, self.matrix_voltage_edit)
-        form.addRow(tr("recipe.gain_list"), self.matrix_gain_edit)
-        form.addRow(tr("recipe.exposure_list"), self.matrix_exposure_edit)
+        form.addRow(tr("recipe.exposure_mode"), self.exposure_mode_combo)
+        self.manual_exposure_group = QGroupBox(tr("recipe.manual_exposure"))
+        manual_form = QFormLayout(self.manual_exposure_group)
+        manual_form.addRow(tr("recipe.gain_list"), self.matrix_gain_edit)
+        manual_form.addRow(tr("recipe.exposure_list"), self.matrix_exposure_edit)
+        self.exposure_settings_widget = QWidget()
+        self.exposure_settings_widget.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum,
+        )
+        exposure_settings_layout = QVBoxLayout(self.exposure_settings_widget)
+        exposure_settings_layout.setContentsMargins(0, 0, 0, 0)
+        exposure_settings_layout.addWidget(self.manual_exposure_group)
+        exposure_settings_layout.addWidget(self.auto_exposure_group)
+        form.addRow(self.exposure_settings_widget)
         form.addRow(tr("recipe.captures_per_condition"), self.matrix_repeat_spin)
         self.matrix_voltage_compliance_label = QLabel(tr("smu.voltage_compliance"))
         self.matrix_current_compliance_label = QLabel(tr("smu.current_compliance"))
@@ -217,6 +261,7 @@ class RecipeDialogPagesMixin:
         form.addRow(tr("measurement.output_stabilization"), self.matrix_stabilization_spin)
         form.addRow(tr("measurement.capture_timeout"), self.matrix_capture_timeout_spin)
         note = QLabel(tr("recipe.capture_sequence_note"))
+        self.capture_sequence_note = note
         note.setWordWrap(True)
         note.setStyleSheet("background:#edf5fa; border:1px solid #b6cedd; padding:8px;")
         form.addRow(note)
@@ -224,7 +269,26 @@ class RecipeDialogPagesMixin:
             self._set_el_matrix_output_mode_ui
         )
         self._set_el_matrix_output_mode_ui()
-        return page
+        self.exposure_mode_combo.currentIndexChanged.connect(self._set_exposure_mode_ui)
+        self.auto_gain_mode_combo.currentIndexChanged.connect(self._set_exposure_mode_ui)
+        self._set_exposure_mode_ui()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        return scroll
+
+    def _set_exposure_mode_ui(self, *_args: object) -> None:
+        automatic = self.exposure_mode_combo.currentData() == "auto"
+        self.manual_exposure_group.setVisible(not automatic)
+        self.auto_exposure_group.setVisible(automatic)
+        self.manual_exposure_group.setEnabled(not automatic)
+        self.auto_exposure_group.setEnabled(automatic)
+        self.auto_gain_spin.setEnabled(
+            automatic and self.auto_gain_mode_combo.currentData() == "fixed"
+        )
+        self.capture_sequence_note.setText(
+            tr("recipe.ae_sequence_note") if automatic else tr("recipe.capture_sequence_note")
+        )
 
     def _set_el_matrix_output_mode_ui(self, *_args: object) -> None:
         voltage_mode = self.matrix_output_mode_combo.currentData() == "voltage"

@@ -63,7 +63,7 @@ def format_el_footer(metadata: dict[str, Any]) -> tuple[str, str, str]:
         )
     return (
         f"Sample ID: {metadata['SampleID']}",
-        f"{metadata['Channel']} | {electrical} | "
+        f"{metadata['Channel']}" + (f" / {metadata['ROIId']}" if metadata.get("ROIId") else "") + f" | {electrical} | "
         f"Gain={int(metadata['Gain'])}% | {exposure_text} | "
         f"Repeat={metadata['RepeatIndex']}/{metadata['RepeatTotal']}",
         f"Measured: I={_number(metadata.get('MeasuredCurrentMa'))} mA | "
@@ -90,7 +90,8 @@ def format_dark_footer(metadata: dict[str, Any]) -> tuple[str, str, str]:
             actual=actual_exposure,
         )
     return (
-        f"Shared Dark | Applicable Channels: {channels}",
+        f"Shared Dark | Applicable Channels: {channels}" +
+        (f" | {metadata['ROIId']}" if metadata.get("ROIId") else ""),
         f"Gain={int(metadata['Gain'])}% | {exposure_text} | "
         f"Repeat={metadata['RepeatIndex']}/{metadata['RepeatTotal']}",
         f"Camera={_number(metadata.get('CameraTemperature'), 1)} °C | {metadata['Timestamp']}",
@@ -105,34 +106,89 @@ def qimage_to_pillow(image: QImage) -> Image.Image:
     ).copy()
 
 
+def footer_layout(width: int, height: int, lines: Iterable[str]):
+    """Fit the visual footer to ROI geometry without resizing scientific pixels.
+
+    Very small ROIs cannot carry all metadata legibly. Bound footer height to
+    30% (32 px minimum), abbreviating only this visual copy when necessary.
+    """
+    lines = tuple(str(line) for line in lines)
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    padding = max(1, min(16, round(width * .015), round(height * .03)))
+    available = max(0, width - 2 * padding)
+    budget = max(32, round(height * .30))
+    target = max(8, min(48, round(width / 85), round(height / 12)))
+
+    def load_font(size):
+        for name in ("arial.ttf", "DejaVuSans.ttf"):
+            try:
+                return ImageFont.truetype(name, size)
+            except OSError:
+                pass
+        return ImageFont.load_default()
+
+    def fits(text, font):
+        box = probe.textbbox((0, 0), text, font=font)
+        return box[2] - box[0] <= available
+
+    def wrap(line, font):
+        result = []
+        while line:
+            if fits(line, font):
+                result.append(line)
+                break
+            low, high = 0, len(line)
+            while low < high:
+                mid = (low + high + 1) // 2
+                if fits(line[:mid], font):
+                    low = mid
+                else:
+                    high = mid - 1
+            if low == 0:
+                break
+            boundary = line.rfind(" ", 0, low + 1)
+            split = boundary if boundary > low // 2 else low
+            result.append(line[:split].rstrip())
+            line = line[split:].lstrip()
+        return result or [""]
+
+    for size in range(target, 7, -1):
+        font = load_font(size)
+        line_gap = max(1, size // 5)
+        box = probe.textbbox((0, 0), "Ag國µ²", font=font)
+        line_height = max(1, box[3] - box[1])
+        max_rows = max(1, (budget - 2 * padding + line_gap) // (line_height + line_gap))
+        wrapped = [row for line in lines for row in wrap(line, font)]
+        if len(wrapped) <= max_rows:
+            break
+    if len(wrapped) > max_rows:
+        # Keep each original metadata line represented when there is room;
+        # full precision and complete strings always remain in JSON.
+        wrapped = list(lines) if max_rows >= len(lines) else wrapped[:max_rows]
+        wrapped = wrapped[:max_rows]
+    visible = []
+    for line in wrapped:
+        if not fits(line, font):
+            while line and not fits(line.rstrip() + "…", font):
+                line = line[:-1]
+            line = line.rstrip() + "…" if fits("…", font) else ""
+        visible.append(line)
+    footer_height = 2 * padding + len(visible) * line_height + max(0, len(visible) - 1) * line_gap
+    return font, visible, padding, line_height, line_gap, footer_height
+
+
 def annotated_jpeg_image(raw: Image.Image, lines: Iterable[str]) -> Image.Image:
     source = raw.copy()
-    target_font_px = max(16, round(source.width / 95))
-    try:
-        font = ImageFont.truetype("arial.ttf", target_font_px)
-    except OSError:
-        font = ImageFont.load_default()
-    lines = tuple(lines)
-    padding = max(10, target_font_px // 2)
-    line_gap = max(4, target_font_px // 4)
-    probe = ImageDraw.Draw(source)
-    boxes = [probe.textbbox((0, 0), line, font=font) for line in lines]
-    line_height = max((box[3] - box[1] for box in boxes), default=target_font_px)
-    footer_height = padding * 2 + len(lines) * line_height + max(0, len(lines) - 1) * line_gap
+    font, visible, padding, line_height, line_gap, footer_height = footer_layout(
+        source.width, source.height, lines,
+    )
     annotated = Image.new("RGB", (source.width, source.height + footer_height), (88, 88, 88))
     annotated.paste(source, (0, 0))
     draw = ImageDraw.Draw(annotated)
     y = source.height + padding
-    for line in lines:
-        # Preserve metadata text; only the visual copy is shortened when needed.
-        visible = line
-        available = max(0, source.width - 2 * padding)
-        if draw.textbbox((0, 0), visible, font=font)[2] > available:
-            body = visible
-            while body and draw.textbbox((0, 0), body.rstrip() + "…", font=font)[2] > available:
-                body = body[:-1]
-            visible = body.rstrip() + "…" if body else ""
-        draw.text((padding, y), visible, fill=(255, 255, 255), font=font)
+    for line in visible:
+        box = draw.textbbox((0, 0), line, font=font)
+        draw.text((padding - box[0], y - box[1]), line, fill=(255, 255, 255), font=font)
         y += line_height + line_gap
     return annotated
 

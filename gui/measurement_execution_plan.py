@@ -50,6 +50,14 @@ def effective_matrix_capture_axes(recipe: Recipe) -> EffectiveMatrixCaptureAxes:
     """Return the capture schedule owned exclusively by Recipe.el_matrix."""
 
     matrix = recipe.el_matrix
+    if matrix.exposure_mode == "auto":
+        from .recipe_ae_stops import upper_exposures_ms
+        # These are conservative bounds for budgeting, never capture settings.
+        return EffectiveMatrixCaptureAxes(
+            (matrix.auto_gain_percent,) if matrix.auto_gain_mode == "fixed" else (),
+            upper_exposures_ms(matrix.auto_exposure_stops, matrix.auto_max_exposure_ms),
+            int(matrix.repeat),
+        )
     return EffectiveMatrixCaptureAxes(
         tuple(int(value) for value in matrix.gains_percent),
         tuple(float(value) for value in matrix.exposures_ms),
@@ -86,6 +94,18 @@ def _matrix_channel_steps(recipe: Recipe) -> Iterable[ExecutionStep]:
                 for gain in axes.gains_percent
             )
             voltage_mode = matrix.output_mode == "voltage"
+            if matrix.exposure_mode == "auto":
+                gain_steps = (
+                    _leaf("auto_exposure", tr("recipe.auto_exposure"),
+                          gain_mode=matrix.auto_gain_mode,
+                          fixed_gain=matrix.auto_gain_percent if matrix.auto_gain_mode == "fixed" else None,
+                          target_percent=matrix.auto_target_percent),
+                    *tuple(ExecutionStep(
+                        f"stop_{stop:g}", tr("recipe.ae_stop_step", stop=f"{stop:+g}"),
+                        tuple(_leaf(f"repeat_{index}", tr("plan.repeat", index=index))
+                              for index in range(1, axes.repeat + 1)),
+                    ) for stop in matrix.auto_exposure_stops),
+                )
             electrical_steps.append(
                 ExecutionStep(
                     f"voltage_{format_voltage_number(setpoint)}"
@@ -212,7 +232,7 @@ def build_measurement_execution_plan(
                 tuple(_polarity_channel_steps(recipe)),
             )
         )
-    if recipe.el_matrix.dark_frame_enabled:
+    if recipe.el_matrix.dark_frame_enabled and recipe.el_matrix.exposure_mode == "manual":
         steps.append(
             ExecutionStep(
                 "dark_frame",
@@ -223,6 +243,11 @@ def build_measurement_execution_plan(
     steps.append(
         ExecutionStep("channels", "Channels", tuple(_matrix_channel_steps(recipe)))
     )
+    if recipe.el_matrix.dark_frame_enabled and recipe.el_matrix.exposure_mode == "auto":
+        steps.append(ExecutionStep(
+            "auto_dark_frame", tr("recipe.ae_dark_after"),
+            (_leaf("matched_dark", tr("recipe.ae_dark_match")),),
+        ))
     steps.append(
         ExecutionStep(
             "output",

@@ -1,0 +1,37 @@
+flowchart TD
+    A[開始：選取 Recipe] --> B{Recipe／相機能力／Stop 範圍檢查通過？}
+    B -- 否 --> BLOCK[阻擋啟動，不開啟輸出]
+    B -- 是 --> ROI[開啟白光；依啟用 Channel 框選對應 ROI]
+    ROI --> ROIOFF{所有 ROI 已確認且白光 OFF 已驗證？}
+    ROIOFF -- 否 --> BLOCK
+    ROIOFF -- 是 --> C[固定含 Channel ROI 的快照與時間預估；選用極性確認]
+    C --> MODE{曝光模式}
+    MODE -- 手動 --> MD[選用共用 Dark：先拍 Gain × Exposure × Repeat]
+    MODE -- 自動 --> CH[切換 Channel；選用 Dark IV]
+    MD --> CH
+    CH --> METER[套用並驗證該 Channel 的 SDK 測光 ROI]
+    METER --> E[套用電流密度／電壓並等待穩定]
+    E --> M{本次曝光模式}
+    M -- 手動 --> MM[Gain × Exposure × Repeat]
+    M -- 自動 --> AE[依 Stop 限縮 AE 基準範圍；每個電氣條件單次收斂]
+    AE --> V{AE 成功且曝光／Gain 讀回有效？}
+    V -- 否 --> FAIL[中止量測；關閉 AE 並恢復臨時設定]
+    V -- 是 --> LOCK[關閉 AE、恢復臨時設定、鎖定收斂 Gain]
+    LOCK --> STOP[按清單順序：曝光＝AE 基準 × 2^Stop；每級 Repeat]
+    MM --> CAP[觸發、驗證影格、依 Channel ROI 裁切存檔及 metadata；更新 ETA]
+    STOP --> CAP
+    CAP -. 逾時／取消／相機或存檔錯誤 .-> FAIL
+    CAP --> NEXT{還有電氣條件？}
+    NEXT -- 是 --> E
+    NEXT -- 否 --> NC{還有 Channel？}
+    NC -- 是 --> CH
+    NC -- 否 --> AD{自動模式且啟用 Dark？}
+    AD -- 是 --> DARK[確認輸出／光源／routing OFF；依最終 Gain／曝光去重拍 Dark × Repeat]
+    AD -- 否 --> SAFE[安全關閉並驗證]
+    DARK --> SAFE
+    DARK -. 失敗／取消 .-> FAIL
+    FAIL --> SAFE
+    SAFE --> GATE{正常量測完成且安全關閉確認？}
+    GATE -- 否 --> ENDFAIL[顯示取消或錯誤；保留已存檔資料；禁止自動後處理]
+    GATE -- 是 --> CSV[依選項執行匹配 Dark 的 Pixel CSV 後處理]
+    CSV --> DONE[完成]

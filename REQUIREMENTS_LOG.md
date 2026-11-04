@@ -1,5 +1,33 @@
 # Requirements Log
 
+## RECIPE-RELEASE-001 — ROI 與自動曝光整合推送前驗證（2026-11-04）
+
+- 使用者授權將 Recipe 自動曝光／Gain／Stop 與各 Channel ROI 一併更新至 GitHub main；既有 HDR 工具列隱藏的 5 個暫存修改不納入本次提交，保留內容與原暫存狀態。
+- 最新相關回歸 **179／179 通過**；完整 `.venv\Scripts\python.exe -m unittest discover -s tests -v` **846／846 通過**（0 failed、0 errors、0 skipped）。先前光源 GUI worker 逾時測試在未修改該工具與測試的情況下，單獨及完整套件重跑均通過。
+- `compileall -q gui tests` 與 `git diff --check` 通過。以下各功能的先前失敗紀錄保留作歷史證據，以本節的最新完整回歸結果為準。實際 RisingCam、白光與 SMU／Relay 量測仍需實機驗收。
+
+## RECIPE-ROI-001 — 各 Channel ROI 與裁切輸出（2026-11-04）
+
+- Recipe 開始前開啟 Relay 白光，依啟用 channel 框選，固定 CH1→ROI1 至 CH4→ROI4；非連續 channel 不重新編號，1～4 channel 各選一次。
+- ROI 僅屬本次量測並納入不可變 snapshot。每 channel 使用自己的 SDK AE 測光 ROI，驗證失敗停止量測。
+- TIFF 保存 ROI 原始 scientific 像素，PNG／JPG／Footer JPG 與延後處理的 Pixel CSV 使用相同範圍；metadata 記錄原圖尺寸、ROI 座標及裁切尺寸。
+- Shared Dark 不增加實體拍攝次數，分別輸出各 channel 的 ROI；CSV 暗校正比對 channel 與座標，避免同尺寸不同位置誤配。
+- Footer 依 ROI 寬高調整字級、留白、換行與高度，不改變 ROI 像素；極小 ROI 的顯示文字可縮略，JSON 保留完整資訊。
+- 流程、欄位與限制見 [Recipe 各 Channel ROI](docs/RECIPE_CHANNEL_ROI.md)。軟體測試與硬體驗收分別記錄；工作區既有修改保留，不自動 commit／push。
+- 驗證：新增 ROI 測試 **23／23 通過**；完整 `unittest discover -s tests -v` **846 項中 845 通過、1 失敗**。唯一失敗是既有 `test_cancelling_lux_measurement_turns_off_light_through_worker` 的 `Worker did not complete`，與本次修改前已記錄的光源 GUI worker 逾時相同；未修改該工具或測試。`compileall -q gui tests` 與 `git diff --check` 通過。已產生並檢視 CH2／ROI2 設定視窗及不同長寬比 footer 圖片；白光與 RisingCam 實機驗收待完成。
+
+## RECIPE-AE-001 — Recipe 自動曝光與 Gain 選擇（2026-11-04）
+
+- 使用者最新要求：既有 Recipe 使用「手動曝光／自動曝光」下拉選單，下方動態顯示所選模式的設定表單；未選用表單隱藏並停用，切換時保留兩邊設定。取代原本兩組表單同時顯示、未選用者反灰的設計。
+- 自動曝光提供自動 Gain 或指定單一 Gain；指定 Gain 時只調曝光時間。
+- 時間預估同步：Recipe 右側即時計算、開始量測確認說明 AE 預算，執行中約每秒更新，按實際收斂曝光／Dark 去重修正；實際拍攝存檔較慢時允許完成時間延後。上方電流／電壓矩陣維持原樣。
+- 自動曝光新增自訂 Stop 清單（含正負與小數），按輸入順序、每級 Repeat 拍攝；收斂 Gain 固定，曝光時間為基準 × 2^Stop。0 可省略，拍攝上限涵蓋所有 Stop，SDK 基準範圍會相應縮小；時間與 Dark 預算同步計算。
+- 已加入 schema v13 保存；v12 自動曝光預設 Stop `[0]`，更早 Recipe 預設手動。每 Channel／電氣條件單次 AE 收斂後鎖定 Gain、後拍匹配 Shared Dark、上限估算及失敗／逾時／取消處理。
+- 詳細操作、資料欄位、執行順序與驗收條件見 [Recipe 自動曝光規格](docs/RECIPE_AUTO_EXPOSURE.md)。
+- 流程模擬：14／14 情境符合預期，相關回歸重跑 152／152 通過；雙通道主情境 4 次 AE、40 EL＋16 Dark、136 個 Pixel CSV 數值驗證通過。含取消／逾時、拍攝失敗與安全關閉未確認時阻擋後處理；本輪未改正式硬體程式。[模擬報告與流程圖](docs/RECIPE_AUTO_EXPOSURE_SIMULATION.md)。
+- 狀態：已實作軟體流程；實際 RisingCam 收斂、Gain 鎖定與 Dark 拍攝待實機驗收。
+- 驗證：自動曝光功能 26／26、時間預估 11／11、自訂 Stop 11／11，最新相關回歸 **152／152 通過**。完整 unittest **823 項中 822 通過、1 失敗**，為既有光源 GUI worker 等待逾時，單獨重跑仍失敗；該光源程式及測試未修改。前一時間預估版本曾達 812／812 通過；詳見規格文件驗證紀錄。本輪保留修改、不 commit／push。
+
 ## HDR-VIEW-001 — Offline batch HDR viewer (2026-10-09)
 
 - Requested: standalone viewing-only HDR generation, launched by a main toolbar button; choose a folder and recursively discover EL TIFF/JSON captures.

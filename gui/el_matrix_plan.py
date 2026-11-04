@@ -44,6 +44,8 @@ class MatrixEstimate:
     output_on_per_setpoint_s: float
     dark_iv_per_channel_s: float
     estimated_finish: datetime
+    exposure_mode: str = "manual"
+    auto_exposure_time_s: float = 0.0
 
     @property
     def output_on_per_j_s(self) -> float:
@@ -74,8 +76,21 @@ class ELMatrixPlan:
         self.exposures_ms = axes.exposures_ms
         self.repeat = axes.repeat
         self.electrical_setpoints = self.matrix.active_electrical_setpoints()
+        self.auto_dark_profiles: tuple[tuple[int, float], ...] | None = None
+        self.auto_unresolved_conditions = len(self.channels) * len(self.electrical_setpoints)
 
     def capture_counts(self) -> dict[str, int]:
+        if self.matrix.exposure_mode == "auto":
+            per_channel = len(self.electrical_setpoints) * self.repeat * len(self.exposures_ms)
+            total_el = len(self.channels) * per_channel
+            # A unique AE result per condition is the conservative Dark bound.
+            dark = (total_el if self.auto_dark_profiles is None
+                    else (len(self.auto_dark_profiles)
+                          + self.auto_unresolved_conditions * len(self.exposures_ms)) * self.repeat)
+            if not self.matrix.dark_frame_enabled:
+                dark = 0
+            return {"shared_dark": dark, "el_per_channel": per_channel,
+                    "total_el": total_el, "overall": dark + total_el}
         combination = len(self.gains_percent) * len(self.exposures_ms) * self.repeat
         dark = combination if self.matrix.dark_frame_enabled else 0
         per_channel = len(self.electrical_setpoints) * combination
@@ -90,6 +105,33 @@ class ELMatrixPlan:
     def estimate(self, now: datetime | None = None) -> MatrixEstimate:
         now = now or datetime.now().astimezone()
         counts = self.capture_counts()
+        if self.matrix.exposure_mode == "auto":
+            exposure_sum_s = sum(self.exposures_ms) / 1000.0
+            average_s = exposure_sum_s / len(self.exposures_ms)
+            per_condition = (self.matrix.stabilization_ms / 1000.0
+                             + self.matrix.auto_timeout_s
+                             + self.repeat * (exposure_sum_s + len(self.exposures_ms)
+                                              * self.matrix.estimated_capture_overhead_s))
+            conditions = len(self.electrical_setpoints) * len(self.channels)
+            fixed_s = (
+                len(self.channels) * self.matrix.estimated_routing_transition_s
+                * (1 + int(self.recipe.polarity.enabled))
+                + (len(self.channels) * self.matrix.estimated_polarity_duration_s
+                   if self.recipe.polarity.enabled else 0)
+                + (len(self.channels) * self.recipe.dark_iv_estimated_time_s()
+                   if self.recipe.dark_iv.enabled else 0)
+                + (self.matrix.estimated_shared_dark_overhead_s if counts["shared_dark"] else 0)
+            )
+            total_s = (conditions * per_condition + fixed_s
+                       + counts["shared_dark"] * (average_s + self.matrix.estimated_capture_overhead_s))
+            return MatrixEstimate(
+                counts["shared_dark"], counts["el_per_channel"], counts["total_el"],
+                counts["overall"], counts["overall"] * average_s, total_s,
+                per_condition, self.recipe.dark_iv_estimated_time_s(),
+                now + timedelta(seconds=total_s),
+                exposure_mode="auto",
+                auto_exposure_time_s=conditions * self.matrix.auto_timeout_s,
+            )
         exposure_sum_s = sum(self.exposures_ms) / 1000.0
         dark_exposure_s = (
             exposure_sum_s * len(self.gains_percent) * self.repeat
@@ -156,6 +198,8 @@ class ELMatrixPlan:
         )
 
     def captures(self) -> Iterator[MatrixCapture]:
+        if self.matrix.exposure_mode == "auto":
+            raise ValueError("Automatic exposure capture settings are resolved at runtime")
         estimate = self.estimate()
         overall = 0
         applicable = ", ".join(channel.channel for channel in self.channels)
@@ -224,6 +268,11 @@ class ELMatrixPlan:
                             )
 
     def exposure_sequence_after(self, completed: int) -> Iterable[float]:
+        if self.matrix.exposure_mode == "auto":
+            count = self.capture_counts()["overall"]
+            for index in range(completed, count):
+                yield self.exposures_ms[(index // self.repeat) % len(self.exposures_ms)] / 1000.0
+            return
         for capture in self.captures():
             if capture.overall_index > completed:
                 yield capture.exposure_ms / 1000.0

@@ -20,12 +20,14 @@ def estimate_required_bytes(
     height: int,
     *,
     global_safety: Any | None = None,
+    channel_rois: Mapping[str, Any] | None = None,
 ) -> int:
     pixels = max(1, int(width)) * max(1, int(height))
-    captures = ELMatrixPlan(
+    counts = ELMatrixPlan(
         recipe,
         global_safety=global_safety,
-    ).capture_counts()["overall"]
+    ).capture_counts()
+    captures = counts["overall"]
     # RAW TIFF + annotated JPEG + metadata and manifest allowance.
     per_capture = pixels * 6 + 16_384
     if recipe.output.export_pixel_csv:
@@ -35,7 +37,23 @@ def estimate_required_bytes(
             recipe.output.pixel_csv_exposure_normalized,
         ))
         per_capture += pixels * 36 * selected
-    return int(captures * per_capture * 1.10)
+    if channel_rois is None:
+        return int(captures * per_capture * 1.10)
+    from .recipe_roi import validate_channel_rois
+    rois = validate_channel_rois(
+        channel_rois, [channel.channel for channel in recipe.enabled_channels()], width, height,
+    )
+    # One physical Shared Dark produces a cropped file set for EVERY channel.
+    # Include those additional files rather than estimating acquisition count
+    # alone, even when ROIs overlap or each covers the entire source image.
+    products_per_channel = counts["el_per_channel"] + counts["shared_dark"]
+    bytes_per_pixel = 6
+    if recipe.output.export_pixel_csv:
+        bytes_per_pixel += 36 * selected
+    return int(sum(
+        products_per_channel * (roi[2] * roi[3] * bytes_per_pixel + 16_384)
+        for roi in rois.values()
+    ) * 1.10)
 
 
 def collect_preflight_errors(
@@ -52,6 +70,8 @@ def collect_preflight_errors(
     global_safety: Any | None = None,
 ) -> list[str]:
     errors = list(recipe.validate(global_safety))
+    if errors:
+        return errors
     if not smu_metadata.get("connected"):
         errors.append(tr("preflight.smu_disconnected"))
     if not smu_metadata.get("supported"):
@@ -86,10 +106,23 @@ def collect_preflight_errors(
     exposure_range = current_camera.get("exposure_range_us")
     gain_range = current_camera.get("gain_range")
     axes = effective_matrix_capture_axes(recipe)
+    if recipe.el_matrix.exposure_mode == "auto":
+        if (current_camera.get("AutoExposureROIVerified") is not True
+                or current_camera.get("SDKAutoExposurePolicy") is None
+                or current_camera.get("AutoExposureMinGain") is None
+                or current_camera.get("AutoExposureMaxGain") is None):
+            errors.append(tr("recipe.validation.ae_capability"))
     if not exposure_range:
         errors.append(tr("preflight.camera_exposure_capability_missing"))
     else:
         low, high = float(exposure_range[0]), float(exposure_range[1])
+        if recipe.el_matrix.exposure_mode == "auto":
+            from .recipe_ae_stops import baseline_range_us
+            try:
+                baseline_range_us(recipe.el_matrix.auto_exposure_stops,
+                                  recipe.el_matrix.auto_max_exposure_ms, exposure_range)
+            except ValueError:
+                errors.append(tr("recipe.validation.auto_stops"))
         if any(not low <= value * 1000.0 <= high for value in axes.exposures_ms):
             errors.append(tr("preflight.camera_exposure_out_of_range", low=f"{low:g}", high=f"{high:g}"))
     if not gain_range:
@@ -113,6 +146,7 @@ def collect_preflight_errors(
             int(camera_snapshot.get("ImageWidth", 0)),
             int(camera_snapshot.get("ImageHeight", 0)),
             global_safety=global_safety,
+            channel_rois=camera_snapshot.get("ChannelROIs"),
         )
         available = shutil.disk_usage(root).free
         if available < required:

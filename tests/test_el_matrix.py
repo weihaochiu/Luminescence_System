@@ -1110,9 +1110,12 @@ class ELMatrixRunnerTests(unittest.TestCase):
         completed = [item.current for item in matrix_progress]
         self.assertEqual(sorted(completed), completed)
         remaining = [item.remaining_time_s for item in matrix_progress]
-        self.assertEqual(sorted(remaining, reverse=True), remaining)
+        self.assertTrue(all(value >= 0 for value in remaining))
+        self.assertAlmostEqual(0.0, remaining[-1])
         finishes = [item.estimated_finish for item in matrix_progress]
-        self.assertEqual(sorted(finishes, reverse=True), finishes)
+        for item, finish in zip(matrix_progress, finishes):
+            self.assertAlmostEqual(item.remaining_time_s,
+                (finish - datetime(2026, 8, 14, 6, 0, 0).astimezone()).total_seconds(), places=5)
         self.assertEqual(recipe.matrix_capture_counts()["overall"], completed[-1])
         # Every route is preceded by both authoritative OUTPUT OFF and routing clear.
         for index, event in enumerate(hardware.events):

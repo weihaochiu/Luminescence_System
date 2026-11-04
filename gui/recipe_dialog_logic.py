@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QFileDialog, QListWidgetItem, QMessageBox, QTreeWi
 from core.i18n import tr
 
 from .measurement_execution_plan import build_measurement_execution_plan
+from .el_matrix_plan import ELMatrixPlan, format_duration
 from .numeric import format_voltage_number
 from .recipe_store import ChannelRecipe, Recipe
 from .error_reporting import report_error
@@ -112,6 +113,8 @@ class RecipeDialogLogicMixin:
             self._write_recipe_to_form(self.current_recipe)
 
     def _set_editor_enabled(self, enabled: bool) -> None:
+        if not enabled:
+            self.time_estimate_value.setText(tr("recipe.estimate_unavailable"))
         self.tabs.setEnabled(enabled)
         self.save_button.setEnabled(enabled)
         self.validate_button.setEnabled(enabled)
@@ -152,6 +155,14 @@ class RecipeDialogLogicMixin:
         self._set_dark_iv_widgets_enabled(recipe.dark_iv.enabled)
 
         matrix = recipe.el_matrix
+        self._set_combo_data(self.exposure_mode_combo, matrix.exposure_mode)
+        self._set_combo_data(self.auto_gain_mode_combo, matrix.auto_gain_mode)
+        self.auto_gain_spin.setValue(matrix.auto_gain_percent)
+        self._set_combo_data(self.auto_target_combo, matrix.auto_target_percent)
+        self.auto_max_exposure_spin.setValue(matrix.auto_max_exposure_ms)
+        self.auto_timeout_spin.setValue(matrix.auto_timeout_s)
+        self.auto_stops_edit.setText(", ".join(f"{value:g}" for value in matrix.auto_exposure_stops))
+        self._set_exposure_mode_ui()
         self.dark_frame_enabled_check.setChecked(matrix.dark_frame_enabled)
         self._set_combo_data(self.matrix_output_mode_combo, matrix.output_mode)
         self.matrix_current_density_edit.setText(
@@ -253,12 +264,32 @@ class RecipeDialogLogicMixin:
                 recipe.el_matrix.voltage_v,
                 field_name="Voltage List",
             )
-        recipe.el_matrix.gains_percent = _parse_numbers(
-            self.matrix_gain_edit.text(), int
-        )
-        recipe.el_matrix.exposures_ms = _parse_numbers(
-            self.matrix_exposure_edit.text(), float
-        )
+        recipe.el_matrix.exposure_mode = str(self.exposure_mode_combo.currentData())
+        recipe.el_matrix.auto_gain_mode = str(self.auto_gain_mode_combo.currentData())
+        recipe.el_matrix.auto_gain_percent = self.auto_gain_spin.value()
+        recipe.el_matrix.auto_target_percent = int(self.auto_target_combo.currentData())
+        recipe.el_matrix.auto_max_exposure_ms = self.auto_max_exposure_spin.value()
+        recipe.el_matrix.auto_timeout_s = self.auto_timeout_spin.value()
+        if recipe.el_matrix.exposure_mode == "auto":
+            recipe.el_matrix.auto_exposure_stops = _parse_finite_numbers(
+                self.auto_stops_edit.text(), float, field_name=tr("recipe.ae_stops"))
+        else:
+            recipe.el_matrix.auto_exposure_stops = _parse_inactive_finite_numbers(
+                self.auto_stops_edit.text(), recipe.el_matrix.auto_exposure_stops,
+                field_name=tr("recipe.ae_stops"))
+        if recipe.el_matrix.exposure_mode == "manual":
+            recipe.el_matrix.gains_percent = _parse_numbers(self.matrix_gain_edit.text(), int)
+            recipe.el_matrix.exposures_ms = _parse_numbers(self.matrix_exposure_edit.text(), float)
+        else:
+            for field_name, widget, caster in (
+                ("gains_percent", self.matrix_gain_edit, int),
+                ("exposures_ms", self.matrix_exposure_edit, float),
+            ):
+                try:
+                    values = _parse_finite_numbers(widget.text(), caster, field_name=field_name)
+                except ValueError:
+                    continue
+                setattr(recipe.el_matrix, field_name, values)
         recipe.el_matrix.repeat = self.matrix_repeat_spin.value()
         recipe.el_matrix.voltage_compliance_v = self.matrix_voltage_compliance_spin.value()
         recipe.el_matrix.current_compliance_ma = self.matrix_current_compliance_spin.value()
@@ -285,11 +316,13 @@ class RecipeDialogLogicMixin:
     def _refresh_execution_plan(self, *_args: Any) -> None:
         if self.current_recipe is None:
             self.execution_tree.clear()
+            self.time_estimate_value.setText(tr("recipe.estimate_unavailable"))
             return
         try:
             recipe = self._read_form_to_recipe()
             plan = build_measurement_execution_plan(recipe)
         except (TypeError, ValueError):
+            self.time_estimate_value.setText(tr("recipe.estimate_unavailable"))
             return
         self.execution_tree.clear()
 
@@ -302,6 +335,22 @@ class RecipeDialogLogicMixin:
         for index, step in enumerate(plan.steps, start=1):
             add(self.execution_tree, step, f"{index}. ")
         self.execution_tree.expandAll()
+        try:
+            estimate = ELMatrixPlan(recipe).estimate()
+        except (TypeError, ValueError):
+            self.time_estimate_value.setText(tr("recipe.estimate_unavailable"))
+            return
+        automatic = recipe.el_matrix.exposure_mode == "auto"
+        self.time_estimate_value.setText(tr(
+            "recipe.time_estimate_details",
+            basis=tr("recipe.estimate_auto") if automatic else tr("recipe.estimate_manual"),
+            total=format_duration(estimate.total_time_s),
+            exposure=format_duration(estimate.exposure_time_s),
+            captures=estimate.overall_captures,
+            output_on=format_duration(estimate.output_on_per_setpoint_s),
+        ) + ("\n" + tr(
+            "recipe.estimate_auto_budget", duration=format_duration(estimate.auto_exposure_time_s),
+        ) if automatic else ""))
 
     def _connect_summary_updates(self) -> None:
         widgets = (
@@ -314,6 +363,9 @@ class RecipeDialogLogicMixin:
             self.matrix_output_mode_combo, self.matrix_current_density_edit,
             self.matrix_voltage_edit,
             self.matrix_gain_edit, self.matrix_exposure_edit, self.matrix_repeat_spin,
+            self.exposure_mode_combo,
+            self.auto_gain_mode_combo, self.auto_gain_spin, self.auto_target_combo,
+            self.auto_max_exposure_spin, self.auto_timeout_spin, self.auto_stops_edit,
             self.matrix_voltage_compliance_spin, self.matrix_current_compliance_spin,
             self.matrix_stabilization_spin,
             self.matrix_capture_timeout_spin, self.resolution_combo,

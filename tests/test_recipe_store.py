@@ -106,7 +106,7 @@ class RecipeStoreTests(unittest.TestCase):
         self.assertEqual([], recipe.validate())
         self.assertEqual(("TIFF", "JPG with Footer"), recipe.output.selected_formats())
 
-    def test_v11_round_trip_contains_only_formal_recipe_sections(self) -> None:
+    def test_v13_round_trip_contains_only_formal_recipe_sections(self) -> None:
         recipe = Recipe()
         recipe.name = "Round trip"
         recipe.state = "active"
@@ -117,7 +117,7 @@ class RecipeStoreTests(unittest.TestCase):
             store.upsert(recipe)
             loaded = RecipeStore(path).recipes[0]
         payload = loaded.to_dict()
-        self.assertEqual(11, RecipeStore.schema_version)
+        self.assertEqual(13, RecipeStore.schema_version)
         self.assertEqual("current_density", loaded.el_matrix.output_mode)
         self.assertEqual([0.8, 1.0, 1.1, 1.2], loaded.el_matrix.voltage_v)
         self.assertEqual(20.0, loaded.el_matrix.current_compliance_ma)

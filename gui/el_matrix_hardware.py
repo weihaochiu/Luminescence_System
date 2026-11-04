@@ -3,6 +3,7 @@ from __future__ import annotations
 """Adapters from the hardware-neutral EL Matrix runner to verified services."""
 
 from typing import Any, Callable, Mapping
+from dataclasses import asdict
 
 from .camera_capture_bridge import CameraCaptureBridge
 from .el_matrix_runner import CapturedFrame, interruptible_wait
@@ -184,6 +185,12 @@ class ELMatrixHardwareAdapter:
             require_frame_exposure_match=True,
             software_triggered=True,
         )
+
+    def set_channel_roi(self, roi, check_cancel: Callable[[], None]) -> None:
+        self.camera.set_metering_roi(roi, check_cancel)
+
+    def auto_exposure(self, settings: Any, check_cancel: Callable[[], None]) -> dict[str, Any]:
+        return self.camera.auto_exposure(asdict(settings), check_cancel)
 
     def output_off(self) -> None:
         if (

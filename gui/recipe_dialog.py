@@ -104,6 +104,12 @@ class RecipeManagerDialog(
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(QLabel(tr("recipe.execution_plan")))
         right_layout.addWidget(self.execution_tree, 1)
+        right_layout.addWidget(QLabel(tr("recipe.time_estimate")))
+        self.time_estimate_value = QLabel(tr("recipe.estimate_unavailable"))
+        self.time_estimate_value.setWordWrap(True)
+        self.time_estimate_value.setToolTip(tr("recipe.estimate_scope"))
+        self.time_estimate_value.setStyleSheet("background:#edf5fa; padding:8px;")
+        right_layout.addWidget(self.time_estimate_value)
         right_layout.addWidget(QLabel(tr("recipe.validation_result")))
         right_layout.addWidget(self.validation_label)
 
