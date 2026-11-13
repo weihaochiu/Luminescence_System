@@ -20,6 +20,7 @@ from uuid import uuid4
 
 
 LOG = logging.getLogger(__name__)
+DEFAULT_RECIPE_AE_TIMEOUT_S = 120.0
 
 
 def _now() -> str:
@@ -87,7 +88,7 @@ class ELMatrixRecipe:
     auto_gain_percent: int = 100
     auto_target_percent: int = 50
     auto_max_exposure_ms: float = 15000.0
-    auto_timeout_s: float = 60.0
+    auto_timeout_s: float = DEFAULT_RECIPE_AE_TIMEOUT_S
     auto_exposure_stops: list[float] = field(default_factory=lambda: [0.0])
     exposures_ms: list[float] = field(
         default_factory=lambda: [

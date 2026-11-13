@@ -22,6 +22,7 @@ from tests.test_recipe_auto_exposure import auto_recipe, AutoHardware
 def budget_recipe():
     recipe = auto_recipe()
     matrix = recipe.el_matrix
+    matrix.auto_timeout_s = 60.0  # Explicit budget fixture, independent of new Recipe defaults.
     matrix.estimated_capture_overhead_s = 0
     matrix.estimated_routing_transition_s = 0
     matrix.estimated_polarity_duration_s = 0

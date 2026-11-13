@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.i18n import tr
+from .recipe_store import DEFAULT_RECIPE_AE_TIMEOUT_S
 
 
 def _double_spin(
@@ -204,12 +205,22 @@ class RecipeDialogPagesMixin:
         self.auto_stops_edit = QLineEdit("0")
         self.auto_stops_edit.setPlaceholderText(tr("recipe.ae_stops_example"))
         self.auto_stops_edit.setToolTip(tr("recipe.ae_stops_hint"))
-        self.auto_timeout_spin = _double_spin(0.1, 3600, 60, " s")
+        self.auto_timeout_spin = _double_spin(0.1, 3600, DEFAULT_RECIPE_AE_TIMEOUT_S, " s")
+        self.auto_timeout_recommended_button = QPushButton(tr("recipe.ae_timeout_apply"))
+        self.auto_timeout_recommended_button.clicked.connect(
+            self._apply_recommended_ae_timeout
+        )
+        timeout_row = QHBoxLayout()
+        timeout_row.addWidget(self.auto_timeout_spin)
+        timeout_row.addWidget(self.auto_timeout_recommended_button)
         auto_form.addRow(tr("camera.gain"), self.auto_gain_mode_combo)
         auto_form.addRow(tr("recipe.fixed_gain"), self.auto_gain_spin)
         auto_form.addRow(tr("camera.auto_exposure_target"), self.auto_target_combo)
         auto_form.addRow(tr("recipe.ae_max_exposure"), self.auto_max_exposure_spin)
-        auto_form.addRow(tr("recipe.ae_timeout"), self.auto_timeout_spin)
+        auto_form.addRow(tr("recipe.ae_timeout"), timeout_row)
+        timeout_note = QLabel(tr("recipe.ae_timeout_hint"))
+        timeout_note.setWordWrap(True)
+        auto_form.addRow(timeout_note)
         auto_form.addRow(tr("recipe.ae_stops"), self.auto_stops_edit)
         auto_note = QLabel(tr("recipe.ae_note"))
         auto_note.setWordWrap(True)
@@ -288,6 +299,9 @@ class RecipeDialogPagesMixin:
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
         return scroll
+
+    def _apply_recommended_ae_timeout(self) -> None:
+        self.auto_timeout_spin.setValue(DEFAULT_RECIPE_AE_TIMEOUT_S)
 
     def _set_exposure_mode_ui(self, *_args: object) -> None:
         automatic = self.exposure_mode_combo.currentData() == "auto"
