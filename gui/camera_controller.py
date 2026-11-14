@@ -87,6 +87,7 @@ class CameraController(QObject):
     status_changed = Signal(str)
     error_occurred = Signal(str)
     _sdk_event = Signal(int, int)
+    _sdk_ae_event = Signal(int, int, int)
 
     def __init__(
         self,
@@ -142,6 +143,7 @@ class CameraController(QObject):
         self._frame_capture_metadata: dict[int, dict[str, Any]] = {}
         self._software_trigger_capture_active = False
         self._stream_generation = 0
+        self._ae_operation_generation = 0
         self._preview_event_lock = Lock()
         self._pending_preview_generation: int | None = None
         self._sensor_bit_depth: int | None = None
@@ -175,6 +177,7 @@ class CameraController(QObject):
         self._gamma_readback: int | None = None
 
         self._sdk_event.connect(self._handle_sdk_event, Qt.ConnectionType.QueuedConnection)
+        self._sdk_ae_event.connect(self._handle_sdk_ae_event, Qt.ConnectionType.QueuedConnection)
         self._fps_timer = QTimer(self)
         self._fps_timer.setInterval(1000)
         self._fps_timer.timeout.connect(self._poll_frame_rate)
@@ -955,8 +958,7 @@ class CameraController(QObject):
             return False
         self._continuous_auto_exposure_requested = True
         try:
-            self._configure_sdk_auto_exposure_parameters(self._camera)
-            self._enable_sdk_auto_exposure(SDKAutoExposureMode.CONTINUOUS)
+            self._start_native_auto_exposure(SDKAutoExposureMode.CONTINUOUS)
             self.status_changed.emit(tr("camera.status_continuous_ae"))
             self._emit_effective_dn_status()
             return True
@@ -969,8 +971,7 @@ class CameraController(QObject):
             return
         try:
             self._continuous_auto_exposure_requested = False
-            self._configure_sdk_auto_exposure_parameters(self._camera)
-            self._enable_sdk_auto_exposure(SDKAutoExposureMode.ONCE)
+            self._start_native_auto_exposure(SDKAutoExposureMode.ONCE)
             self.status_changed.emit(tr("camera.status_waiting_ae"))
         except Exception as exc:
             self.auto_exposure_result.emit(False, self._format_error(tr("camera.error_start_once_ae"), exc))
@@ -1467,6 +1468,16 @@ class CameraController(QObject):
             LOG.info("SDK AutoExpoTarget requested/readback=%s/%s", requested, readback)
         return readback
 
+    def _start_native_auto_exposure(
+        self, mode: SDKAutoExposureMode, *, configure_parameters: bool = True,
+    ) -> None:
+        """Shared native entry for preview, the toolbar and verified Recipe AE."""
+        if self._camera is None:
+            raise RuntimeError("Camera is not connected")
+        if configure_parameters:
+            self._configure_sdk_auto_exposure_parameters(self._camera)
+        self._enable_sdk_auto_exposure(mode)
+
     def _enable_sdk_auto_exposure(self, mode: SDKAutoExposureMode) -> None:
         if self._camera is None:
             raise RuntimeError("Camera is not connected")
@@ -1477,6 +1488,7 @@ class CameraController(QObject):
         if mode not in {SDKAutoExposureMode.CONTINUOUS, SDKAutoExposureMode.ONCE}:
             raise ValueError("SDK AE enable mode must be Continuous or Once")
         enable_value = 1 if mode is SDKAutoExposureMode.CONTINUOUS else 2
+        self._ae_operation_generation += 1
         sdk_call("Enable AE", self._camera.put_AutoExpoEnable, enable_value)
         readback = int(sdk_call("Enable AE", self._camera.get_AutoExpoEnable))
         self._sdk_auto_exposure_enable_readback = readback
@@ -1488,6 +1500,9 @@ class CameraController(QObject):
         self._log_sdk_ae_calibration("AEStateChanged")
 
     def _disable_sdk_auto_exposure(self, *, require_readback: bool) -> None:
+        # Stream reuse must not let a queued result from an earlier AE run
+        # complete (or fail) the next run on the same stream.
+        self._ae_operation_generation += 1
         if self._camera is None:
             self._sdk_auto_exposure_mode = SDKAutoExposureMode.MANUAL
             self._sdk_auto_exposure_enable_readback = 0
@@ -2254,6 +2269,11 @@ class CameraController(QObject):
         # SDK callbacks run on an internal native thread. A Qt signal moves work
         # safely back to the GUI thread before the image buffer is touched.
         controller, generation = context
+        if event_code in (nncam.NNCAM_EVENT_AUTOEXPO_CONV, nncam.NNCAM_EVENT_AUTOEXPO_CONVFAIL):
+            controller._sdk_ae_event.emit(
+                event_code, generation, controller._ae_operation_generation,
+            )
+            return
         if event_code == nncam.NNCAM_EVENT_IMAGE:
             with controller._preview_event_lock:
                 if generation != controller._stream_generation:
@@ -2265,6 +2285,11 @@ class CameraController(QObject):
                         return
                     controller._pending_preview_generation = generation
         controller._sdk_event.emit(event_code, generation)
+
+    @Slot(int, int, int)
+    def _handle_sdk_ae_event(self, event_code: int, generation: int, operation: int) -> None:
+        if operation == self._ae_operation_generation:
+            self._handle_sdk_event(event_code, generation)
 
     @Slot(int, int)
     def _handle_sdk_event(self, event_code: int, generation: int | None = None) -> None:

@@ -18,16 +18,31 @@ def closeEvent(self: Any, event: QCloseEvent) -> None:  # noqa: N802 - Qt API na
     event.ignore()
     if self._close_in_progress:
         return
+    updating = getattr(self, "_pending_software_update", None) is not None
+    if updating:
+        from .software_update import operation_active
+        if operation_active(self):
+            self._pending_software_update = None
+            QMessageBox.warning(self, tr("update.title"), tr("update.busy"))
+            return
     self._close_in_progress = True
     try:
         self.manual_smu_panel.flush_persistent_settings()
     except Exception:
         LOG.exception("Manual SMU settings flush failed during application close")
+        if updating:
+            self._cancel_close_after_safety_failure(event)
+            QMessageBox.warning(self, tr("update.title"), tr("update.error.settings"))
+            return
     self.setEnabled(False)
     self._cancel_measurement_for_emergency()
     self.smu_monitor.stop()
 
     while not self.smu_manager.confirm_safe_for_close():
+        if updating:
+            self._cancel_close_after_safety_failure(event)
+            QMessageBox.warning(self, tr("update.title"), tr("update.error.shutdown"))
+            return
         decision = self._unsafe_smu_close_decision()
         if decision == "retry":
             continue
@@ -54,9 +69,29 @@ def closeEvent(self: Any, event: QCloseEvent) -> None:  # noqa: N802 - Qt API na
         QMessageBox.warning(self, tr("light.settings"), tr("light.close_unconfirmed"))
         self._cancel_close_after_safety_failure(event)
         return
-    self.relay_service.shutdown()
-    self.smu_manager.shutdown(safety_confirmed=True)
+    relay_required = updating and (
+        self.relay_controller.connected or self.relay_controller.last_raw_status is not None
+    )
+    relay_ok = self.relay_service.shutdown()
+    if relay_required and not relay_ok:
+        self._cancel_close_after_safety_failure(event)
+        QMessageBox.warning(self, tr("update.title"), tr("update.error.shutdown"))
+        return
+    smu_ok = self.smu_manager.shutdown(safety_confirmed=True)
+    if updating and smu_ok is False:
+        self._cancel_close_after_safety_failure(event)
+        QMessageBox.warning(self, tr("update.title"), tr("update.error.shutdown"))
+        return
     self.controller.close_camera()
+    if updating:
+        try:
+            from .software_update import launch_installer
+            launch_installer(self)
+        except Exception:
+            LOG.exception("Software update handoff failed")
+            self._cancel_close_after_safety_failure(event)
+            QMessageBox.warning(self, tr("update.title"), tr("update.error.handoff"))
+            return
     event.accept()
 
 
@@ -101,6 +136,7 @@ def _confirm_forced_close(self: Any) -> bool:
 
 
 def _cancel_close_after_safety_failure(self: Any, event: QCloseEvent) -> None:
+    self._pending_software_update = None
     self._close_in_progress = False
     self.setEnabled(True)
     if self.smu_manager.is_connected:

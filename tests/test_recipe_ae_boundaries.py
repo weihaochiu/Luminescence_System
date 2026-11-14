@@ -114,6 +114,7 @@ class RecipeAEBoundaryTests(unittest.TestCase):
 
     def test_snapshot_limits_are_read_before_stop_can_reset_them(self):
         camera = IndividualLimitCamera()
+        camera.options[nncam.NNCAM_OPTION_AUTOEXP_POLICY] = 0
         camera.auto_range = (400000, 60, 400, 120)
         original_stop = camera.Stop
 
@@ -139,6 +140,7 @@ class RecipeAEBoundaryTests(unittest.TestCase):
                 controller = self.controller()
                 camera = controller._camera
                 camera.exposure_us, camera.gain = exposure, gain
+                camera.options[nncam.NNCAM_OPTION_AUTOEXP_POLICY] = 0
                 settings = asdict(auto_recipe().el_matrix)
                 settings["auto_exposure_stops"] = stops
                 state = {}
@@ -170,6 +172,7 @@ class RecipeAEBoundaryTests(unittest.TestCase):
             with self.subTest(reset=reset):
                 controller = self.controller()
                 camera = controller._camera
+                camera.options[nncam.NNCAM_OPTION_AUTOEXP_POLICY] = 0
                 original = camera.StartPullModeWithCallback
                 def start(*args):
                     original(*args)

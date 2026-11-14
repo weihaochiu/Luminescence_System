@@ -157,6 +157,7 @@ class MeasurementSDKRecoveryTests(unittest.TestCase):
 
     def test_recipe_ae_options_use_stopped_stream_and_limits_use_active_acquisition(self):
         camera = StoppedConfigurationCamera()
+        camera.options[nncam.NNCAM_OPTION_AUTOEXP_POLICY] = 0
         controller = self.controller(camera)
         state = {}
         original_generation = controller._stream_generation
@@ -175,6 +176,7 @@ class MeasurementSDKRecoveryTests(unittest.TestCase):
 
     def test_recipe_ae_works_without_combined_range_api_and_restores_verified_limits(self):
         camera = IndividualLimitCamera()
+        camera.options[nncam.NNCAM_OPTION_AUTOEXP_POLICY] = 0
         controller = self.controller(camera)
         state = {}
         begin_recipe_ae(controller, asdict(auto_recipe().el_matrix), state)
@@ -304,6 +306,7 @@ class MeasurementSDKRecoveryTests(unittest.TestCase):
 
     def test_partial_ae_failure_preserves_sdk_operation_and_hresult_and_restores(self):
         camera = StoppedConfigurationCamera(fail_policy=True)
+        camera.options[nncam.NNCAM_OPTION_AUTOEXP_POLICY] = 0
         controller = self.controller(camera)
         bridge = CameraCaptureBridge(controller)
         with self.assertLogs("gui.camera_sdk_diagnostics", level="ERROR") as logs:
@@ -321,6 +324,7 @@ class MeasurementSDKRecoveryTests(unittest.TestCase):
 
     def test_ae_cleanup_failure_keeps_primary_error_and_releases_pending_request(self):
         camera = StoppedConfigurationCamera(fail_policy=True, fail_restore_stop=True)
+        camera.options[nncam.NNCAM_OPTION_AUTOEXP_POLICY] = 0
         bridge = CameraCaptureBridge(self.controller(camera))
         with self.assertLogs("gui.camera_sdk_diagnostics", level="ERROR"):
             _, errors = self.in_worker(

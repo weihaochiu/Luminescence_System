@@ -219,15 +219,25 @@ def restore_recipe_ae(controller: Any, state: dict[str, Any]) -> None:
         return
     controller._auto_exposure_target_percent = state["target_percent"]
     controller._disable_sdk_auto_exposure(require_readback=True)
-    stop_for_configuration(controller, "Recipe AE restore")
+    changed_options = {
+        option: value for option, value in state["options"].items()
+        if int(sdk_call("Recipe AE restore", camera.get_Option, option)) != value
+    }
+    restart = bool(changed_options) or state.get("stream_stopped", False)
+    if restart:
+        state["stream_stopped"] = True
+        stop_for_configuration(controller, "Recipe AE restore")
     for option, value in state["options"].items():
-        sdk_call("Recipe AE restore", camera.put_Option, option, value)
+        if option in changed_options:
+            sdk_call("Recipe AE restore", camera.put_Option, option, value)
         if int(sdk_call("Recipe AE restore", camera.get_Option, option)) != value:
             raise RuntimeError("Recipe AE option restoration readback mismatch")
     sdk_call("Recipe AE restore", camera.put_AutoExpoTarget, state["target"])
     if int(sdk_call("Recipe AE restore", camera.get_AutoExpoTarget)) != state["target"]:
         raise RuntimeError("Recipe AE target restoration readback mismatch")
-    _restart_recipe_stream(controller, "Recipe AE restore: restart preview")
+    if restart:
+        _restart_recipe_stream(controller, "Recipe AE restore: restart preview")
+        state["stream_stopped"] = False
     _write_ae_range(camera, state["range"], "Recipe AE restore")
     _reapply_recipe_roi(controller, state, "RECIPE_AE_RESTORE_ROI")
     raw = state["range"]
@@ -276,8 +286,6 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         },
     }
     state.update(original)
-    stop_for_configuration(controller, "Recipe AE snapshot")
-    state["stream_stopped"] = True
     # Runtime DN/alignment updates use this value when refreshing SDK targets.
     # Keep them on the Recipe target for the entire AE interval.
     controller._auto_exposure_target_percent = settings["auto_target_percent"]
@@ -303,11 +311,22 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         if min_gain > max_gain:
             raise ValueError("Recipe AE Gain limits do not intersect hardware capabilities")
     requested_range = (maximum, minimum, max_gain, min_gain)
-    for option, value in (
+    desired_options = dict((
         (nncam.NNCAM_OPTION_AUTOEXP_POLICY, 0 if fixed else 1),
         (nncam.NNCAM_OPTION_AUTOEXPOSURE_PERCENT, 100),
-    ):
-        sdk_call("Recipe AE setup", camera.put_Option, option, value)
+    ))
+    changed_options = {
+        option: value for option, value in desired_options.items()
+        if original["options"][option] != value
+    }
+    restart = bool(changed_options)
+    if restart:
+        state["stream_stopped"] = True
+        stop_for_configuration(controller, "Recipe AE setup")
+    for option, value in desired_options.items():
+        # Some SDK versions reject even an unchanged option during streaming.
+        if option in changed_options:
+            sdk_call("Recipe AE setup", camera.put_Option, option, value)
         if int(sdk_call("Recipe AE setup", camera.get_Option, option)) != value:
             raise RuntimeError("Recipe AE policy/metering readback mismatch")
     target, calibrated = controller.calibrated_sdk_target(settings["auto_target_percent"])
@@ -316,12 +335,16 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
     # Avoid starting a first frame at an inherited 15 s exposure when this AE
     # run only permits 5 s (or less with positive Stops). Recheck after Start.
     _seed_within_limits(camera, requested_range)
-    # Stop is needed for the policy options above, but the time/Gain setters
-    # return E_UNEXPECTED without an active SDK acquisition pipeline.
-    _restart_recipe_stream(controller, "Recipe AE setup: start acquisition")
+    # Match toolbar Once AE: preserve the current acquisition pipeline unless
+    # a policy/metering change actually requires stopped configuration.
+    if restart:
+        _restart_recipe_stream(controller, "Recipe AE setup: start acquisition")
+        state["stream_stopped"] = False
     _write_ae_range(camera, requested_range, "Recipe AE setup")
     _reapply_recipe_roi(controller, state, "RECIPE_AE_SETUP_ROI")
     initial_exposure, initial_gain = _seed_within_limits(camera, requested_range)
+    controller._latest_metering_mean_effective_dn = None
+    controller._latest_metering_effective_dn_fraction = None
     controller._sdk_auto_exposure_policy_readback = 0 if fixed else 1
     controller._sdk_auto_exposure_percent_readback = 100
     controller._auto_exposure_range = (minimum, maximum, min_gain, max_gain)
@@ -341,7 +364,8 @@ def begin_recipe_ae(controller: Any, settings: dict[str, Any], state: dict[str, 
         "RecipeAEROIStreamGeneration": controller._stream_generation,
         "RecipeAEInitialExposureUs": initial_exposure,
         "RecipeAEInitialGainPercent": initial_gain,
+        "RecipeAEStreamRestarted": restart,
     }
     verify_recipe_ae_configuration(controller, state["result_metadata"])
     state["started_at"] = monotonic()
-    controller._enable_sdk_auto_exposure(mode)
+    controller._start_native_auto_exposure(mode, configure_parameters=False)

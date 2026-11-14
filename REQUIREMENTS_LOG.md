@@ -1,5 +1,27 @@
 # Requirements Log
 
+## RELEASE-REVIEW-001 — Recipe AE／GUI 更新整合推送檢查（2026-11-14）
+
+- 使用者授權重新檢查兩部分程式，確認無問題後推送 GitHub main。複查 native AE 啟動／事件隔離／設定還原，以及更新版本來源、固定 SHA 下載、雜湊驗證、安全關機交接、安裝與失敗復原，未發現需阻擋本次發佈的問題。
+- 版本 1.10.1；待提交快照排除既有 5 個 staged HDR 修改，以該快照重建訊息清單及 release manifest，防止未提交內容混入 GUI 更新雜湊。
+- 快照相關回歸 216／216 通過；完整 `python -B -X faulthandler -m unittest discover -s tests -v` 共 1003 項，1002 通過、1 因 Windows symlink 權限略過，exit 0。紀錄位於 `local/push_review_related_20261114.log`、`local/push_review_full_20261114.log`。推送前須備份最新 origin/main、確認 backup 不被追蹤，並驗證 Git 封裝的實際套件。
+- 未以實機量測或真實網路安裝取代模擬；原 3×3 Recipe 的現場收斂仍需驗收。既有 HDR 修改保留在本機，不納入本次提交。
+
+## RECIPE-AE-ALIGN-001 — 對齊手動自動曝光（2026-11-14）
+
+- 使用者要求先對齊 Recipe 與手動 AE，避免只延長逾時。修正版本 1.10.1，共用 native SDK 啟動入口；策略／測光參數已一致時保留串流，只有差異需要停止配置才重啟，還原採相同原則。
+- 保留 Recipe 目標、Stops 衍生範圍、既有 Gain 搜尋範圍與各 Channel ROI；啟動及成功結果皆驗證設定，失敗仍停止。新增 AE operation generation 隔離前次已排隊事件，並記錄 `RecipeAEStreamRestarted`。
+- 本次不調整 timeout；硬體發光／目標可達性、原生 SDK 收斂與實機穩定性仍須以相同條件驗收。既有未提交修改保留，不自動 commit／push。
+- 驗證：相關回歸 186／186 通過；完整 `python -B -X faulthandler -m unittest discover -s tests -v` 1003 項中 1002 通過、1 因 Windows symlink 權限略過，程序 exit 0。首次完整測試發現關於視窗測試寫死 1.10.0 修改文字，改為驗證當前發佈紀錄的雙語內容後，相關及完整重跑通過；未放寬 AE 收斂條件。版號／歷史／發佈雜湊及 diff 檢查通過。紀錄：`local/recipe_ae_align_related_20261114.log`、`local/recipe_ae_align_full_retry_20261114.log`；非實機驗收。
+
+## UPDATE-001 — GUI 自助更新與每次升版（2026-11-14）
+
+- 實作「說明 → 檢查更新」、目前／遠端版號與各新版修改說明；關於同步顯示本版變更。每次程式交付都必須遞增版號並補齊 `release_history.json` 中英紀錄。
+- 下載鎖定 GitHub main commit、驗證發佈清單、依賴預先準備、安全關閉後外部安裝、失敗復原及中斷啟動復原；更新後首次啟動不自動連設備。
+- 保存 Recipe／設備設定／校正／量測資料與舊環境，禁止覆蓋已知本機修改；量測／拍攝／校正／後處理阻擋更新。首次取得 GUI 更新版仍使用原 BAT。
+- 詳細規格與架構見 docs/REQUIREMENTS_LOG.md、docs/PROGRAM_ARCHITECTURE.md；本次升至 1.10.0。使用者指定保留原 staged HDR 入口隱藏修改，這次不 commit／push。
+- 驗證：相關 76／76 通過；完整 `python -B -m unittest discover -s tests -v` 996 項，995 通過、1 因 Windows 不允許建立 symlink 而略過，無 failures／errors。首輪既有 SMU 300 ms debounce／350 ms 固定等待測試失敗；未修改該 SMU 程式或測試，單獨重跑及完整重跑均通過。另已檢視中英文更新視窗及關於畫面，發佈版號／雙語歷史／297 個檔案雜湊檢查通過。測試包含真正外部 installer 程序及中斷復原，但使用模擬程式與設備，不代表實機／真實網路升級已驗收。
+
 ## OUTPUT-COLORBAR-001 — 右側直式灰階色階條（2026-11-04）
 
 - 使用者確認需求是像素數值對應顏色的 colorbar，選擇右側直式、沿用目前灰階；以不遮擋影像為原則，不是實體長度比例尺。

@@ -7,7 +7,7 @@
 
 The scan covers repository source `*.py` files (including tests and the bundled SDK), excluding local-only `local/`, `ruler/`, and `backup/` data, and classifies visible Qt constructor/setter text, tooltips, status messages, QMessageBox calls, user-facing signal payloads, logger calls, `print`, and raised exception literals. It follows common local list/tuple → `append()` → `join()` → tooltip flows, but it is not a complete Python data-flow engine. The requested keyword audit (`錯誤`, `失敗`, `警告`, `無法`, `逾時`, `未連接`, `timeout`, `failed`, `error`, `warning`) is also represented where those literals occur in these call sites.
 
-Inventory rows: **881**; user-facing rows: **165**; translation candidates: **0**.
+Inventory rows: **1033**; user-facing rows: **166**; translation candidates: **0**.
 Static scanner counts and the supplemental manual indirect-UI audit are reported separately in `I18N_ERROR_SYSTEM_MIGRATION.md`; a zero static count alone is not proof that every dynamic UI path is translated.
 
 Error-code values below are migration candidates, not registry definitions. Final codes are curated by failure condition so multiple call sites can share one stable code.
@@ -50,6 +50,56 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | core/error_reporter.py | 71 / `__init__` | history_limit must be positive | I. Exception / traceback | No | No | No | `—` | — | raise |
 | core/i18n.py | 60 / `load_catalog` | Invalid translation catalog: {path} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | core/i18n.py | 134 / `translate` | Invalid placeholders for translation key {key}: {exc} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/release_info.py | 14 / `version_tuple` | Expected a major.minor.patch version | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/release_info.py | 20 / `validate_history` | Unsupported release history | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/release_info.py | 23 / `validate_history` | Missing release history | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/release_info.py | 27 / `validate_history` | Invalid release entry | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/release_info.py | 30 / `validate_history` | Release versions must be unique and newest first | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/release_info.py | 35 / `validate_history` | Invalid release changes | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/release_info.py | 41 / `validate_history` | Every release needs nonempty bilingual changes | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 68 / `read_json` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 88 / `safe_relative` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 103 / `target_file` | local_changes | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 109 / `target_file` | local_changes | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 122 / `_json_url` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 125 / `_json_url` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 133 / `check_latest` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 141 / `download_archive` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 147 / `download_archive` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 152 / `download_archive` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 156 / `download_archive` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 168 / `extract_package` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 174 / `extract_package` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 176 / `extract_package` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 181 / `extract_package` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 191 / `extract_package` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 194 / `extract_package` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 201 / `extract_package` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 205 / `extract_package` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 217 / `install_conflicts` | unverified_install | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 224 / `install_conflicts` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 241 / `prepare_update` | development_checkout | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 243 / `prepare_update` | pending_update | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 245 / `prepare_update` | unverified_install | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 249 / `prepare_update` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 251 / `prepare_update` | disk_space | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 258 / `prepare_update` | local_changes | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 262 / `prepare_update` | disk_space | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 272 / `prepare_update` | dependencies | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 280 / `prepare_update` | dependencies | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/software_update.py | 287 / `prepare_update` | dependencies | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/update_launcher.py | 21 / `main` | Update recovery failed. Preserve files and see: {job.parent} | H. Developer-only log | No | No | No | `—` | — | print |
+| core/update_launcher.py | 30 / `main` | The selected Python environment is missing. Restore the previous installation. | H. Developer-only log | No | No | No | `—` | — | print |
+| core/update_runner.py | 125 / `apply_files` | local_changes | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/update_runner.py | 128 / `apply_files` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/update_runner.py | 185 / `finish_update` | startup_failed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/update_runner.py | 187 / `finish_update` | startup_failed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/update_runner.py | 189 / `finish_update` | Installation failed; restoring previous files | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| core/update_runner.py | 213 / `main` | development_checkout | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/update_runner.py | 216 / `main` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/update_runner.py | 220 / `main` | installer_running | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/update_runner.py | 233 / `main` | parent_running | I. Exception / traceback | No | No | No | `—` | — | raise |
+| core/update_runner.py | 237 / `main` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/camera_ae_calibration.py | 52 / `calibration_candidates` | SDK AE target minimum must not exceed maximum | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/camera_ae_calibration.py | 282 / `interpolate_sdk_target` | Calibration curve does not bracket {desired}% Effective DN | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/camera_ae_calibration.py | 291 / `interpolate_sdk_target` | Calibration curve does not bracket {desired}% Effective DN | I. Exception / traceback | No | No | No | `—` | — | raise |
@@ -78,116 +128,162 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/camera_auto_exposure_settings_dialog.py | 163 / `__init__` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/camera_auto_exposure_settings_dialog.py | 164 / `__init__` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/camera_auto_exposure_settings_dialog.py | 219 / `refresh_calibration_status` | {camera} ({serial}) | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/camera_capture_bridge.py | 84 / `capture` | A camera capture request is already pending | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 109 / `capture` | Camera capture timeout at {exposure_ms} ms / Gain {gain_percent}% | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 115 / `capture` | Camera capture completed without a frame | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 137 / `restore_state` | Camera state restoration timed out | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 146 / `_request_trigger_cleanup` | Camera trigger-mode cleanup timed out | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 200 / `_configure` | Camera controller does not support formal software-trigger capture | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 218 / `_configure` | Camera Exposure/Gain readback mismatch: requested={exposure_us} us/{gain_percent}%, actual={setting_exposure} us/{actual_gain}% | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 313 / `_accept_frame` | Triggered capture stream restart was not confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_capture_bridge.py | 323 / `_accept_frame` | Camera state changed during triggered capture: expected={expected}, actual={after} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 254 / `open_device` | Nncam.Open | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 267 / `open_device` | MONO capability check | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 505 / `close_camera` | Failed to disable SDK AE while closing calibration | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/camera_controller.py | 668 / `_validate_auto_exposure_roi` | AE ROI coordinates and dimensions must be integers | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 671 / `_validate_auto_exposure_roi` | AE ROI requires x/y >= 0 and width/height > 0 | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 673 / `_validate_auto_exposure_roi` | AE ROI {roi} exceeds current image {self._width}x{self._height} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 758 / `_apply_auto_exposure_roi` | %s requested=%s readback=%s verified=True | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 801 / `_set_auto_exposure_roi_failure` | %s requested=%s readback=%s verified=False error=%s | H. Developer-only log | No | No | No | `—` | — | logger.error |
-| gui/camera_controller.py | 829 / `prepare_software_triggered_capture` | Camera is not connected | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 833 / `prepare_software_triggered_capture` | Camera does not report software-trigger support | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 845 / `prepare_software_triggered_capture` | Camera trigger mode requested 1, read back {trigger_mode} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 856 / `prepare_software_triggered_capture` | Invalid camera real exposure: {real_exposure_us} us | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 874 / `triggered_capture_readback` | Software-trigger capture is not active | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 885 / `trigger_single_frame` | Software-trigger capture is not prepared | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 903 / `finish_software_triggered_capture` | Camera video mode requested 0, read back {readback} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 931 / `switch_to_manual_exposure` | Failed to restore SDK AE after manual switch failure | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/camera_controller.py | 1131 / `start_ae_calibration` | NNCAM_OPTION_AUTOEXP_POLICY must read back Exposure Preferred (1) | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1135 / `start_ae_calibration` | NNCAM_OPTION_AUTOEXPOSURE_PERCENT must read back full active AE ROI average (100) | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1267 / `_log_ae_calibration_point` | SDK_AE_CAL_POINT timestamp=%s camera_serial=%s resolution=%s sdk_target=%s target_readback=%s converged=%s exposure_us=%s gain_percent=%s mean_dn=%s dn_max=%s dn_percent=%s saturated=%s low_signal=%s convergence_source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1307 / `_finish_ae_calibration` | SDK_AE_CAL_RESULT timestamp=%s camera_serial=%s resolution=%s profile_id=%s %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1321 / `_finish_ae_calibration` | Failed to restore prior AE profile after calibration failure | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/camera_controller.py | 1342 / `_abort_ae_calibration` | Failed to leave SDK AE off after calibration abort | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/camera_controller.py | 1413 / `_write_nonblocking_sdk_option` | %s readback mismatch: requested=%s actual=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1420 / `_write_nonblocking_sdk_option` | %s requested/readback=%s/%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1423 / `_write_nonblocking_sdk_option` | %s unsupported or unavailable: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1445 / `_write_sdk_auto_exposure_target_value` | SDK AutoExpoTarget readback mismatch: requested=%s actual=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1451 / `_write_sdk_auto_exposure_target_value` | SDK AutoExpoTarget requested/readback=%s/%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1456 / `_enable_sdk_auto_exposure` | Camera is not connected | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1458 / `_enable_sdk_auto_exposure` | SDK AE cannot be enabled until AEAuxRect readback is verified | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1462 / `_enable_sdk_auto_exposure` | SDK AE enable mode must be Continuous or Once | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1468 / `_enable_sdk_auto_exposure` | SDK AutoExpoEnable requested {enable_value}, read back {readback} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1488 / `_disable_sdk_auto_exposure` | SDK AutoExpoEnable requested 0, read back {readback} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1513 / `_log_sdk_ae_calibration` | SDK_AE_CALIBRATION timestamp=%s reason=%s UserTargetPercent=%s%% EffectiveDNTarget=%s/%s SDKAutoExposureTarget=%s SDKAutoExposureTargetReadback=%s SDKAutoExposureMode=%s AutoExposureCalibrationApplied=%s CalibrationProfileId=%s ExposureReadbackUs=%s GainReadback=%s MeanEffectiveDN=%s MeanEffectiveDNPercent=%s MeteringMeanEffectiveDN=%s MeteringMeanEffectiveDNPercent=%s AEROI=%s AEROIVerified=%s Alignment=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1752 / `read_temperature_c` | Camera temperature query must run in the camera owner thread | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1754 / `read_temperature_c` | NNCAM_FLAG_GETTEMPERATURE is not present for this camera | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1779 / `_query_optional` | RisingCam SDK query failed for %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 1853 / `_log_camera_capabilities` | Camera Model: %s Camera Serial: %s Camera flags: 0x%X Mono: %s RAW10/11/12/14/16 flags: %s/%s/%s/%s/%s Resolution: %sx%s SDK version: %s MaxBitDepth: %s Sensor bit depth: %s BitDepthSource: %s ScientificPixelFormat: %s ScientificFormatNegotiation: %s BITDEPTH requested/readback: 1/%s RGB requested/readback/fallback: 4/%s/%s RGB option 4 supported: %s BYTEORDER diagnostic: readback=%s, IgnoredForMono=True LINEAR/CURVE/Gamma requested: 0/0/100 LINEAR/CURVE/Gamma readback: %s/%s/%s ScientificISPBypassed: %s RAW mode: %s ISP mode: %s Pull bits: %s StartPullMode status: %s ScientificContainer: %s ScientificChannels: %s ContainerBitDepth: 16 ScientificFrameValidated: %s ScientificMeasurementReady: %s PixelFormat diagnostic: %s (%s) RawValueAlignment/source: %s/%s EffectiveDNMax: %s Camera Exposure Hardware Range: min = %s us, max = %s us, default = %s us Camera Gain Hardware Range: min = %s %%, max = %s %%, default = %s %% Auto Exposure Range: min exposure = %s us, max exposure = %s us, min gain = %s %%, max gain = %s %% Auto Exposure Controller/mode/user target: RisingCamSDK/%s/%s %% SDK Auto Exposure target requested/readback: %s/%s SDK Auto Exposure policy/full-active-AE-ROI percent: %s/%s SDK Auto Exposure exposure/gain damping: %s/%s SDK Overexposure policy: %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1988 / `_read_sensor_bit_depth` | unexpected MaxBitDepth value: {bit_depth} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 1989 / `_read_sensor_bit_depth` | Camera startup OK: MaxBitDepth() -> %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 1994 / `_read_sensor_bit_depth` | RisingCam MaxBitDepth() failed (%s); using capability-flag fallback: %s bits | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2001 / `_read_sensor_bit_depth` | RisingCam MaxBitDepth() failed (%s) and no RAW10/11/12/14/16 capability flag is available; SensorBitDepth=Unknown | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2015 / `_apply_camera_startup_setting` | Camera startup OK: %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 2017 / `_apply_camera_startup_setting` | Camera startup OK: %s -> %r | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 2020 / `_apply_camera_startup_setting` | Camera startup FAILED at %s: %s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/camera_controller.py | 2039 / `_configure_mono16_bitdepth` | Camera startup FAILED at NNCAM_OPTION_BITDEPTH readback: %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
-| gui/camera_controller.py | 2043 / `_configure_mono16_bitdepth` | NNCAM_OPTION_BITDEPTH readback | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2058 / `_negotiate_mono16_rgb_option` | RGB=4 negotiation failed at %s; using PullImageV4(bits=16): %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2074 / `_negotiate_mono16_rgb_option` | RGB=4 negotiation readback mismatch (requested=4, readback=%r); using PullImageV4(bits=16) | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2097 / `_configure_nonblocking_option` | Camera startup NON-BLOCKING setting failed at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2110 / `_configure_nonblocking_option` | Camera startup NON-BLOCKING readback mismatch at %s: requested=%s, readback=%r | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2129 / `_configure_nonblocking_gamma` | Camera startup NON-BLOCKING setting failed at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2139 / `_configure_nonblocking_gamma` | Camera startup NON-BLOCKING readback mismatch at Gamma: requested=%s, readback=%r | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2154 / `_read_nonblocking_setting` | Camera startup diagnostic: %s -> %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 2157 / `_read_nonblocking_setting` | Camera startup diagnostic unavailable at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2172 / `_start_stream` | Scientific format validation | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2215 / `_handle_sdk_event` | SDK AE convergence Exposure/Gain readback failed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2257 / `_handle_sdk_event` | Failed to disable SDK AE after convergence failure | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/camera_controller.py | 2262 / `_handle_sdk_event` | RisingCam SDK reported auto exposure convergence failure | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_controller.py | 2278 / `_update_alignment_verification` | DN alignment runtime evidence: state=%s frames=%s sampled=%s nonzero=%s above_right_max=%s (%.6f) low_bits_zero_ratio=%.6f nonzero_low_bits=%s patterns=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 2306 / `_update_alignment_verification` | DN alignment runtime verified: alignment=%s source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 2348 / `_pull_live_frame` | MONO16 buffer validation | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2361 / `_pull_live_frame` | PullImageV4(bits=16) | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2372 / `_pull_live_frame` | PullImageV4(bits=16) output validation | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/camera_controller.py | 2383 / `_pull_live_frame` | Camera scientific frame validation: PullBits=16 PixelFormat=%s ContainerBitDepth=16 Scientific frame dtype=%s Scientific frame ndim=%s Scientific frame shape=%s Pitch=%s BufferSize=%s ScientificFormatNegotiation=%s ScientificFrameValidated=True ScientificMeasurementReady=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/camera_controller.py | 2530 / `_pull_live_frame` | Camera scientific frame validation failed: %s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/camera_controller.py | 2627 / `_poll_camera_status` | RisingCam SDK failed to refresh current Exposure/Gain | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/camera_exposure.py | 16 / `validate_official_exposure_us` | Exposure must be within the official IUA8300KMB range {OFFICIAL_EXPOSURE_MIN_US}–{OFFICIAL_EXPOSURE_MAX_US} us; got {value} us | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 120 / `capture` | A camera capture request is already pending | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 146 / `capture` | Camera capture timeout at {exposure_ms} ms / Gain {gain_percent}% | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 152 / `capture` | Camera capture completed without a frame | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 167 / `capture` | {failure}; Camera cleanup failed: {cleanup} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 180 / `set_metering_roi` | A camera request is already pending | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 188 / `set_metering_roi` | Channel ROI setting timed out | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 204 / `_set_metering_roi` | Channel AE ROI readback verification failed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 219 / `auto_exposure` | A camera request is already pending | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 228 / `auto_exposure` | Recipe auto exposure did not converge before timeout | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 233 / `auto_exposure` | Recipe AE completed without Exposure/Gain readback | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 245 / `auto_exposure` | Recipe AE cleanup timed out | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 252 / `auto_exposure` | {failure}; Recipe AE cleanup failed: {cleanup} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 289 / `_on_auto_exposure_result` | Recipe AE result is outside verified limits | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 333 / `restore_state` | Camera state restoration timed out | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 342 / `_request_trigger_cleanup` | Camera trigger-mode cleanup timed out | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 398 / `_configure` | Camera controller does not support formal software-trigger capture | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 416 / `_configure` | Camera Exposure/Gain readback mismatch: requested={exposure_us} us/{gain_percent}%, actual={setting_exposure} us/{actual_gain}% | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 515 / `_accept_frame` | Triggered capture stream restart was not confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_capture_bridge.py | 525 / `_accept_frame` | Camera state changed during triggered capture: expected={expected}, actual={after} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 263 / `open_device` | Nncam.Open | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 276 / `open_device` | MONO capability check | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 520 / `close_camera` | Failed to disable SDK AE while closing calibration | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/camera_controller.py | 686 / `_validate_auto_exposure_roi` | AE ROI coordinates and dimensions must be integers | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 689 / `_validate_auto_exposure_roi` | AE ROI requires x/y >= 0 and width/height > 0 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 691 / `_validate_auto_exposure_roi` | AE ROI {roi} exceeds current image {self._width}x{self._height} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 776 / `_apply_auto_exposure_roi` | %s requested=%s readback=%s verified=True | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 819 / `_set_auto_exposure_roi_failure` | %s requested=%s readback=%s verified=False error=%s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/camera_controller.py | 847 / `prepare_software_triggered_capture` | Camera is not connected | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 851 / `prepare_software_triggered_capture` | Camera does not report software-trigger support | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 862 / `prepare_software_triggered_capture` | Camera trigger mode requested 1, read back {trigger_mode} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 873 / `prepare_software_triggered_capture` | Invalid camera real exposure: {real_exposure_us} us | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 891 / `triggered_capture_readback` | Software-trigger capture is not active | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 902 / `trigger_single_frame` | Software-trigger capture is not prepared | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 919 / `finish_software_triggered_capture` | Camera video mode requested 0, read back {readback} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 925 / `finish_software_triggered_capture` | Trigger cleanup ROI verification failed: {self._auto_exposure_roi_error} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 950 / `switch_to_manual_exposure` | Failed to restore SDK AE after manual switch failure | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/camera_controller.py | 1148 / `start_ae_calibration` | NNCAM_OPTION_AUTOEXP_POLICY must read back Exposure Preferred (1) | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1152 / `start_ae_calibration` | NNCAM_OPTION_AUTOEXPOSURE_PERCENT must read back full active AE ROI average (100) | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1284 / `_log_ae_calibration_point` | SDK_AE_CAL_POINT timestamp=%s camera_serial=%s resolution=%s sdk_target=%s target_readback=%s converged=%s exposure_us=%s gain_percent=%s mean_dn=%s dn_max=%s dn_percent=%s saturated=%s low_signal=%s convergence_source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 1324 / `_finish_ae_calibration` | SDK_AE_CAL_RESULT timestamp=%s camera_serial=%s resolution=%s profile_id=%s %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 1338 / `_finish_ae_calibration` | Failed to restore prior AE profile after calibration failure | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/camera_controller.py | 1359 / `_abort_ae_calibration` | Failed to leave SDK AE off after calibration abort | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/camera_controller.py | 1430 / `_write_nonblocking_sdk_option` | %s readback mismatch: requested=%s actual=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 1437 / `_write_nonblocking_sdk_option` | %s requested/readback=%s/%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 1440 / `_write_nonblocking_sdk_option` | %s unsupported or unavailable: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 1462 / `_write_sdk_auto_exposure_target_value` | SDK AutoExpoTarget readback mismatch: requested=%s actual=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 1468 / `_write_sdk_auto_exposure_target_value` | SDK AutoExpoTarget requested/readback=%s/%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 1476 / `_start_native_auto_exposure` | Camera is not connected | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1483 / `_enable_sdk_auto_exposure` | Camera is not connected | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1485 / `_enable_sdk_auto_exposure` | SDK AE cannot be enabled until AEAuxRect readback is verified | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1489 / `_enable_sdk_auto_exposure` | SDK AE enable mode must be Continuous or Once | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1496 / `_enable_sdk_auto_exposure` | SDK AutoExpoEnable requested {enable_value}, read back {readback} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1519 / `_disable_sdk_auto_exposure` | SDK AutoExpoEnable requested 0, read back {readback} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1544 / `_log_sdk_ae_calibration` | SDK_AE_CALIBRATION timestamp=%s reason=%s UserTargetPercent=%s%% EffectiveDNTarget=%s/%s SDKAutoExposureTarget=%s SDKAutoExposureTargetReadback=%s SDKAutoExposureMode=%s AutoExposureCalibrationApplied=%s CalibrationProfileId=%s ExposureReadbackUs=%s GainReadback=%s MeanEffectiveDN=%s MeanEffectiveDNPercent=%s MeteringMeanEffectiveDN=%s MeteringMeanEffectiveDNPercent=%s AEROI=%s AEROIVerified=%s Alignment=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 1792 / `read_temperature_c` | Camera temperature query must run in the camera owner thread | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1794 / `read_temperature_c` | NNCAM_FLAG_GETTEMPERATURE is not present for this camera | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 1819 / `_query_optional` | RisingCam SDK query failed for %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 1893 / `_log_camera_capabilities` | Camera Model: %s Camera Serial: %s Camera flags: 0x%X Mono: %s RAW10/11/12/14/16 flags: %s/%s/%s/%s/%s Resolution: %sx%s SDK version: %s MaxBitDepth: %s Sensor bit depth: %s BitDepthSource: %s ScientificPixelFormat: %s ScientificFormatNegotiation: %s BITDEPTH requested/readback: 1/%s RGB requested/readback/fallback: 4/%s/%s RGB option 4 supported: %s BYTEORDER diagnostic: readback=%s, IgnoredForMono=True LINEAR/CURVE/Gamma requested: 0/0/100 LINEAR/CURVE/Gamma readback: %s/%s/%s ScientificISPBypassed: %s RAW mode: %s ISP mode: %s Pull bits: %s StartPullMode status: %s ScientificContainer: %s ScientificChannels: %s ContainerBitDepth: 16 ScientificFrameValidated: %s ScientificMeasurementReady: %s PixelFormat diagnostic: %s (%s) RawValueAlignment/source: %s/%s EffectiveDNMax: %s Camera Exposure Hardware Range: min = %s us, max = %s us, default = %s us Camera Gain Hardware Range: min = %s %%, max = %s %%, default = %s %% Auto Exposure Range: min exposure = %s us, max exposure = %s us, min gain = %s %%, max gain = %s %% Auto Exposure Controller/mode/user target: RisingCamSDK/%s/%s %% SDK Auto Exposure target requested/readback: %s/%s SDK Auto Exposure policy/full-active-AE-ROI percent: %s/%s SDK Auto Exposure exposure/gain damping: %s/%s SDK Overexposure policy: %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2028 / `_read_sensor_bit_depth` | unexpected MaxBitDepth value: {bit_depth} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2029 / `_read_sensor_bit_depth` | Camera startup OK: MaxBitDepth() -> %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2034 / `_read_sensor_bit_depth` | RisingCam MaxBitDepth() failed (%s); using capability-flag fallback: %s bits | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2041 / `_read_sensor_bit_depth` | RisingCam MaxBitDepth() failed (%s) and no RAW10/11/12/14/16 capability flag is available; SensorBitDepth=Unknown | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2055 / `_apply_camera_startup_setting` | Camera startup OK: %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2057 / `_apply_camera_startup_setting` | Camera startup OK: %s -> %r | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2060 / `_apply_camera_startup_setting` | Camera startup FAILED at %s: %s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/camera_controller.py | 2079 / `_configure_mono16_bitdepth` | Camera startup FAILED at NNCAM_OPTION_BITDEPTH readback: %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/camera_controller.py | 2083 / `_configure_mono16_bitdepth` | NNCAM_OPTION_BITDEPTH readback | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2098 / `_negotiate_mono16_rgb_option` | RGB=4 negotiation failed at %s; using PullImageV4(bits=16): %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2114 / `_negotiate_mono16_rgb_option` | RGB=4 negotiation readback mismatch (requested=4, readback=%r); using PullImageV4(bits=16) | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2137 / `_configure_nonblocking_option` | Camera startup NON-BLOCKING setting failed at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2150 / `_configure_nonblocking_option` | Camera startup NON-BLOCKING readback mismatch at %s: requested=%s, readback=%r | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2169 / `_configure_nonblocking_gamma` | Camera startup NON-BLOCKING setting failed at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2179 / `_configure_nonblocking_gamma` | Camera startup NON-BLOCKING readback mismatch at Gamma: requested=%s, readback=%r | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2194 / `_read_nonblocking_setting` | Camera startup diagnostic: %s -> %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2197 / `_read_nonblocking_setting` | Camera startup diagnostic unavailable at %s: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2225 / `_verify_top_down_rows` | NNCAM_OPTION_UPSIDE_DOWN readback | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2234 / `_start_stream` | Scientific format validation | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2263 / `_start_stream` | {failure}; stream cleanup failed: {cleanup} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2318 / `_handle_sdk_event` | SDK AE convergence Exposure/Gain readback failed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2360 / `_handle_sdk_event` | Failed to disable SDK AE after convergence failure | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/camera_controller.py | 2365 / `_handle_sdk_event` | RisingCam SDK reported auto exposure convergence failure | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_controller.py | 2381 / `_update_alignment_verification` | DN alignment runtime evidence: state=%s frames=%s sampled=%s nonzero=%s above_right_max=%s (%.6f) low_bits_zero_ratio=%.6f nonzero_low_bits=%s patterns=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2409 / `_update_alignment_verification` | DN alignment runtime verified: alignment=%s source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2451 / `_pull_live_frame` | MONO16 buffer validation | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2464 / `_pull_live_frame` | PullImageV4(bits=16) | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2475 / `_pull_live_frame` | PullImageV4(bits=16) output validation | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_controller.py | 2486 / `_pull_live_frame` | Camera scientific frame validation: PullBits=16 PixelFormat=%s ContainerBitDepth=16 Scientific frame dtype=%s Scientific frame ndim=%s Scientific frame shape=%s Pitch=%s BufferSize=%s ScientificFormatNegotiation=%s ScientificFrameValidated=True ScientificMeasurementReady=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_controller.py | 2633 / `_pull_live_frame` | Camera scientific frame validation failed: %s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/camera_controller.py | 2730 / `_poll_camera_status` | RisingCam SDK failed to refresh current Exposure/Gain | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/camera_exposure.py | 22 / `validate_official_exposure_us` | Exposure must be within the official IUA8300KMB range {OFFICIAL_EXPOSURE_MIN_US}–{OFFICIAL_EXPOSURE_MAX_US} us; got {value} us | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 42 / `_reapply_recipe_roi` | {stage}: AE ROI verification failed; requested={requested}; readback={controller._auto_exposure_roi_readback}; {controller._auto_exposure_roi_error} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 86 / `verify_recipe_ae_configuration` | Recipe AE limits changed: expected={expected_range}, actual={actual_range} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 94 / `verify_recipe_ae_configuration` | Recipe AE option {option} changed: expected={expected}, actual={actual} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 97 / `verify_recipe_ae_configuration` | Recipe AE target changed: expected={metadata['RecipeAESDKTarget']}, actual={target} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 115 / `_seed_within_limits` | Recipe AE initial Exposure/Gain readback mismatch: requested={(requested_exposure, requested_gain)}, actual={actual} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 174 / `recipe_ae_failure_context` | RECIPE_AE_FAILURE_CONTEXT %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/camera_recipe_ae.py | 184 / `_read_ae_range` | {stage}: Invalid AE limits {(max_time, min_time, max_gain, min_gain)} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 192 / `_write_ae_range` | {stage}: Requested limits exceed native SDK AE capabilities: {requested} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 207 / `_write_ae_range` | {stage}: AE range readback mismatch; requested={requested}, actual={actual} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 213 / `restore_recipe_ae` | Camera disconnected during Recipe AE cleanup | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 234 / `restore_recipe_ae` | Recipe AE option restoration readback mismatch | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 237 / `restore_recipe_ae` | Recipe AE target restoration readback mismatch | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 262 / `begin_recipe_ae` | Recipe AE requires Once or Continuous mode | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 265 / `begin_recipe_ae` | Recipe AE requires a connected, available camera | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 267 / `begin_recipe_ae` | Invalid Recipe AE gain mode | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 269 / `begin_recipe_ae` | Recipe AE requires a verified channel metering ROI | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 294 / `begin_recipe_ae` | Recipe AE exposure capabilities are unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 296 / `begin_recipe_ae` | Recipe AE maximum exposure is outside camera capabilities | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 306 / `begin_recipe_ae` | Recipe AE fixed Gain is outside camera capabilities | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 312 / `begin_recipe_ae` | Recipe AE Gain limits do not intersect hardware capabilities | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 331 / `begin_recipe_ae` | Recipe AE policy/metering readback mismatch | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_recipe_ae.py | 334 / `begin_recipe_ae` | Recipe AE target readback mismatch | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/camera_sdk_diagnostics.py | 46 / `sdk_call` | CAMERA_SDK_CALL %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/camera_sdk_diagnostics.py | 51 / `sdk_call` | CAMERA_SDK_FAILED %s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
 | gui/camera_temperature_monitor.py | 133 / `start` | Camera temperature monitor started path=%s model=%s identifier=%s interval_ms=%d | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | gui/camera_temperature_monitor.py | 157 / `stop` | Camera temperature monitor stopped path=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | gui/camera_temperature_monitor.py | 169 / `poll_now` | camera temperature is unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/camera_temperature_monitor.py | 172 / `poll_now` | invalid camera temperature value: {value} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/camera_temperature_monitor.py | 265 / `_mark_unsupported` | Camera temperature API unsupported: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
 | gui/camera_temperature_monitor.py | 276 / `_log_read_failure` | Camera temperature read unavailable; polling will continue: %s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/dark_iv_chart.py | 100 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/dark_iv_chart.py | 101 / `__init__` | 0 / 0 | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/dark_iv_chart.py | 102 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/dark_iv_chart.py | 101 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/dark_iv_chart.py | 102 / `__init__` | 0 / 0 | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/dark_iv_chart.py | 103 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/dark_iv_chart.py | 155 / `reset` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/dark_iv_chart.py | 156 / `reset` | 0 / 0 | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/dark_iv_chart.py | 104 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/dark_iv_chart.py | 157 / `reset` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/dark_iv_chart.py | 158 / `reset` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/dark_iv_chart.py | 193 / `add_point` | {self._channel} — {self._sample_id} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/dark_iv_chart.py | 194 / `add_point` | {progress.current} / {progress.total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/dark_iv_chart.py | 195 / `add_point` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/dark_iv_chart.py | 200 / `add_point` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/dark_iv_chart.py | 333 / `save_dark_iv_plot_png` | Could not save Dark I-V PNG: {output} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/dark_iv_chart.py | 335 / `save_dark_iv_plot_png` | Dark I-V PNG is empty: {output} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_hardware.py | 16 / `relay_channel_id` | Unsupported logical channel: {logical_channel} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_hardware.py | 39 / `_verify_gsp4h_dark` | GSP4H Light OFF could not be verified | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_hardware.py | 45 / `prepare_shared_dark` | White Light OFF could not be verified for Shared Dark | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_hardware.py | 69 / `verified_light_off` | White Light OFF verification failed after polarity | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_hardware.py | 92 / `prepare_channel_dark` | White Light OFF could not be verified for channel Dark I-V | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_hardware.py | 101 / `run_dark_iv` | Dark I-V step must be greater than zero | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_hardware.py | 118 / `run_dark_iv` | Dark I-V requires a confirmed polarity factor | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_runner.py | 205 / `__init__` | Measurement snapshot execution order does not match the runtime plan | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_runner.py | 230 / `check_cancel` | Runtime watchdog: max_recipe_time_s exceeded | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_runner.py | 235 / `check_cancel` | Runtime watchdog: max_output_time_s exceeded for electrical setpoint | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_runner.py | 276 / `run` | Safe shutdown did not satisfy every post-processing gate | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_runner.py | 278 / `run` | Hardware measurement ended without a result | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_runner.py | 300 / `_run_all_polarities` | {channel.channel} polarity could not be reliably determined | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/el_matrix_runner.py | 480 / `_save_dark_iv` | {channel.channel} Dark I-V polarity metadata is inconsistent | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/dark_iv_chart.py | 158 / `reset` | 0 / 0 | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/dark_iv_chart.py | 159 / `reset` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/dark_iv_chart.py | 160 / `reset` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/dark_iv_chart.py | 196 / `add_point` | {self._channel} — {self._sample_id} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/dark_iv_chart.py | 197 / `add_point` | {progress.current} / {progress.total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/dark_iv_chart.py | 198 / `add_point` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/dark_iv_chart.py | 203 / `add_point` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/dark_iv_chart.py | 337 / `save_dark_iv_plot_png` | Could not save Dark I-V PNG: {output} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/dark_iv_chart.py | 339 / `save_dark_iv_plot_png` | Dark I-V PNG is empty: {output} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_hardware.py | 17 / `relay_channel_id` | Unsupported logical channel: {logical_channel} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_hardware.py | 40 / `_verify_gsp4h_dark` | GSP4H Light OFF could not be verified | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_hardware.py | 46 / `prepare_shared_dark` | White Light OFF could not be verified for Shared Dark | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_hardware.py | 70 / `verified_light_off` | White Light OFF verification failed after polarity | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_hardware.py | 93 / `prepare_channel_dark` | White Light OFF could not be verified for channel Dark I-V | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_hardware.py | 102 / `run_dark_iv` | Dark I-V step must be greater than zero | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_hardware.py | 119 / `run_dark_iv` | Dark I-V requires a confirmed polarity factor | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_plan.py | 202 / `captures` | Automatic exposure capture settings are resolved at runtime | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 278 / `__init__` | Measurement snapshot execution order does not match the runtime plan | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 305 / `check_cancel` | Runtime watchdog: max_recipe_time_s exceeded | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 310 / `check_cancel` | Runtime watchdog: max_output_time_s exceeded for electrical setpoint | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 367 / `run` | {failure}; Safe shutdown failed: {cleanup} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 376 / `run` | Safe shutdown did not satisfy every post-processing gate | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 378 / `run` | Hardware measurement ended without a result | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 399 / `_record_failure` | MEASUREMENT_FAILED %s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/el_matrix_runner.py | 405 / `_record_failure` | Could not save measurement failure diagnostics | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/el_matrix_runner.py | 425 / `_run_all_polarities` | {channel.channel} polarity could not be reliably determined | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 590 / `_run_channel` | Recipe AE returned invalid Exposure/Gain | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 596 / `_run_channel` | Recipe AE baseline cannot accommodate the requested Stop list | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 652 / `_run_channel` | {failure}; Channel cleanup failed: {cleanup} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 662 / `_save_dark_iv` | {channel.channel} Dark I-V polarity metadata is inconsistent | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/el_matrix_runner.py | 765 / `_capture_and_save` | Recipe ROI source resolution changed during measurement | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/emergency_manager.py | 72 / `begin_operator_operation` | EMERGENCY reset by explicit operator operation generation=%d | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | gui/emergency_manager.py | 98 / `trigger` | GLOBAL_EMERGENCY timestamp=%s workflow=%s generation=%d smu_before=%s white_light_before=%s | H. Developer-only log | No | No | No | `—` | — | logger.critical |
 | gui/emergency_manager.py | 121 / `trigger` | GLOBAL_EMERGENCY SMU shutdown request failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
@@ -221,9 +317,12 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/light_service.py | 228 / `save` | CFG-101 | F. User-facing error | No | No | No | `—` | — | signal self.failed.emit |
 | gui/light_service.py | 263 / `_completed` | COMM-203 \| COMM-201 | F. User-facing error | No | No | No | `—` | — | signal self.failed.emit |
 | gui/light_service.py | 289 / `_connection_fault` | COMM-203 | F. User-facing error | No | No | No | `—` | — | signal self.failed.emit |
-| gui/main_window_close.py | 25 / `closeEvent` | Manual SMU settings flush failed during application close | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/main_window_close.py | 35 / `closeEvent` | FORCED_APPLICATION_EXIT_WITH_UNCONFIRMED_SMU_OUTPUT | H. Developer-only log | No | No | No | `—` | — | logger.critical |
-| gui/main_window_close.py | 39 / `closeEvent` | Forced-exit emergency cleanup failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/log_export.py | 41 / `create_log_zip` | The log archive must have a .zip extension | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/log_export.py | 113 / `run` | Log ZIP export failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/main_window_close.py | 32 / `closeEvent` | Manual SMU settings flush failed during application close | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/main_window_close.py | 50 / `closeEvent` | FORCED_APPLICATION_EXIT_WITH_UNCONFIRMED_SMU_OUTPUT | H. Developer-only log | No | No | No | `—` | — | logger.critical |
+| gui/main_window_close.py | 54 / `closeEvent` | Forced-exit emergency cleanup failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/main_window_close.py | 91 / `closeEvent` | Software update handoff failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
 | gui/main_window_devices.py | 303 / `on_camera_opened` | {width} × {height} | A. UI label / button / menu | Yes | No | No | `—` | — | addItem; canonical technical/value display |
 | gui/main_window_devices.py | 393 / `on_camera_closed` | FPS — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 | gui/main_window_devices.py | 394 / `on_camera_closed` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
@@ -246,26 +345,26 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/main_window_devices.py | 548 / `on_effective_dn_status_changed` | {float(percent)} % | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 | gui/main_window_devices.py | 551 / `on_effective_dn_status_changed` | {target_percent} % | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 | gui/main_window_devices.py | 553 / `on_effective_dn_status_changed` | {int(target_dn)} /{int(maximum)} | A. UI label / button / menu | Yes | No | No | `—` | — | indirect presentation assignment target_text; canonical technical/value display |
-| gui/main_window_devices.py | 578 / `on_frame_ready` | {image.width()} × {image.height()} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_devices.py | 697 / `_refresh_live_view_roi_dn` | EffectiveDNMax must be positive | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/main_window_devices.py | 929 / `on_temperature_availability_changed` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_measurement.py | 68 / `start_background_measurement` | Measurement is already running | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/main_window_measurement.py | 578 / `run` | Pixel CSV blocked: safe shutdown was not fully verified | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/main_window_ui.py | 265 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/main_window_ui.py | 266 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/main_window_ui.py | 272 / `_build_central_ui` | {self.controller.auto_exposure_target_percent} % | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/main_window_ui.py | 295 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/main_window_ui.py | 296 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/main_window_ui.py | 297 / `_build_central_ui` | Unknown | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/main_window_ui.py | 314 / `_build_central_ui` | Sensor | A. UI label / button / menu | Yes | No | No | `—` | — | addRow; canonical technical/value display |
-| gui/main_window_ui.py | 315 / `_build_central_ui` | Alignment | A. UI label / button / menu | Yes | No | No | `—` | — | addRow; canonical technical/value display |
-| gui/main_window_ui.py | 322 / `_build_central_ui` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/main_window_ui.py | 336 / `_build_central_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/main_window_ui.py | 337 / `_build_central_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/main_window_ui.py | 338 / `_build_central_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/main_window_ui.py | 342 / `_build_central_ui` | SDK | A. UI label / button / menu | Yes | No | No | `—` | — | addRow; canonical technical/value display |
-| gui/main_window_ui.py | 593 / `_retranslate_ui` | {self.last_image.width()} × {self.last_image.height()} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/main_window_ui.py | 678 / `_build_status_bar` | SMU — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_devices.py | 581 / `on_frame_ready` | {image.width()} × {image.height()} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_devices.py | 702 / `_refresh_live_view_roi_dn` | EffectiveDNMax must be positive | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/main_window_devices.py | 934 / `on_temperature_availability_changed` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_measurement.py | 70 / `start_background_measurement` | Measurement is already running | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/main_window_measurement.py | 721 / `run` | Pixel CSV blocked: safe shutdown was not fully verified | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/main_window_ui.py | 268 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 269 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 275 / `_build_central_ui` | {self.controller.auto_exposure_target_percent} % | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 298 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 299 / `_build_central_ui` | -- | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 300 / `_build_central_ui` | Unknown | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 317 / `_build_central_ui` | Sensor | A. UI label / button / menu | Yes | No | No | `—` | — | addRow; canonical technical/value display |
+| gui/main_window_ui.py | 318 / `_build_central_ui` | Alignment | A. UI label / button / menu | Yes | No | No | `—` | — | addRow; canonical technical/value display |
+| gui/main_window_ui.py | 325 / `_build_central_ui` | N/A | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 339 / `_build_central_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 340 / `_build_central_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 341 / `_build_central_ui` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/main_window_ui.py | 345 / `_build_central_ui` | SDK | A. UI label / button / menu | Yes | No | No | `—` | — | addRow; canonical technical/value display |
+| gui/main_window_ui.py | 597 / `_retranslate_ui` | {self.last_image.width()} × {self.last_image.height()} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/main_window_ui.py | 682 / `_build_status_bar` | SMU — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/manual_smu_settings.py | 147 / `save` | Manual SMU settings readback verification failed | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/manual_smu_settings.py | 151 / `save` | Manual SMU settings readback verification failed | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/manual_smu_settings.py | 160 / `_raise_for_status` | Manual SMU settings {operation} failed: {status_name} | I. Exception / traceback | No | No | No | `—` | — | raise |
@@ -273,26 +372,26 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/manual_smu_settings.py | 217 / `_qsettings_factory` | QSettings persistence backend has no storage identity | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/measurement_control_bar.py | 46 / `__init__` | Recipe | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/measurement_control_bar.py | 70 / `retranslate` | Recipe | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_execution_plan.py | 102 / `_matrix_channel_steps` | Dark IV | A. UI label / button / menu | Yes | No | No | `—` | — | ExecutionStep; canonical technical/value display |
-| gui/measurement_execution_plan.py | 113 / `_matrix_channel_steps` | EL Matrix | A. UI label / button / menu | Yes | No | No | `—` | — | ExecutionStep; canonical technical/value display |
-| gui/measurement_execution_plan.py | 174 / `_output_steps` | Raw DN | A. UI label / button / menu | Yes | No | No | `—` | — | _leaf; canonical technical/value display |
-| gui/measurement_execution_plan.py | 224 / `build_measurement_execution_plan` | Channels | A. UI label / button / menu | Yes | No | No | `—` | — | ExecutionStep; canonical technical/value display |
-| gui/measurement_output.py | 165 / `write_mono_array_csv_atomic` | Scientific Pixel CSV requires an H×W mono array | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 167 / `write_mono_array_csv_atomic` | Pixel CSV value header must identify the scientific value | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 196 / `save_pixel_csv_products` | Raw Pixel CSV requires a uint16 H×W scientific array | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 199 / `save_pixel_csv_products` | Shared Dark must be a shape-matched uint16 H×W array | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 208 / `save_pixel_csv_products` | Dark-corrected Pixel CSV requires a matching Shared Dark frame | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 214 / `save_pixel_csv_products` | Exposure-normalized Pixel CSV requires a matching Shared Dark frame | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 216 / `save_pixel_csv_products` | Exposure normalization requires exposure_ms > 0 | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 236 / `scientific_to_visualization` | Scientific camera source must use a uint16 container | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 239 / `scientific_to_visualization` | SensorBitDepth must be between 1 and 16 | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 263 / `scientific_to_visualization` | RawValueAlignment must be 'right', 'left', or 'unknown' | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 268 / `scientific_to_visualization` | Scientific image must be H×W or H×W×3 | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 274 / `save_scientific_tiff` | TIFF scientific master requires uint16 source data | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 277 / `save_scientific_tiff` | Scientific image must be H×W or H×W×3 | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 290 / `save_matrix_capture` | Scientific frame is unavailable; refusing to create TIFF from Live View | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 295 / `save_matrix_capture` | Camera acquisition must provide a uint16 scientific frame | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_output.py | 342 / `save_matrix_capture` | Derived output generation modified the scientific source buffer | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_execution_plan.py | 122 / `_matrix_channel_steps` | Dark IV | A. UI label / button / menu | Yes | No | No | `—` | — | ExecutionStep; canonical technical/value display |
+| gui/measurement_execution_plan.py | 133 / `_matrix_channel_steps` | EL Matrix | A. UI label / button / menu | Yes | No | No | `—` | — | ExecutionStep; canonical technical/value display |
+| gui/measurement_execution_plan.py | 194 / `_output_steps` | Raw DN | A. UI label / button / menu | Yes | No | No | `—` | — | _leaf; canonical technical/value display |
+| gui/measurement_execution_plan.py | 244 / `build_measurement_execution_plan` | Channels | A. UI label / button / menu | Yes | No | No | `—` | — | ExecutionStep; canonical technical/value display |
+| gui/measurement_output.py | 225 / `write_mono_array_csv_atomic` | Scientific Pixel CSV requires an H×W mono array | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 227 / `write_mono_array_csv_atomic` | Pixel CSV value header must identify the scientific value | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 256 / `save_pixel_csv_products` | Raw Pixel CSV requires a uint16 H×W scientific array | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 259 / `save_pixel_csv_products` | Shared Dark must be a shape-matched uint16 H×W array | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 268 / `save_pixel_csv_products` | Dark-corrected Pixel CSV requires a matching Shared Dark frame | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 274 / `save_pixel_csv_products` | Exposure-normalized Pixel CSV requires a matching Shared Dark frame | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 276 / `save_pixel_csv_products` | Exposure normalization requires exposure_ms > 0 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 296 / `scientific_to_visualization` | Scientific camera source must use a uint16 container | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 299 / `scientific_to_visualization` | SensorBitDepth must be between 1 and 16 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 323 / `scientific_to_visualization` | RawValueAlignment must be 'right', 'left', or 'unknown' | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 328 / `scientific_to_visualization` | Scientific image must be H×W or H×W×3 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 334 / `save_scientific_tiff` | TIFF scientific master requires uint16 source data | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 337 / `save_scientific_tiff` | Scientific image must be H×W or H×W×3 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 350 / `save_matrix_capture` | Scientific frame is unavailable; refusing to create TIFF from Live View | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 355 / `save_matrix_capture` | Camera acquisition must provide a uint16 scientific frame | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_output.py | 410 / `save_matrix_capture` | Derived output generation modified the scientific source buffer | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/measurement_progress_dialog.py | 57 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/measurement_progress_dialog.py | 58 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/measurement_progress_dialog.py | 59 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
@@ -302,27 +401,29 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/measurement_progress_dialog.py | 63 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/measurement_progress_dialog.py | 64 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
 | gui/measurement_progress_dialog.py | 65 / `__init__` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 151 / `update_progress` | {progress.channel_index} / {progress.channel_total} — {progress.channel} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 175 / `update_progress` | {progress.channel_completed} / {progress.channel_capture_total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 175 / `update_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 179 / `update_progress` | {progress.current} / {progress.total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 181 / `update_progress` | {percent}% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 184 / `update_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 196 / `update_postprocess_progress` | {progress.current} / {progress.total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 197 / `update_postprocess_progress` | {progress.percent}% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 200 / `update_postprocess_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 230 / `set_complete` | {total} / {total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/measurement_progress_dialog.py | 231 / `set_complete` | 100.0% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 162 / `update_progress` | {progress.channel_index} / {progress.channel_total} — {progress.channel} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 186 / `update_progress` | {progress.channel_completed} / {progress.channel_capture_total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 186 / `update_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 190 / `update_progress` | {progress.current} / {progress.total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 192 / `update_progress` | {percent}% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 195 / `update_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 208 / `update_postprocess_progress` | {progress.current} / {progress.total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 209 / `update_postprocess_progress` | {progress.percent}% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 212 / `update_postprocess_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 242 / `set_complete` | {total} / {total} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/measurement_progress_dialog.py | 243 / `set_complete` | 100.0% | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 | gui/measurement_snapshot.py | 170 / `save_el_matrix_snapshot` | Measurement Snapshot SHA-256 verification failed | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/measurement_worker.py | 78 / `report_progress` | current and total are required for text progress | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/measurement_worker.py | 59 / `execute` | MEASUREMENT_WORKER_FAILED | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/measurement_worker.py | 66 / `execute` | {'; '.join(fields)}; {exc} | F. User-facing error | No | No | No | `—` | — | signal self.failed.emit |
+| gui/measurement_worker.py | 91 / `report_progress` | current and total are required for text progress | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/numeric.py | 18 / `decimal_from_number` | Invalid numeric value: {value} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/numeric.py | 20 / `decimal_from_number` | Numeric value must be finite: {value} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/numeric.py | 46 / `normalize_json_numbers` | Recipe values must be finite | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/pixel_csv_postprocessor.py | 111 / `run` | Pixel CSV is blocked until safe shutdown is fully verified | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/pixel_csv_postprocessor.py | 294 / `_process_job` | Shared Dark shape {dark.shape} does not match source shape {source.shape}: {source_path} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/pixel_csv_postprocessor.py | 306 / `_process_job` | Exposure normalization requires Exposure > 0 ms | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/pixel_csv_postprocessor.py | 332 / `_validate_scientific_array` | Scientific TIFF must contain uint16 pixels, got {array.dtype}: {path} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/pixel_csv_postprocessor.py | 336 / `_validate_scientific_array` | Scientific TIFF must be H×W mono, got shape {array.shape}: {path} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/pixel_csv_postprocessor.py | 113 / `run` | Pixel CSV is blocked until safe shutdown is fully verified | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/pixel_csv_postprocessor.py | 296 / `_process_job` | Shared Dark shape {dark.shape} does not match source shape {source.shape}: {source_path} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/pixel_csv_postprocessor.py | 308 / `_process_job` | Exposure normalization requires Exposure > 0 ms | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/pixel_csv_postprocessor.py | 334 / `_validate_scientific_array` | Scientific TIFF must contain uint16 pixels, got {array.dtype}: {path} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/pixel_csv_postprocessor.py | 338 / `_validate_scientific_array` | Scientific TIFF must be H×W mono, got shape {array.shape}: {path} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/polarity_measurement.py | 97 / `measure` | Device area must be greater than 0 cm² | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/polarity_measurement.py | 141 / `measure` | POLARITY_JSC raw_current_a=%s sample_area_cm2=%g current_density_ma_cm2=%+.9g compliance_a=%g | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | gui/polarity_measurement.py | 175 / `measure` | POLARITY_VOC samples_v=%s representative_v=%+.9g compliance_v=%g | H. Developer-only log | No | No | No | `—` | — | logger.info |
@@ -338,34 +439,47 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/polarity_measurement.py | 366 / `_measurement_configuration` | POLARITY_MEASUREMENT_CONFIG source_mode=%s measurement_mode=%s nplc=%g nplc_auto=OFF range=AUTO driver_specific=false | H. Developer-only log | No | No | No | `—` | — | logger.info |
 | gui/polarity_measurement.py | 393 / `_sample_output` | Temporary measurement OUTPUT ON was not confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/polarity_measurement.py | 408 / `_sample_output` | Temporary measurement OUTPUT OFF was not confirmed | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_ae_stops.py | 19 / `stop_factors` | Stop list requires 1–33 unique finite numbers between -12 and +12 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_ae_stops.py | 31 / `baseline_range_us` | AE exposure ceiling is outside camera capabilities | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_ae_stops.py | 35 / `baseline_range_us` | Stop list leaves no valid AE baseline exposure range | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_ae_stops.py | 45 / `native_baseline_range_us` | Stop list leaves no valid baseline within native SDK AE limits | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_ae_stops.py | 52 / `bracket_exposures_us` | Stop entries resolve to duplicate exposures at camera microsecond precision | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/recipe_dialog.py | 53 / `__init__` | {width} × {height} | A. UI label / button / menu | Yes | No | No | `—` | — | addItem; canonical technical/value display |
-| gui/recipe_dialog_logic.py | 40 / `_parse_finite_numbers` | {field_name} 必須是以逗號或分號分隔的有限數值 | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_dialog_logic.py | 44 / `_parse_finite_numbers` | {field_name} 不可空白 | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_dialog_logic.py | 46 / `_parse_finite_numbers` | {field_name} 不可包含 NaN 或 Inf | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_dialog_logic.py | 69 / `_show_recipe_operation_failure` | Recipe %s failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/recipe_dialog_logic.py | 133 / `_write_recipe_to_form` | {channel.area_cm2} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
-| gui/recipe_dialog_pages.py | 61 / `_build_basic_tab` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/recipe_dialog_pages.py | 62 / `_build_basic_tab` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
-| gui/recipe_store.py | 35 / `_dataclass_from_dict` | {cls.__name__} must be a JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 505 / `from_dict` | Recipe must be a JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 507 / `from_dict` | Legacy Recipe safety/SMU values were detected and ignored; they did not override application-wide safety settings | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/recipe_store.py | 512 / `from_dict` | Legacy HDR configuration was removed and ignored. | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/recipe_store.py | 617 / `from_dict` | Legacy voltage-driven EL points cannot be represented exactly by the current-density Matrix; default Matrix points were retained | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/recipe_store.py | 648 / `from_dict` | Legacy per-row EL points expanded into Matrix axes; Recipe was migrated as draft for operator review | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/recipe_store.py | 664 / `from_dict` | Legacy Recipe Sample IDs were ignored; enter them in the Main Window | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/recipe_store.py | 736 / `load` | Recipe repository root must be a JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 739 / `load` | schema_version must be an integer | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 741 / `load` | Recipe schema {schema} is newer than supported schema {self.schema_version} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 746 / `load` | recipes must be a JSON array | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 749 / `load` | Every Recipe entry must be a JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 752 / `load` | 無法讀取 Recipe 檔案：{exc} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 758 / `import_payload` | 匯入檔案頂層必須是 JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 761 / `import_payload` | 匯入檔案必須包含有效的整數 schema_version | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 763 / `import_payload` | Recipe schema_version={schema} 高於目前支援版本 {self.schema_version}，拒絕匯入 | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 768 / `import_payload` | 匯入檔案必須包含 recipe JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 794 / `import_payload` | Recipe.{section} 必須是 JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 803 / `import_payload` | Recipe.channels 必須是 JSON array | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/recipe_store.py | 807 / `import_payload` | Recipe.channels[{index}] 必須是 JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_dialog_logic.py | 41 / `_parse_finite_numbers` | {field_name} 必須是以逗號或分號分隔的有限數值 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_dialog_logic.py | 45 / `_parse_finite_numbers` | {field_name} 不可空白 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_dialog_logic.py | 47 / `_parse_finite_numbers` | {field_name} 不可包含 NaN 或 Inf | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_dialog_logic.py | 70 / `_show_recipe_operation_failure` | Recipe %s failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/recipe_dialog_logic.py | 136 / `_write_recipe_to_form` | {channel.area_cm2} | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
+| gui/recipe_dialog_pages.py | 64 / `_build_basic_tab` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/recipe_dialog_pages.py | 65 / `_build_basic_tab` | — | A. UI label / button / menu | Yes | No | No | `—` | — | QLabel; canonical technical/value display |
+| gui/recipe_dialog_pages.py | 202 / `_build_el_matrix_tab` | {value} % | A. UI label / button / menu | Yes | No | No | `—` | — | addItem; canonical technical/value display |
+| gui/recipe_roi.py | 16 / `validate_roi` | ROI requires four integer image-pixel coordinates | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_roi.py | 19 / `validate_roi` | ROI {values} is outside source image {width}x{height} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_roi.py | 28 / `validate_channel_rois` | Recipe ROI channels must be CH1 through CH4 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_roi.py | 30 / `validate_channel_rois` | Every enabled channel must have its own ROI | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_roi.py | 36 / `crop_channel_frame` | Recipe ROI requires a uint16 H×W scientific frame | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_roi_excitation.py | 176 / `prepare` | RECIPE_EL_ROI_READY channel=%s details=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/recipe_roi_excitation.py | 198 / `run` | RECIPE_EL_ROI_FAILED | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/recipe_store.py | 36 / `_dataclass_from_dict` | {cls.__name__} must be a JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 566 / `from_dict` | Recipe must be a JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 568 / `from_dict` | Legacy Recipe safety/SMU values were detected and ignored; they did not override application-wide safety settings | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/recipe_store.py | 573 / `from_dict` | Legacy HDR configuration was removed and ignored. | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/recipe_store.py | 678 / `from_dict` | Legacy voltage-driven EL points cannot be represented exactly by the current-density Matrix; default Matrix points were retained | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/recipe_store.py | 709 / `from_dict` | Legacy per-row EL points expanded into Matrix axes; Recipe was migrated as draft for operator review | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/recipe_store.py | 725 / `from_dict` | Legacy Recipe Sample IDs were ignored; enter them in the Main Window | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/recipe_store.py | 797 / `load` | Recipe repository root must be a JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 800 / `load` | schema_version must be an integer | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 802 / `load` | Recipe schema {schema} is newer than supported schema {self.schema_version} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 807 / `load` | recipes must be a JSON array | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 810 / `load` | Every Recipe entry must be a JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 813 / `load` | 無法讀取 Recipe 檔案：{exc} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 819 / `import_payload` | 匯入檔案頂層必須是 JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 822 / `import_payload` | 匯入檔案必須包含有效的整數 schema_version | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 824 / `import_payload` | Recipe schema_version={schema} 高於目前支援版本 {self.schema_version}，拒絕匯入 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 829 / `import_payload` | 匯入檔案必須包含 recipe JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 855 / `import_payload` | Recipe.{section} 必須是 JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 864 / `import_payload` | Recipe.channels 必須是 JSON array | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/recipe_store.py | 868 / `import_payload` | Recipe.channels[{index}] 必須是 JSON object | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/relay_controller.py | 180 / `refresh_connection` | Relay HID open failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
 | gui/relay_controller.py | 193 / `disconnect` | Failed to close relay HID device | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
 | gui/relay_controller.py | 216 / `refresh_hardware_state` | R00 raw feature report (len=%s): %s \| %s | H. Developer-only log | No | No | No | `—` | — | logger.debug |
@@ -383,33 +497,33 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/relay_controller.py | 289 / `set_channel` | command sent but state verification failed \| CH%s expected=%s actual=%s raw=%s | H. Developer-only log | No | No | No | `—` | — | logger.error |
 | gui/relay_controller.py | 293 / `set_channel` | CH{channel} command sent but state verification failed：expected {requested.value}, actual {actual.value} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/relay_controller.py | 297 / `set_channel` | Relay command verified \| CH%s state=%s | H. Developer-only log | No | No | No | `—` | — | logger.debug |
-| gui/relay_controller.py | 368 / `_record` | Relay \| %s \| %s \| %s \| %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/relay_controller.py | 385 / `_channel` | CH{channel} {requested} failed：{exc} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/relay_controller.py | 404 / `_group_on_unlocked` | Relay controller state mismatch：mask=0x{state_mask}, expected ON mask=0x{group_mask} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/relay_controller.py | 412 / `_group_on_unlocked` | Relay rollback failed for CH%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/relay_controller.py | 414 / `_group_on_unlocked` | {selected.display_name} ON failed; rollback attempted：{exc} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/relay_controller.py | 415 / `_group_on_unlocked` | %s relay controller state verified=ON \| mask=0x%02X | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/relay_controller.py | 446 / `_group_off_unlocked` | %s relay controller state verified=OFF \| mask=0x%02X | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/relay_controller.py | 461 / `_safe_white_light_off_unlocked` | White Light OFF skipped: USBRelay8 not connected \| source=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/relay_controller.py | 469 / `_safe_white_light_off_unlocked` | Relay controller state mismatch：mask=0x{state_mask}, expected 0x00 | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/relay_controller.py | 471 / `_safe_white_light_off_unlocked` | White Light relay controller OFF verification failed \| source=%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/relay_controller.py | 473 / `_safe_white_light_off_unlocked` | White Light relay controller OFF verified \| mask=0x%02X source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/relay_controller.py | 490 / `select_smu_output_channel` | SMU OUTPUT OFF was not authoritatively confirmed; routing is blocked | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/relay_controller.py | 501 / `select_smu_output_channel` | SMU_ROUTING REQUEST channel=%s mapped_relay=%d state_before=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/relay_controller.py | 515 / `select_smu_output_channel` | SMU routing all-OFF verification failed: mask=0x{all_off_mask} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/relay_controller.py | 518 / `select_smu_output_channel` | SMU_ROUTING BREAK verified_all_off mask=0x%02X | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/relay_controller.py | 527 / `select_smu_output_channel` | SMU routing target verification failed: expected={channel_id}/Relay {target_relay}, actual={active or 'none'}, mask=0x{after_mask} | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/relay_controller.py | 539 / `select_smu_output_channel` | SMU_ROUTING MAKE verified channel=%s relay=%d state_after=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/relay_controller.py | 564 / `clear_smu_output_channels` | SMU_ROUTING all OFF verified mask=0x%02X source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/relay_controller.py | 573 / `_safe_smu_output_channels_off_unlocked` | SMU routing OFF skipped: USBRelay8 not connected \| source=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
-| gui/relay_controller.py | 584 / `_safe_smu_output_channels_off_unlocked` | SMU routing OFF verification failed source=%s failures=%s | H. Developer-only log | No | No | No | `—` | — | logger.error |
-| gui/relay_controller.py | 586 / `_safe_smu_output_channels_off_unlocked` | SMU routing OFF verified mask=0x%02X source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
-| gui/relay_controller.py | 598 / `active_smu_output_channel` | SMU routing state is unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/relay_controller.py | 672 / `_assert_routing_mutual_exclusion_unlocked` | routing fault handler must raise | I. Exception / traceback | No | No | No | `—` | — | raise |
-| gui/relay_controller.py | 677 / `_latch_routing_fault_unlocked` | %s source=%s | H. Developer-only log | No | No | No | `—` | — | logger.critical |
-| gui/relay_controller.py | 685 / `_latch_routing_fault_unlocked` | SMU routing fault handler failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/relay_controller.py | 695 / `shutdown` | SMU routing OFF failed during RelayService shutdown | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
-| gui/relay_controller.py | 700 / `shutdown` | White Light OFF failed during RelayService shutdown | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/relay_controller.py | 369 / `_record` | Relay \| %s \| %s \| %s \| %s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/relay_controller.py | 392 / `_channel` | CH{channel} {requested} failed：{exc} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/relay_controller.py | 415 / `_group_on_unlocked` | Relay controller state mismatch：mask=0x{state_mask}, expected ON mask=0x{group_mask} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/relay_controller.py | 423 / `_group_on_unlocked` | Relay rollback failed for CH%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/relay_controller.py | 425 / `_group_on_unlocked` | {selected.display_name} ON failed; rollback attempted：{exc} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/relay_controller.py | 426 / `_group_on_unlocked` | %s relay controller state verified=ON \| mask=0x%02X | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/relay_controller.py | 457 / `_group_off_unlocked` | %s relay controller state verified=OFF \| mask=0x%02X | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/relay_controller.py | 485 / `_safe_white_light_off_unlocked` | White Light OFF skipped: USBRelay8 not connected \| source=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/relay_controller.py | 493 / `_safe_white_light_off_unlocked` | Relay controller state mismatch：mask=0x{state_mask}, expected 0x00 | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/relay_controller.py | 495 / `_safe_white_light_off_unlocked` | White Light relay controller OFF verification failed \| source=%s | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/relay_controller.py | 497 / `_safe_white_light_off_unlocked` | White Light relay controller OFF verified \| mask=0x%02X source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/relay_controller.py | 514 / `select_smu_output_channel` | SMU OUTPUT OFF was not authoritatively confirmed; routing is blocked | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/relay_controller.py | 525 / `select_smu_output_channel` | SMU_ROUTING REQUEST channel=%s mapped_relay=%d state_before=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/relay_controller.py | 539 / `select_smu_output_channel` | SMU routing all-OFF verification failed: mask=0x{all_off_mask} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/relay_controller.py | 542 / `select_smu_output_channel` | SMU_ROUTING BREAK verified_all_off mask=0x%02X | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/relay_controller.py | 551 / `select_smu_output_channel` | SMU routing target verification failed: expected={channel_id}/Relay {target_relay}, actual={active or 'none'}, mask=0x{after_mask} | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/relay_controller.py | 563 / `select_smu_output_channel` | SMU_ROUTING MAKE verified channel=%s relay=%d state_after=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/relay_controller.py | 588 / `clear_smu_output_channels` | SMU_ROUTING all OFF verified mask=0x%02X source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/relay_controller.py | 597 / `_safe_smu_output_channels_off_unlocked` | SMU routing OFF skipped: USBRelay8 not connected \| source=%s | H. Developer-only log | No | No | No | `—` | — | logger.warning |
+| gui/relay_controller.py | 608 / `_safe_smu_output_channels_off_unlocked` | SMU routing OFF verification failed source=%s failures=%s | H. Developer-only log | No | No | No | `—` | — | logger.error |
+| gui/relay_controller.py | 610 / `_safe_smu_output_channels_off_unlocked` | SMU routing OFF verified mask=0x%02X source=%s | H. Developer-only log | No | No | No | `—` | — | logger.info |
+| gui/relay_controller.py | 622 / `active_smu_output_channel` | SMU routing state is unavailable | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/relay_controller.py | 696 / `_assert_routing_mutual_exclusion_unlocked` | routing fault handler must raise | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/relay_controller.py | 701 / `_latch_routing_fault_unlocked` | %s source=%s | H. Developer-only log | No | No | No | `—` | — | logger.critical |
+| gui/relay_controller.py | 709 / `_latch_routing_fault_unlocked` | SMU routing fault handler failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/relay_controller.py | 719 / `shutdown` | SMU routing OFF failed during RelayService shutdown | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/relay_controller.py | 724 / `shutdown` | White Light OFF failed during RelayService shutdown | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
 | gui/relay_settings_dialog.py | 117 / `_build_ui` | Relay {relay_number} | A. UI label / button / menu | Yes | No | No | `—` | — | addItem; canonical technical/value display |
 | gui/scientific_dn.py | 16 / `effective_dn_max` | SensorBitDepth must be between 1 and 16 | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/scientific_dn.py | 31 / `_validated_source` | Scientific DN source must be a uint16 ndarray | I. Exception / traceback | No | No | No | `—` | — | raise |
@@ -575,6 +689,11 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | gui/smu_manual_panel.py | 286 / `reset_for_output_off` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 | gui/smu_manual_panel.py | 287 / `reset_for_output_off` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 | gui/smu_manual_panel.py | 472 / `_flush_persistent_settings_from_timer` | Manual SMU settings save failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/software_update.py | 60 / `run` | Software update task failed | I. Exception / traceback | No | No | No | `—` | — | logger.exception |
+| gui/software_update.py | 237 / `launch_installer` | invalid_package | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/software_update.py | 240 / `launch_installer` | settings | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/software_update.py | 247 / `launch_installer` | settings | I. Exception / traceback | No | No | No | `—` | — | raise |
+| gui/software_update.py | 271 / `notify_update_startup` | startup_failed | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/widgets.py | 119 / `set_roi` | Cannot set an ROI without an image | I. Exception / traceback | No | No | No | `—` | — | raise |
 | gui/widgets.py | 131 / `set_roi` | ROI must be a non-empty rectangle inside the image | I. Exception / traceback | No | No | No | `—` | — | raise |
 | relay_hardware_diagnostic.py | 23 / `main` | diagnostic failed: {exc} | H. Developer-only log | No | No | No | `—` | — | print |
@@ -697,31 +816,57 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | tests/test_el_matrix.py | 493 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | inf | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_el_matrix.py | 499 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | 0.9, 1.1 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_el_matrix.py | 500 / `test_dialog_inactive_invalid_values_are_ignored_but_active_values_fail` | -inf | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_el_matrix.py | 1308 / `failed_shutdown` | safe shutdown verification failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_el_matrix.py | 1571 / `fail_cleanup` | test cleanup failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_el_matrix.py | 1311 / `failed_shutdown` | safe shutdown verification failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_el_matrix.py | 1575 / `fail_cleanup` | test cleanup failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_emergency_manager.py | 48 / `safe_smu_output_channels_off` | routing relay failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_emergency_manager.py | 63 / `fail` | worker failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_error_center.py | 29 / `test_search_subsystem_and_severity_filters` | SMU-203 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_error_center.py | 50 / `test_polarity_measurement_code_is_searchable` | MEAS-202 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_exposure_estimates.py | 128 / `test_editor_recalculates_modes_and_active_parameters_and_clears_invalid` | 100, 200, 500 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_exposure_estimates.py | 129 / `test_editor_recalculates_modes_and_active_parameters_and_clears_invalid` | 1, 2, 3, 1000 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_gsp4h_controller.py | 93 / `open` | Unavailable fake port | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_gsp4h_controller.py | 100 / `exchange` | Disconnected fake device | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_gsp4h_controller.py | 107 / `exchange` | Fake test gate timed out | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_gsp4h_controller.py | 113 / `close` | Fake close failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_gsp4h_controller.py | 279 / `cancel` | cancelled | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_light_linearity_automatic.py | 38 / `capture` | cancelled during scout | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_light_linearity_automatic.py | 303 / `test_cancelling_lux_measurement_turns_off_light_through_worker` | 2 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_light_linearity_automatic.py | 334 / `test_one_click_mode_uses_editable_gain_defaults_without_resetting_custom_input` | 125, 750, 5000 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_light_linearity_automatic.py | 414 / `test_lux_step_requires_matching_readback_and_valid_value_before_advancing` | 2 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_light_linearity_automatic.py | 426 / `test_lux_step_requires_matching_readback_and_valid_value_before_advancing` | 10 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_light_linearity_automatic.py | 434 / `test_lux_step_requires_matching_readback_and_valid_value_before_advancing` | 5 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_light_linearity_automatic.py | 453 / `test_previous_step_reapplies_pwm_and_cancel_blocks_late_start` | 2 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_light_linearity_automatic.py | 456 / `test_previous_step_reapplies_pwm_and_cancel_blocks_late_start` | 3 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_light_linearity_automatic.py | 39 / `capture` | cancelled during scout | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_light_linearity_automatic.py | 310 / `test_cancelling_lux_measurement_turns_off_light_through_worker` | 2 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_light_linearity_automatic.py | 338 / `test_one_click_mode_uses_editable_gain_defaults_without_resetting_custom_input` | 125, 750, 5000 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_light_linearity_automatic.py | 418 / `test_lux_step_requires_matching_readback_and_valid_value_before_advancing` | 2 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_light_linearity_automatic.py | 430 / `test_lux_step_requires_matching_readback_and_valid_value_before_advancing` | 10 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_light_linearity_automatic.py | 438 / `test_lux_step_requires_matching_readback_and_valid_value_before_advancing` | 5 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_light_linearity_automatic.py | 457 / `test_previous_step_reapplies_pwm_and_cancel_blocks_late_start` | 2 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_light_linearity_automatic.py | 460 / `test_previous_step_reapplies_pwm_and_cancel_blocks_late_start` | 3 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_light_linearity_qualification.py | 40 / `safe_off` | OFF readback failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_light_linearity_qualification.py | 74 / `capture` | cancel test | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_light_linearity_qualification.py | 376 / `test_channel_tables_and_shutdown_without_hardware` | 100 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_light_linearity_qualification.py | 377 / `test_channel_tables_and_shutdown_without_hardware` | 25 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_log_export.py | 134 / `setUp` | Settings | A. UI label / button / menu | No | No | No | `—` | — | addMenu; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_log_export.py | 166 / `delayed_export` | test worker was not released | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_measurement_sdk_recovery.py | 47 / `Stop` | restore Stop failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_measurement_sdk_recovery.py | 108 / `_set_limits` | Invalid intermediate AE limits: {raw} | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_measurement_sdk_recovery.py | 390 / `safe_shutdown` | shutdown connection lost | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_measurement_sdk_recovery.py | 411 / `write` | diagnostic write denied | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_measurement_sdk_recovery.py | 423 / `clear_routing` | channel relay cleanup failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_measurement_sdk_recovery.py | 440 / `run` | Recipe AE setup | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_polarity_settings_and_measurement.py | 217 / `fail_light_on` | relay transport failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_polarity_settings_and_measurement.py | 273 / `check` | cancelled | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_ae_boundaries.py | 38 / `put_AEAuxRect` | No active metering pipeline | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_ae_stops.py | 122 / `test_ui_list_recalculates_estimate_and_preserves_mode_values` | -1, 0, +1 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_ae_stops.py | 125 / `test_ui_list_recalculates_estimate_and_preserves_mode_values` | 0, 0 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_ae_stops.py | 128 / `test_ui_list_recalculates_estimate_and_preserves_mode_values` | invalid inactive field | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_ae_timeout.py | 162 / `auto_exposure` | Output watchdog did not stop AE | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_auto_exposure.py | 144 / `test_ui_dropdown_shows_only_selected_form_and_preserves_values` | 150, 250 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_auto_exposure.py | 145 / `test_ui_dropdown_shows_only_selected_form_and_preserves_values` | 100, 200 | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_auto_exposure.py | 460 / `test_camera_error_aborts_without_waiting_for_timeout` | camera link failed | F. User-facing error | No | No | No | `—` | — | signal c.error_occurred.emit; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_channel_roi.py | 77 / `set_channel_roi` | ROI verification failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_channel_roi.py | 157 / `test_resolution_change_disconnect_error_and_cancel_reject` | camera failed | F. User-facing error | No | No | No | `—` | — | signal camera.error_occurred.emit; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_roi_excitation.py | 66 / `clear_routing` | Routing while output ON | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_roi_excitation.py | 72 / `route_channel` | Routing while output ON | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_roi_excitation.py | 78 / `run_polarity` | Polarity may use white light only before selection | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_roi_excitation.py | 86 / `apply_polarity_factor` | Polarity change while output ON | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_roi_excitation.py | 92 / `_on` | EL cannot turn ON until white light is inhibited and OFF | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_recipe_roi_excitation.py | 106 / `readback` | Compliance tripped | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_recipe_store.py | 33 / `write_then_fail` | temporary write failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_recipe_store.py | 78 / `write_then_fail` | temporary write failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_recipe_workflow_refactor.py | 314 / `test_sample_id_inputs_follow_exact_active_channels_and_preserve_per_channel_values` | A | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
@@ -731,9 +876,9 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | tests/test_relay.py | 47 / `send` | simulated HID feature-report failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_relay.py | 63 / `get_feature_report` | simulated feature-report failure | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_relay.py | 89 / `write` | Output Report write() must not be called | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_relay.py | 251 / `test_save_does_not_reset_runtime_or_change_hardware` | Saved name | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_relay.py | 403 / `check_cancel` | workflow generation changed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
-| tests/test_relay.py | 468 / `test_settings_round_trip_and_channel_conflict` | Fixture | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation assignment display_name; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_relay.py | 277 / `test_save_does_not_reset_runtime_or_change_hardware` | Saved name | A. UI label / button / menu | No | No | No | `—` | — | setText; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_relay.py | 429 / `check_cancel` | workflow generation changed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_relay.py | 494 / `test_settings_round_trip_and_channel_conflict` | Fixture | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation assignment display_name; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_sidebar_settings.py | 31 / `signal_receiver_count` | Qt signal not found: {type(obj).__name__}.{signal_name} | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_autoconnect.py | 43 / `query` | unexpected query: {command} | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_control.py | 79 / `configure_voltage_source` | configure failed | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
@@ -750,6 +895,7 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | tests/test_smu_ui_structure.py | 289 / `test_output_unknown_is_explicit_and_locks_every_manual_field` | ⚠ 無法確認 SMU 輸出狀態 請確認 SMU 前面板 OUTPUT 已關閉 | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field manual_lock_reason; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_ui_structure.py | 319 / `ready_state` | B2901BL | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field device_label; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tests/test_smu_ui_structure.py | 328 / `ready_state` | B2901BL｜手動控制可用｜OUTPUT：OFF | A. UI label / button / menu | No | No | No | `—` | — | indirect presentation field status_text; test fixture/vendor SDK, not application UI; test fixture/assertion |
+| tests/test_software_update.py | 373 / `fail_once` | locked application file | I. Exception / traceback | No | No | No | `—` | — | raise; test fixture/vendor SDK, not application UI; test fixture/assertion |
 | tools/camera_linearity_qualification/analysis.py | 96 / `analyze_frames` | Resolution inconsistency | I. Exception / traceback | No | No | No | `—` | — | raise |
 | tools/camera_linearity_qualification/capture_plan.py | 38 / `build_capture_plan` | Capture plan requires at least one Gain and Exposure | I. Exception / traceback | No | No | No | `—` | — | raise |
 | tools/camera_linearity_qualification/capture_plan.py | 40 / `build_capture_plan` | Gain values must be positive | I. Exception / traceback | No | No | No | `—` | — | raise |
@@ -794,6 +940,12 @@ Error-code values below are migration candidates, not registry definitions. Fina
 | tools/camera_linearity_qualification/window.py | 290 / `_on_progress` | — | A. UI label / button / menu | Yes | No | No | `—` | — | setText; canonical technical/value display |
 | tools/camera_linearity_qualification/window.py | 386 / `_numbers` | List cannot be empty | I. Exception / traceback | No | No | No | `—` | — | raise |
 | tools/camera_linearity_qualification/window.py | 393 / `_parse_roi` | ROI must be x,y,width,height | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/check_release.py | 23 / `source_version` | Missing __version__ | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/check_release.py | 38 / `validate_release` | GUI version and release history disagree | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/check_release.py | 44 / `validate_release` | Every delivery must increase the version above the baseline | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/check_release.py | 50 / `validate_release` | Published release notes must not be rewritten | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/check_release.py | 64 / `main` | Release manifest is stale; run --write-manifest before testing | I. Exception / traceback | No | No | No | `—` | — | raise |
+| tools/check_release.py | 65 / `main` | Release {history[0]['version']}: version, notes and {len(payload['files'])} file hashes verified | H. Developer-only log | No | No | No | `—` | — | print |
 | tools/gsp4h_controller/controller.py | 81 / `_exchange` | {command}: {exc} | I. Exception / traceback | No | No | No | `—` | — | raise |
 | tools/gsp4h_controller/controller.py | 88 / `_require_open` | Serial port is not open | I. Exception / traceback | No | No | No | `—` | — | raise |
 | tools/gsp4h_controller/controller.py | 93 / `_require_ready` | Refresh all settings successfully before enabling light controls | I. Exception / traceback | No | No | No | `—` | — | raise |

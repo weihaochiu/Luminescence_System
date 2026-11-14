@@ -73,6 +73,7 @@ class MainWindowUIMixin:
         self.exit_action = QAction(tr("app.exit"), self)
         self.exit_action.setShortcut(QKeySequence.StandardKey.Quit)
         self.about_action = QAction(tr("app.about"), self)
+        self.update_action = QAction(tr("update.check"), self)
         self.recipe_manager_action = QAction(
             style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView), tr("recipe.manager"), self
         )
@@ -121,6 +122,7 @@ class MainWindowUIMixin:
         self.actual_action.triggered.connect(lambda: self.image_view.actual_size())
         self.exit_action.triggered.connect(self.close)
         self.about_action.triggered.connect(self.show_about)
+        self.update_action.triggered.connect(self.check_software_updates)
         self.recipe_manager_action.triggered.connect(self.open_recipe_manager)
         self.polarity_settings_action.triggered.connect(self.open_polarity_settings)
         self.camera_auto_exposure_settings_action.triggered.connect(
@@ -171,6 +173,7 @@ class MainWindowUIMixin:
 
         self.help_menu = self.menuBar().addMenu(tr("menu.help"))
         self.help_menu.addAction(self.error_center_action)
+        self.help_menu.addAction(self.update_action)
         self.help_menu.addSeparator()
         self.help_menu.addAction(self.about_action)
 
@@ -513,6 +516,7 @@ class MainWindowUIMixin:
             action.setToolTip(tr(tooltip_key))
         self.exit_action.setText(tr("app.exit"))
         self.about_action.setText(tr("app.about"))
+        self.update_action.setText(tr("update.check"))
         self.general_settings_action.setText(tr("settings.general"))
         self.light_settings_action.setText(tr("light.settings"))
         self.error_center_action.setText(tr("error_center.title"))

@@ -8,7 +8,7 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b %errorlevel%
 )
 
-".venv\Scripts\python.exe" main.py
+".venv\Scripts\python.exe" core\update_launcher.py
 if errorlevel 1 (
     echo.
     echo [錯誤] 程式執行失敗，請保留此視窗中的訊息。

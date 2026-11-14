@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "releases": [
+    {
+      "version": "1.10.1",
+      "date": "2026-11-14",
+      "changes": {
+        "zh-TW": [
+          "Recipe 與手動自動曝光共用 SDK 啟動入口；策略相同時沿用相機串流，僅在策略或測光模式改變時重啟並驗證設定。",
+          "隔離前一次自動曝光排隊中的成功／失敗事件，避免干擾新量測；保留 Recipe 目標、各 Channel ROI、曝光／Gain 限制及未收斂時的安全停止。",
+          "本次未延長逾時；軟體回歸測試不代表所有樣品或實機已完成收斂驗收。"
+        ],
+        "en-US": [
+          "Recipe and manual auto exposure share the native SDK entry; reuse acquisition when policy and metering match, restarting and verifying only when they change.",
+          "Isolate queued success/failure events from earlier AE runs; preserve Recipe targets, channel ROIs, exposure/gain limits and safe stopping when convergence fails.",
+          "Timeouts are unchanged; software regression tests do not establish convergence for every sample or replace hardware acceptance."
+        ]
+      }
+    },
+    {
+      "version": "1.10.0",
+      "date": "2026-11-14",
+      "changes": {
+        "zh-TW": [
+          "新增「說明 → 檢查更新」，顯示目前版本、GitHub 新版與各版本的修改內容。",
+          "支援背景下載、設備安全關閉後安裝、更新 Python 套件、重新啟動及安裝失敗復原。",
+          "更新保留 Recipe、設備設定、校正檔及量測資料；量測、拍攝或後處理進行中禁止套用更新。",
+          "關於視窗加入本版修改說明；後續每次程式修改必須遞增版號並補上中英文更新紀錄。"
+        ],
+        "en-US": [
+          "Added Help → Check for Updates with installed/latest versions and changes in every newer release.",
+          "Added background downloads, installation after verified equipment shutdown, Python dependency preparation, restart and failed-install recovery.",
+          "Updates preserve recipes, equipment settings, calibration and measurement data; installation is blocked during measurement, capture or post-processing.",
+          "About now includes this release's changes; every subsequent code change must increase the version and include bilingual release notes."
+        ]
+      }
+    }
+  ]
+}

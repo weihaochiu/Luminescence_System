@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.luminescence-install.json
+.luminescence-runtime.json
+.luminescence-update-pending.json
 venv/
 /local/
 /ruler/

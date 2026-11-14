@@ -36,7 +36,7 @@ if errorlevel 1 goto :failed
 if errorlevel 1 goto :failed
 
 echo 正在啟動 EL 量測設備控制程式...
-".venv\Scripts\python.exe" main.py
+".venv\Scripts\python.exe" core\update_launcher.py
 if errorlevel 1 goto :runtime_failed
 exit /b 0
 

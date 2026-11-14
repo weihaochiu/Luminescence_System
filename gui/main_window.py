@@ -39,6 +39,8 @@ from .relay_settings import RelaySettingsStore
 from .smu_manager import SMUManager
 from .smu_monitor import SMUMonitor
 from .smu_safety_dialog import SMUSafetyDialog, load_global_safety
+from .software_update import open_update_dialog
+from core.release_info import format_changes, load_history
 
 
 class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
@@ -54,6 +56,8 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
 
         app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
         application_directory = Path(app_data) if app_data else Path.cwd()
+        self.application_directory = application_directory
+        self._pending_software_update = None
         self.controller = CameraController(
             self,
             auto_exposure_target_percent=load_auto_exposure_target_percent(
@@ -146,11 +150,13 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
             self._stop_camera_for_emergency,
         )
 
-        QTimer.singleShot(50, self.refresh_devices)
-        QTimer.singleShot(300, self.auto_connect_smu_on_startup)
-        QTimer.singleShot(500, self.refresh_relay_connection)
-        if self.settings.value("light/auto_connect", True, type=bool):
-            QTimer.singleShot(700, self.light_service.auto_connect)
+        import os
+        if os.environ.get("LUMINESCENCE_SKIP_AUTOCONNECT") != "1":
+            QTimer.singleShot(50, self.refresh_devices)
+            QTimer.singleShot(300, self.auto_connect_smu_on_startup)
+            QTimer.singleShot(500, self.refresh_relay_connection)
+            if self.settings.value("light/auto_connect", True, type=bool):
+                QTimer.singleShot(700, self.light_service.auto_connect)
 
     def _retranslate_application_shell(self, _language: str = "") -> None:
         self.setWindowTitle(tr("app.title", version=__version__))
@@ -285,8 +291,12 @@ class MainWindow(QMainWindow, MainWindowUIMixin, MainWindowDeviceMixin):
         QMessageBox.about(
             self,
             tr("app.about_title"),
-            tr("app.about_text", version=__version__),
+            tr("app.about_text", version=__version__) + "\n\n" +
+            format_changes(load_history()[:1], i18n.language.value),
         )
+
+    def check_software_updates(self) -> None:
+        open_update_dialog(self)
 
 attach_relay_handlers(MainWindow)
 attach_light_handlers(MainWindow)

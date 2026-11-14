@@ -1,4 +1,4 @@
-from gui.app import main
+from core.update_launcher import main
 
 
 if __name__ == "__main__":

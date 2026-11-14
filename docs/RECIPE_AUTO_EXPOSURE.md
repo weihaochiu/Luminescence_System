@@ -94,21 +94,23 @@ Shared Dark 依 Gain／曝光時間去重，沿用既有 Repeat／解析度／�
 - 自動模式的正式 EL 張數為 Channel 數 × 電氣條件數 × Stop 數 × Repeat。Dark 張數最多與 EL 張數相同，實際會依唯一曝光／Gain 去重；啟動前張數與磁碟按最多 Dark 估算，時間則採包含每條件 AE 逾時及各 Stop 曝光上限之和的保守估算。時間仍受實際拍攝／存檔速度影響，估算不代表 SDK 已算出曝光值，也不是固定的完成期限。
 - 自動 Gain 可能使不同條件的 Gain 不同。未完成 Gain／線性／Dark 等校正前，不可直接視為定量可比的 EL 資料。
 
-### 串流重啟後的測光 ROI 驗證
+### 沿用串流與必要重啟後的測光 ROI 驗證（1.10.1）
 
-Recipe 會為設定 SDK AE policy 暫停並重啟串流。重啟前已讀回的 ROI
-不能證明新串流仍採用相同的測光區域，因此啟動單次 AE 前依序：
+Recipe 與工具列手動自動曝光共用 `_start_native_auto_exposure`。策略及測光百分比
+已一致時沿用現有串流，不重寫相同選項；需切換策略（如固定 Gain）時才停止配置。
+重啟前已讀回的 ROI 不能證明新串流仍採用相同測光區域，因此啟動單次 AE 前依序：
 
 1. 保留已驗證的 Channel ROI；沒有有效 ROI 時禁止啟動。
-2. 停用 AE，在暫停串流前保存原設定，再暫停串流並設定臨時 policy／target。
-3. 使舊 ROI 驗證與 ROI DN 失效，重啟串流，套用並讀回曝光／Gain 範圍。
+2. 停用 AE，保存原設定；比對 policy／測光百分比，只在需要變更時停止串流並寫入差異選項。保留 Recipe target。
+3. 必要重啟時使舊 ROI 驗證與 scientific frame 失效並重啟；沿用或重啟串流都在運行中套用並讀回曝光／Gain 範圍，清除前次 ROI DN。
 4. 重新下發 Channel ROI 並逐項核對 SDK `get_AEAuxRect()`；失敗時不啟動 AE。
-5. 收到 SDK 收斂成功事件時，再次讀回 ROI 並確認串流 generation 未變，才接受結果。
-6. 正常、失敗或取消後，重啟預覽、恢復 AE 範圍，並重新套用／驗證 Channel ROI。
+5. native callback 的 AE 結果帶有串流及 AE 操作 generation，Qt 僅處理當前操作的通知，隔離前次已排隊事件。收到成功事件時，再次讀回 ROI 及完整設定，確認串流 generation 未變，才接受結果。
+6. 正常、失敗或取消後，停用 AE 並恢復原設定；只在策略／測光百分比需還原或串流仍停止時重啟，恢復範圍並重新套用／驗證 Channel ROI。
    若最初的範圍快照就讀取失敗，尚未 Stop，不必額外重啟串流。
 
 結果 metadata 保存 `RecipeAEROI`、`RecipeAEROIVerified` 與
-`RecipeAEROIStreamGeneration`。SDK 收斂失敗或結果驗證失敗時，在恢復預覽設定前
+`RecipeAEROIStreamGeneration`，另以 `RecipeAEStreamRestarted` 記錄本次是否重啟。
+SDK 收斂失敗或結果驗證失敗時，在恢復預覽設定前
 將原生 ROI、目前曝光／Gain、AE 上下限、target、串流 generation 和最近影格的
 ROI DN 寫入 `RECIPE_AE_FAILURE_CONTEXT` 日誌及錯誤 Actual。最近影格若有內嵌曝光／Gain
 metadata，另存於 `LastFrameMetadata`；不將目前 getter 值誤當成該影格的拍攝參數。
@@ -117,11 +119,12 @@ metadata，另存於 `LastFrameMetadata`；不將目前 getter 值誤當成該�
 
 此修正不把「曾達到目標 DN」或 SDK `CONVFAIL` 當成收斂成功，亦不放寬曝光、Gain
 或安全限制。仍需用實機確認新串流的 ROI 讀回、收斂事件及正式影像；模擬測試不能
-證明特定光源／樣品條件必然收斂。可由「設定 → 匯出日誌 ZIP…」保存實機診斷資料。
+證明特定光源／樣品條件必然收斂。本版不延長 timeout，仍保留 Recipe 目標與範圍；比較手動與 Recipe 時須使用相同亮度目標、Gain 範圍與 ROI。可由「設定 → 匯出日誌 ZIP…」保存實機診斷資料。
 
 回歸測試：`tests/test_recipe_ae_roi_lifecycle.py`，涵蓋重啟後遺失 ROI 的 SDK 模型、
 套用順序、快照失敗恢復、錯誤讀回／HRESULT、收斂成功時 ROI 或 generation 改變、
-清理失敗、影格參數延遲與診斷讀取失敗。
+清理失敗、影格參數延遲與診斷讀取失敗。`tests/test_recipe_ae_stream_reuse.py`
+另驗證相同策略不 Stop／Start、不重寫運行中選項、固定 Gain 必要重啟、還原與舊事件隔離。
 
 ### Scientific frame 列方向
 
@@ -153,9 +156,9 @@ API 座標與方向定義可對照 [廠商 SDK header](https://raw.githubusercon
 | 任意串流重啟 | 清除舊 scientific frame 與 ROI 驗證／ROI DN；Start 前後確認列方向，啟動後方向錯誤立即 Stop。 |
 | 正式 software trigger 拍攝完成 | 重啟 video 後重新套用及核對原 Channel ROI，避免復原持續 AE 時沿用錯誤的驗證旗標。 |
 | 原設定快照 | 在 Stop 前讀回 AE 範圍、target、policy 及平均百分比，避免 Stop 銷毀 pipeline 後只保存到 SDK 預設值。 |
-| AE 起始曝光／Gain | 依本次 Stop 清單與已驗證範圍限制起始值；Start 前設定、Start 後再次讀回。舊手動 15 s 曝光不會直接成為最多 5 s 原生 AE 的第一張曝光。這只限制起始值，不擴大搜尋範圍。 |
+| AE 起始曝光／Gain | 依本次 Stop 清單與已驗證範圍限制起始值；必要 Start 前設定、設定範圍後再次讀回。沿用串流時已開始的影格可能仍屬舊設定，不把該影格當成已收斂結果。這只限制起始值，不擴大搜尋範圍。 |
 | 接受收斂結果 | 再讀原生 ROI、stream generation、AE 上下限、policy、平均百分比、列方向、target，以及最後曝光／Gain。設定漂移即中止，不因收到 CONV 就直接接受。 |
-| 成功／失敗後復原 | 復原原設定及 ROI，再檢查重啟後設定。保留原始錯誤與復原錯誤。 |
+| 成功／失敗後復原 | 復原原設定及 ROI，必要重啟後再檢查設定；策略一致則保留串流。保留原始錯誤與復原錯誤。 |
 | 逾時／設定失敗／相機錯誤／取消 | 復原前記錄原生快照；逾時錯誤仍為 TimeoutError，並附帶復原前的診斷，避免只剩通用錯誤。取消仍保留原取消語意。 |
 
 新增 `RecipeAEInitialExposureUs`／`RecipeAEInitialGainPercent`；失敗快照增加經過時間、Recipe 設定、policy、平均百分比及 damping 讀回。

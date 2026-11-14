@@ -54,6 +54,8 @@ class RecipeAEROILifecycleTests(unittest.TestCase):
 
     def setUp(self):
         self.camera = PipelineROICamera()
+        # Exercise the necessary restart when switching from exposure-only AE.
+        self.camera.options[nncam.NNCAM_OPTION_AUTOEXP_POLICY] = 0
         self.controller = CameraController()
         self.controller._camera = self.camera
         self.controller._width, self.controller._height = 4, 3

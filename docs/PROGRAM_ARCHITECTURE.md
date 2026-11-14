@@ -1,8 +1,27 @@
 # EL 量測設備控制程式架構
 
-文件版本：1.9.1
-對應程式版本：V1.9.1
-最後更新：2026-10-07（UTC+8）
+文件版本：1.10.1
+對應程式版本：V1.10.1
+最後更新：2026-11-14（UTC+8）
+
+## Recipe 與手動自動曝光對齊（1.10.1）
+
+`CameraController._start_native_auto_exposure` 是工具列、連續預覽及 Recipe 的共用 native 入口。Recipe 先驗證自己的目標／範圍／測光 ROI，再以 `configure_parameters=False` 啟動，避免被預覽參數覆寫。`camera_recipe_ae` 比對策略與測光百分比，已一致時 setup／restore 保留現有串流並略過相同選項寫入；只有選項需變更才停止配置及重啟。範圍一律在運行中寫入，必要重啟後重新套用 ROI 並驗證所有設定。
+
+native callback 的 AE 成功／失敗通知帶有串流世代與 AE 操作世代，Qt owner thread 只處理當前操作的通知。每次 enable／disable 失效舊操作，防止沿用串流時誤收前次排隊事件。`RecipeAEStreamRestarted` 記錄是否重啟，方便與手動實機比對；正式拍攝仍須原生成功事件與設定驗證，timeout／CONVFAIL 不接受為收斂。
+
+## GUI 軟體更新（1.10.0）
+
+- `core/release_info.py` 讀取 `release_history.json`，驗證遞減且不重複的三段版號、日期與雙語說明；主標題、關於及更新視窗均與 `gui.__version__` 對應。
+- `gui/software_update.py` 擁有 modal 更新視窗、Qt thread-pool 工作、目前任務阻擋及 safe-exit handoff。網路／解壓／pip 不在主 Qt thread 執行。量測與後處理以 thread／worker 存在判定，不只檢查 hardware-active。
+- `core/software_update.py` 固定 repository/main；先查 SHA，再讀取該 SHA 的版本歷史並下載相同 commit ZIP。限制下載／解壓大小，拒絕 traversal、Windows alias、symlink、重複路徑，檢查必要檔案、Python 語法及發佈清單雜湊。文字 SHA-256 正規化 CRLF/LF，支援 Windows Git 換行轉換。
+- `release_manifest.json` 記錄本版受管理檔案。首次 BAT 安裝用它辨識本機修改；更新後 `.luminescence-install.json` 記錄實際 commit 與安裝檔案。只刪除前次安裝清單內且內容未變的舊檔；不觸碰未知使用者檔案／protected directories。Git checkout 禁止 GUI 安裝。
+- `core/update_runner.py` 與所需純標準庫模組先複製到 AppData job/helper，等待已驗證關閉的 GUI process 真正退出；以 preimage＋持久化 journal 更換程式、更新環境指標、啟動新版。前置衝突／雜湊再次檢查，失敗還原程式與設定；未完成交易保留待復原標記。
+- 只有正常 close 的 SMU、光源與 Relay 安全關閉通過才可啟動 installer；不允許透過強制關閉繞過。未曾連接 Relay 時視為不適用；曾有 session 而不能讀回關閉則阻擋。
+- `main.py`／`run.bat`／`setup_and_run.bat` 進入純標準庫 `core/update_launcher.py`，先處理中斷復原及環境指標，再以 module 啟動 `gui.app`。app 用 QLockFile 防止同路徑的重複主視窗。
+- 新版首次啟動停用所有設備自動連線，GUI 建構完成後寫帶 job token 的健康確認，並等待 installer 提交交易才解鎖；成功／復原訊息包含修改說明。這項健康確認不代表已完成硬體驗收。
+- requirements 有差異時，在 AppData updates/environments 的永久路徑建立新 venv、安裝新版 requirements，舊環境保留。不能搬移已建立的 venv；`.luminescence-runtime.json` 指定啟動環境。
+- `tools/check_release.py` 比較 origin/main 版號，禁止重寫已發佈歷史，建立／驗證發佈清單；依 AGENTS.md 每次程式交付必須執行。AppData 更新備份不受 repository 的 backup ZIP 輪替規則管理。
 
 ## GSP-4H 整合補充（2026-10-06）
 
@@ -39,7 +58,7 @@ Runtime 語言切換由 `language_changed` 觸發集中 retranslation。所有 C
 
 ## 2. 啟動與主要資料流
 
-1. `main.py` 呼叫 `gui.app.main()`。
+1. `main.py` 呼叫標準庫 bootstrap `core.update_launcher.main()`，處理更新復原／環境選擇後啟動 `gui.app.main()`。
 2. `app.py` 建立 Qt Application 與 `MainWindow`。
 3. `MainWindow` 建立相機控制器、SMU 連線／控制／監測服務與 Recipe Store。
 4. 主畫面從 Store 載入通過驗證的 Recipe；EL Matrix 的 Sample ID 與 Area 由各 Logical Channel 保存。
